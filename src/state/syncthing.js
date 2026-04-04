@@ -10,6 +10,7 @@ import https from 'https';
 import kill from 'tree-kill';
 import * as killQueue from './kill-list.js';
 import * as config from './config.js';
+import * as db from '../db/manager.js';
 import { getDirname } from '../util/esm-helpers.js';
 
 const __dirname = getDirname(import.meta.url);
@@ -166,7 +167,7 @@ function loadConfig() {
 function removeFoldersFromConfig() {
   // Removes all folders
   xmlObj.configuration.folder = xmlObj.configuration.folder.filter(folder => {
-    return !!config.program.folders[folder['@_label']]
+    return !!db.getLibraryByName(folder['@_label'])
   });
 }
 
@@ -183,16 +184,18 @@ function addFoldersToConfig() {
   xmlObj.configuration.folder.forEach(folderObj => {
     xmlFolderMapper[folderObj['@_label']] = true;
     // Update all paths
-    folderObj['@_path'] = config.program.folders[folderObj['@_label']].root;
+    const lib = db.getLibraryByName(folderObj['@_label']);
+    if (lib) { folderObj['@_path'] = lib.root_path; }
 
     cacheObj[folderObj['@_label']] = folderObj['@_id'];
   });
 
   // Create new folders
-  Object.entries(config.program.folders).forEach(
-    ([key, value]) => {
+  db.getAllLibraries().forEach(
+    (lib) => {
+      const key = lib.name;
+      const value = { root: lib.root_path };
       if (!xmlFolderMapper[key]) {
-        // create the folder
         const newId = nanoid();
         cacheObj[key] = newId;
 

@@ -8,7 +8,7 @@
     "mstream": "cli-boot-wrapper.js"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.5.0"
   },
   "scripts": {
     "start": "node cli-boot-wrapper.js",
@@ -32,7 +32,7 @@
   "build": {
     "appId": "io.mstream.server",
     "productName": "mStream Server",
-    "electronVersion": "29.1.4",
+    "electronVersion": "37.0.0",
     "asar": false,
     "files": [
       "**/*",
@@ -96,13 +96,12 @@
   },
   "dependencies": {
     "archiver": "^7.0.1",
-    "axios": "^1.13.4",
+    "axios": "1.14.0",
     "busboy": "^1.6.0",
     "command-exists": "^1.2.9",
     "commander": "^14.0.3",
     "cookie-parser": "^1.4.7",
     "electron-updater": "^6.7.3",
-    "escape-string-regexp": "^5.0.0",
     "express": "^5.0.1",
     "fast-xml-parser": "^5.3.6",
     "ffbinaries": "^1.1.6",
@@ -111,7 +110,6 @@
     "jimp": "^1.6.0",
     "joi": "^18.0.2",
     "jsonwebtoken": "^9.0.3",
-    "lokijs": "^1.5.12",
     "m3u8-parser": "^7.2.0",
     "make-dir": "^5.0.0",
     "mime-types": "^3.0.2",

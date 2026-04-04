@@ -1,9 +1,7 @@
 import path from 'path';
-import * as config from '../state/config.js';
+import * as db from '../db/manager.js';
 
 export function getVPathInfo(url, user) {
-  if (!config.program) { throw new Error('Not Configured'); }
-
   // remove leading slashes
   if (url.charAt(0) === '/') {
     url = url.substr(1);
@@ -13,17 +11,24 @@ export function getVPathInfo(url, user) {
   url = path.normalize(url);
 
   // Get vpath from url
-  const vpath = url.split(path.sep).shift();
+  const vpathName = url.split(path.sep).shift();
+
   // Verify user has access to this vpath
-  if (user && !user.vpaths.includes(vpath)) {
-    throw new Error(`User does not have access to path ${vpath}`);
+  if (user && user.vpaths && !user.vpaths.includes(vpathName)) {
+    throw new Error(`User does not have access to path ${vpathName}`);
   }
 
-  const baseDir = config.program.folders[vpath].root;
+  const library = db.getLibraryByName(vpathName);
+  if (!library) {
+    throw new Error(`Library '${vpathName}' not found`);
+  }
+
+  const baseDir = library.root_path;
+  const relPath = path.relative(vpathName, url).replace(/\\/g, '/');
   return {
-    vpath: vpath,
+    vpath: vpathName,
     basePath: baseDir,
-    relativePath: path.relative(vpath, url),
-    fullPath: path.join(baseDir, path.relative(vpath, url))
+    relativePath: relPath,
+    fullPath: path.join(baseDir, relPath)
   };
 }

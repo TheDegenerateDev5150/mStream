@@ -376,8 +376,23 @@ export function setup(mstream) {
           }
         }
 
-        db.getFileCollection().insert(data);
-        db.saveFilesDB();
+        // Insert into SQLite
+        const d = db.getDB();
+        const lib = db.getLibraryByName(data.vpath);
+        if (d && lib) {
+          const artistId = db.findOrCreateArtist(data.artist);
+          const albumId = db.findOrCreateAlbum(data.album, artistId, data.year);
+          d.prepare(
+            `INSERT OR REPLACE INTO tracks (filepath, library_id, title, artist_id, album_id, track_number,
+             disc_number, year, format, file_hash, album_art_file, genre, replaygain_track_db,
+             modified, scan_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ).run(
+            data.filepath, lib.id, data.title || null, artistId, albumId,
+            data.track, data.disk, data.year, data.format, data.hash,
+            data.aaFile, data.genre || null, data.replaygainTrackDb, data.modified, 'ytdl'
+          );
+        }
         winston.info(`yt-dlp: added ${relativePath} to database`);
 
         if (entry) {

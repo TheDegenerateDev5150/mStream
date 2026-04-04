@@ -6,6 +6,7 @@ import child_process from 'child_process';
 import winston from 'winston';
 import * as config from '../state/config.js';
 import * as vpath from '../util/vpath.js';
+import * as db from '../db/manager.js';
 import { getDirname } from '../util/esm-helpers.js';
 import * as killQueue from '../state/kill-list.js';
 
@@ -130,11 +131,12 @@ function resolveFilePath(filePath, user) {
 // Reverse: convert an absolute path back to a virtual path (e.g. "55/song.mp3")
 function absoluteToVpath(absolutePath) {
   const normalized = path.normalize(absolutePath);
-  for (const [vpathName, folder] of Object.entries(config.program.folders)) {
-    const root = path.normalize(folder.root);
+  const libraries = db.getAllLibraries();
+  for (const lib of libraries) {
+    const root = path.normalize(lib.root_path);
     if (normalized.startsWith(root)) {
       const relative = path.relative(root, normalized);
-      return vpathName + '/' + relative.replace(/\\/g, '/');
+      return lib.name + '/' + relative.replace(/\\/g, '/');
     }
   }
   // If no vpath matches, return the filename as fallback

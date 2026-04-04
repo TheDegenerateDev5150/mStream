@@ -18,12 +18,10 @@ const storageJoi = Joi.object({
 const scanOptions = Joi.object({
   skipImg: Joi.boolean().default(false),
   scanInterval: Joi.number().min(0).default(24),
-  saveInterval: Joi.number().default(250),
-  pause: Joi.number().min(0).default(0),
   bootScanDelay: Joi.number().default(3),
   maxConcurrentTasks: Joi.number().integer().min(1).default(1),
   compressImage: Joi.boolean().default(true),
-  rustParser: Joi.boolean().default(false)
+  scanBatchSize: Joi.number().integer().min(1).default(100)
 });
 
 const dbOptions = Joi.object({

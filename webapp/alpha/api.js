@@ -91,6 +91,14 @@ const MSTREAMAPI = (() => {
     return req('POST', mstreamModule.currentServer.host + "api/v1/db/album-songs", postObject);
   }
 
+  mstreamModule.genres = (postObject) => {
+    return req('POST', mstreamModule.currentServer.host + 'api/v1/db/genres', postObject || {});
+  }
+
+  mstreamModule.genreSongs = (postObject) => {
+    return req('POST', mstreamModule.currentServer.host + 'api/v1/db/genre-songs', postObject);
+  }
+
   mstreamModule.dbStatus =  () => {
     return req('GET', mstreamModule.currentServer.host + "api/v1/db/status", false);
   }

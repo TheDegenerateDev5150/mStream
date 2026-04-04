@@ -10,14 +10,16 @@ import { getVPathInfo } from '../util/vpath.js';
 const Scrobbler = new Scribble();
 
 export function setup(mstream) {
-  Scrobbler.setKeys(config.program.lastFM.apiKey, config.program.lastFM.apiSecret)
+  Scrobbler.setKeys(config.program.lastFM.apiKey, config.program.lastFM.apiSecret);
 
-  for (const user in config.program.users) {
-    if (!Object.hasOwn(config.program.users, user)) { continue; }
-    if (!config.program.users[user]['lastfm-user'] || !config.program.users[user]['lastfm-password']) { continue; }
-    // TODO: Test Auth and alert user if it doesn't work
-    Scrobbler.addUser(config.program.users[user]['lastfm-user'], config.program.users[user]['lastfm-password']);
+  // Initialize lastfm users from database
+  const users = db.getAllUsers();
+  for (const user of users) {
+    if (!user.lastfm_user || !user.lastfm_password) { continue; }
+    Scrobbler.addUser(user.lastfm_user, user.lastfm_password);
   }
+
+  const d = () => db.getDB();
 
   mstream.post('/api/v1/lastfm/scrobble-by-metadata', (req, res) => {
     const schema = Joi.object({
@@ -27,14 +29,13 @@ export function setup(mstream) {
     });
     joiValidate(schema, req.body);
 
-    // TODO: update last-played field in DB
-    if (!req.user['lastfm-user'] || !req.user['lastfm-password']) {
+    if (!req.user.lastfm_user || !req.user.lastfm_password) {
       return res.json({ scrobble: false });
     }
 
     Scrobbler.Scrobble(
       req.body,
-      req.user['lastfm-user'],
+      req.user.lastfm_user,
       (_post_return_data) => { res.json({}); }
     );
   });
@@ -45,49 +46,38 @@ export function setup(mstream) {
     });
     joiValidate(schema, req.body);
 
-    // lookup metadata
     const pathInfo = getVPathInfo(req.body.filePath, req.user);
+    const lib = db.getLibraryByName(pathInfo.vpath);
+    if (!lib) { return res.json({ scrobble: false }); }
 
-    const dbObj = { '$and': [
-      { 'filepath': { '$eq': pathInfo.relativePath } },
-      { 'vpath': { '$eq': pathInfo.vpath } }
-    ]};
-    const dbFileInfo = db.getFileCollection().findOne(dbObj);
+    const track = d().prepare(`
+      SELECT t.file_hash, t.title, a.name AS artist, al.name AS album
+      FROM tracks t
+      LEFT JOIN artists a ON t.artist_id = a.id
+      LEFT JOIN albums al ON t.album_id = al.id
+      WHERE t.filepath = ? AND t.library_id = ?
+    `).get(pathInfo.relativePath, lib.id);
 
-    if (!dbFileInfo) {
+    if (!track) {
       return res.json({ scrobble: false });
     }
 
-    // log play
-    const result = db.getUserMetadataCollection().findOne({ '$and':[{ 'hash': dbFileInfo.hash}, { 'user': req.user.username }] });
+    // Update play count and last played
+    d().prepare(`
+      INSERT INTO user_metadata (user_id, track_hash, play_count, last_played)
+      VALUES (?, ?, 1, datetime('now'))
+      ON CONFLICT(user_id, track_hash) DO UPDATE SET
+        play_count = play_count + 1,
+        last_played = datetime('now')
+    `).run(req.user.id, track.file_hash);
 
-    if (!result) {
-      db.getUserMetadataCollection().insert({
-        user: req.user.username,
-        hash: dbFileInfo.hash,
-        pc: 1,
-        lp: Date.now()
-      });
-    } else {
-      result.pc = result.pc && typeof result.pc === 'number'
-        ? result.pc + 1 : 1;
-      result.lp = Date.now();
-
-      db.getUserMetadataCollection().update(result);
-    }
-
-    db.saveUserDB();
     res.json({});
 
-    if (req.user['lastfm-user'] && req.user['lastfm-password']) {
-      // scrobble on last fm
+    // Scrobble to last.fm if configured
+    if (req.user.lastfm_user && req.user.lastfm_password) {
       Scrobbler.Scrobble(
-        {
-          artist: dbFileInfo.artist,
-          album: dbFileInfo.album,
-          track: dbFileInfo.title
-        },
-        req.user['lastfm-user'],
+        { artist: track.artist, album: track.album, track: track.title },
+        req.user.lastfm_user,
         (_post_return_data) => {}
       );
     }
@@ -100,9 +90,9 @@ export function setup(mstream) {
     });
     joiValidate(schema, req.body);
 
-    const token = crypto.createHash('md5').update(req.body.username + crypto.createHash('md5').update(req.body.password, 'utf8').digest("hex"), 'utf8').digest("hex");
-    const cryptoString = `api_key${config.program.apiKey}authToken${token}methodauth.getMobileSessionusername${req.body.username}${config.program.apiSecret}`;
-    const hash = crypto.createHash('md5').update(cryptoString, 'utf8').digest("hex");
+    const token = crypto.createHash('md5').update(req.body.username + crypto.createHash('md5').update(req.body.password, 'utf8').digest('hex'), 'utf8').digest('hex');
+    const cryptoString = `api_key${config.program.lastFM.apiKey}authToken${token}methodauth.getMobileSessionusername${req.body.username}${config.program.lastFM.apiSecret}`;
+    const hash = crypto.createHash('md5').update(cryptoString, 'utf8').digest('hex');
 
     await axios({
       method: 'GET',

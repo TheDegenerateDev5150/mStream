@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import httpProxy from 'http-proxy';
 import * as sync from '../state/syncthing.js';
 import * as config from '../state/config.js';
+import * as db from '../db/manager.js';
 import { joiValidate } from '../util/validation.js';
 
 export function setup(mstream) {
@@ -47,7 +48,7 @@ export function setup(mstream) {
 
     const vPaths = {};
     req.body.vpaths.forEach(p => {
-      if (!config.program.folders[p]) { return; }
+      if (!db.getLibraryByName(p)) { return; }
       if(typeof sync.getPathId(p) === 'string') {
         vPaths[p] = crypto.createHash('sha256').update(sync.getPathId(p)).digest('base64');
       }

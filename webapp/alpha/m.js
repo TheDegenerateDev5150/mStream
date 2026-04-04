@@ -964,6 +964,10 @@ async function onBackButton() {
     await getAllArtists(undefined);
   } else if (backState.state === 'artist') {
     await getArtistsAlbums(backState.name);
+  } else if (backState.state === 'allGenres') {
+    await getAllGenres(undefined);
+  } else if (backState.state === 'genre') {
+    await getGenreSongs(backState.name);
   } else if (backState.state === 'fileExplorer') {
     fileExplorerArray.pop();
     await senddir();
@@ -1310,6 +1314,70 @@ async function getArtistsAlbums(artist) {
   }catch(err) {
     document.getElementById('filelist').innerHTML = '<div>Server call failed</div>';
     boilerplateFailure(response, error);
+  }
+}
+
+/////////////// Genres
+async function getAllGenres() {
+  setBrowserRootPanel('Genres');
+  document.getElementById('filelist').innerHTML = getLoadingSvg();
+  programState = [{ state: 'allGenres' }];
+
+  try {
+    const response = await MSTREAMAPI.genres();
+
+    let html = '<ul class="collection">';
+    response.genres.forEach(value => {
+      html += `<li class="collection-item">
+        <div data-genre="${value.name.replace(/"/g, '&quot;')}" class="artistz" onclick="getGenreSongsList(this)">
+          ${value.name} <span style="color:#888;font-size:13px;">(${value.track_count})</span>
+        </div>
+      </li>`;
+      currentBrowsingList.push({ type: 'genre', name: value.name });
+    });
+    html += '</ul>';
+
+    document.getElementById('filelist').innerHTML = html;
+  } catch(err) {
+    document.getElementById('filelist').innerHTML = '<div>Server call failed</div>';
+  }
+}
+
+function getGenreSongsList(el) {
+  const genre = el.getAttribute('data-genre');
+  programState.push({
+    state: 'genre',
+    name: genre,
+    previousScroll: document.getElementById('filelist').scrollTop,
+    previousSearch: document.getElementById('localSearchBar').value
+  });
+  getGenreSongs(genre);
+}
+
+async function getGenreSongs(genre) {
+  setBrowserRootPanel('Songs');
+  document.getElementById('directoryName').innerHTML = 'Genre: ' + genre;
+  document.getElementById('filelist').innerHTML = getLoadingSvg();
+
+  try {
+    const response = await MSTREAMAPI.genreSongs({ genre: genre });
+
+    let songs = '<ul class="collection">';
+    response.forEach(song => {
+      currentBrowsingList.push({ type: 'file', name: song.metadata.title ? song.metadata.title : song.filepath.split('/').pop() });
+      songs += createMusicFileHtml(
+        song.filepath,
+        song.metadata.title ? song.metadata.title : song.filepath.split('/').pop(),
+        undefined,
+        undefined,
+        song.metadata.artist ? song.metadata.artist : undefined
+      );
+    });
+    songs += '</ul>';
+
+    document.getElementById('filelist').innerHTML = songs;
+  } catch(err) {
+    document.getElementById('filelist').innerHTML = '<div>Server call failed</div>';
   }
 }
 
