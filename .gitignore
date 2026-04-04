@@ -36,6 +36,7 @@ save/*.json
 *.db
 *.db-wal
 *.db-shm
+.migrated-from-loki
 frp/*.ini
 
 dist/*
