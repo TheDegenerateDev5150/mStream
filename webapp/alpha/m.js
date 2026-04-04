@@ -118,14 +118,24 @@ function escapeHtml (string) {
 }
 
 function renderAlbum(id, artist, name, albumArtFile, year) {
-  return `<li class="collection-item">
-    <div ${year ? `data-year="${year}"` : '' } ${artist ? `data-artist="${artist}"` : '' } ${id ? `data-album="${id}"` : '' } class="albumz flex2" onclick="getAlbumsOnClick(this);">
-        ${albumArtFile ? 
-          `<img class="album-art-box" loading="lazy" src="${MSTREAMAPI.currentServer.host}album-art/${albumArtFile}?compress=s&token=${MSTREAMAPI.currentServer.token}">`: 
-          '<svg xmlns="http://www.w3.org/2000/svg" class="album-art-box" viewBox="0 0 512 512" xml:space="preserve"><path d="M437 75C390.7 28.6 326.7 0 256 0 114.6 0 0 114.6 0 256c0 70.7 28.6 134.7 75 181s110.3 75 181 75c141.4 0 256-114.6 256-256 0-70.7-28.6-134.7-75-181zM256 477.9c-122.3 0-221.9-99.5-221.9-221.9S133.7 34.1 256 34.1 477.9 133.7 477.9 256 378.3 477.9 256 477.9z"/><path d="M256 145.1c-61.3 0-110.9 49.7-110.9 110.9S194.7 366.9 256 366.9 366.9 317.3 366.9 256c0-61.2-49.7-110.9-110.9-110.9zm0 187.7c-42.4 0-76.8-34.4-76.8-76.8s34.4-76.8 76.8-76.8 76.8 34.4 76.8 76.8-34.4 76.8-76.8 76.8z"/><path d="M238.9 238.9H273V273h-34.1zM256 102.4V68.3h-.6c-31 0-60.1 7.6-85.8 21l1-.5c-26 13.5-47.7 31.9-64.5 54.2l-.3.5 27.3 20.5c28.1-37.5 72.4-61.5 122.3-61.5l.6-.1z"/></svg>'}
-        <span><b>${name}</b> ${year ? `<br>[${year}]` : ''}</span>
+  const artSrc = albumArtFile
+    ? `${MSTREAMAPI.currentServer.host}album-art/${albumArtFile}?${VUEPLAYERCORE.altLayout.compressArt ? 'compress=l&' : ''}token=${MSTREAMAPI.currentServer.token}`
+    : null;
+
+  return `<div class="album-grid-card" ${year ? `data-year="${year}"` : ''} ${artist ? `data-artist="${artist}"` : ''} ${id ? `data-album="${id}"` : ''} onclick="getAlbumsOnClick(this);">
+    <div class="album-grid-art">
+      ${artSrc
+        ? `<img loading="lazy" src="${artSrc}">`
+        : `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#555"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>`}
+      <button class="album-grid-play" onclick="event.stopPropagation(); queueAlbum(this.closest('.album-grid-card'));" title="Add album to queue">
+        <svg xmlns="http://www.w3.org/2000/svg" height="20" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+      </button>
     </div>
-  </li>`;
+    <div class="album-grid-info">
+      <div class="album-grid-name">${name}</div>
+      ${year ? `<div class="album-grid-year">${year}</div>` : ''}
+    </div>
+  </div>`;
 }
 
 function renderArtist(artist) {
@@ -423,6 +433,34 @@ function addAll() {
 function addAllSongs(res) {
   for (var i = 0; i < res.length; i++) {
     VUEPLAYERCORE.addSongWizard(res[i], {}, true);
+  }
+}
+
+async function queueAlbum(cardEl) {
+  const album = cardEl.getAttribute('data-album') || null;
+  const artist = cardEl.getAttribute('data-artist') || null;
+  const year = cardEl.getAttribute('data-year') || null;
+
+  try {
+    const response = await MSTREAMAPI.albumSongs({
+      album,
+      artist,
+      year,
+      ignoreVPaths: Object.keys(MSTREAMPLAYER.ignoreVPaths).filter(v => MSTREAMPLAYER.ignoreVPaths[v] === true)
+    });
+
+    response.forEach(song => {
+      VUEPLAYERCORE.addSongWizard(song.filepath, song.metadata || {}, true);
+    });
+
+    iziToast.success({
+      title: 'Album Queued',
+      message: `${response.length} song${response.length !== 1 ? 's' : ''} added`,
+      position: 'topCenter',
+      timeout: 2500
+    });
+  } catch(err) {
+    boilerplateFailure(err);
   }
 }
 
@@ -1392,7 +1430,7 @@ async function getAllArtists() {
     document.getElementById('filelist').innerHTML = artists;
   }catch(err) {
     document.getElementById('filelist').innerHTML = '<div>Server call failed</div>';
-    boilerplateFailure(response, error);
+    boilerplateFailure(err);
   }
 }
 
@@ -1421,21 +1459,18 @@ async function getArtistsAlbums(artist) {
       })
     });
 
-    let albums = '<ul>';
+    let albums = '<div class="album-grid">';
     response.albums.forEach(value => {
       const albumString = value.name ? value.name : 'SINGLES';
-      // 'value.name === null ? artist : null' is some clever shit that only passes in artist info when the album is null
-      // This is so we get the singles for this artist
-      // If the album is specified, we don't want to limit by artist
       albums += renderAlbum(value.name, value.name === null ? artist : null, albumString, value.album_art_file, value.year);
       currentBrowsingList.push({ type: 'album', name: value.name, artist: artist, album_art_file: value.album_art_file })
     });
-    albums += '</ul>';
+    albums += '</div>';
 
     document.getElementById('filelist').innerHTML = albums;
   }catch(err) {
     document.getElementById('filelist').innerHTML = '<div>Server call failed</div>';
-    boilerplateFailure(response, error);
+    boilerplateFailure(err);
   }
 }
 
@@ -1517,8 +1552,7 @@ async function getAllAlbums() {
       })
     });
 
-    //parse through the json array and make an array of corresponding divs
-    let albums = '<ul class="collection">';
+    let albums = '<div class="album-grid">';
     response.albums.forEach(value => {
       currentBrowsingList.push({
         type: 'album',
@@ -1528,7 +1562,7 @@ async function getAllAlbums() {
 
       albums += renderAlbum(value.name, undefined, value.name, value.album_art_file, value.year);
     });
-    albums += '</ul>'
+    albums += '</div>'
 
     document.getElementById('filelist').innerHTML = albums;
   }catch (err) {
@@ -2067,12 +2101,13 @@ function runLocalSearch(el) {
 }
 
 //////////////////////// Search
-const searchToggles = {
-  albums: true,
-  artists: true,
-  files: false,
-  titles: true
-}
+const searchToggles = (() => {
+  try {
+    const saved = JSON.parse(localStorage.getItem('mstream-search-toggles'));
+    if (saved && typeof saved === 'object') { return saved; }
+  } catch (_e) {}
+  return { albums: true, artists: true, files: false, titles: true };
+})();
 
 const searchMap = {
   albums: {
@@ -2165,6 +2200,8 @@ async function submitSearchForm() {
     searchToggles.files = document.getElementById("search-in-filepaths").checked;
     if (document.getElementById("search-in-titles") && document.getElementById("search-in-titles").checked === false) { postObject.noTitles = true; }
     searchToggles.titles = document.getElementById("search-in-titles").checked;
+
+    try { localStorage.setItem('mstream-search-toggles', JSON.stringify(searchToggles)); } catch (_e) {}
 
     const res = await MSTREAMAPI.search(postObject);
 
@@ -2266,6 +2303,14 @@ function setupLayoutPanel() {
         </label>
       </div>
       <br>
+      <div class="switch">
+        <label>
+          <input onchange="tglCompressArt();" type="checkbox" ${VUEPLAYERCORE.altLayout.compressArt === true ? 'checked' : ''}>
+          <span class="lever"></span>
+          Compress Album Art
+        </label>
+      </div>
+      <br>
       <!-- <div class="switch">
         <label>
           <input type="checkbox">
@@ -2294,6 +2339,11 @@ function tglMoveMetadata() {
 
 function tglBookCtrls() {
   VUEPLAYERCORE.altLayout.audioBookCtrls = !VUEPLAYERCORE.altLayout.audioBookCtrls;
+  localStorage.setItem('altLayout', JSON.stringify(VUEPLAYERCORE.altLayout));
+}
+
+function tglCompressArt() {
+  VUEPLAYERCORE.altLayout.compressArt = !VUEPLAYERCORE.altLayout.compressArt;
   localStorage.setItem('altLayout', JSON.stringify(VUEPLAYERCORE.altLayout));
 }
 

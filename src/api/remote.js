@@ -28,6 +28,7 @@ const allowedCommands = [
   'getNowPlaying',
   'goToSong',
   'removeSong',
+  'setVolume',
 ];
 
 export function setupAfterAuth(mstream, server) {
@@ -192,4 +193,9 @@ export function setupBeforeAuth(mstream) {
     );
     res.send(sharePage);
   });
+}
+
+// Check if a jukebox JWT token belongs to an active session
+export function isActiveJukeboxToken(token) {
+  return Object.values(codeTokenMap).includes(token);
 }

@@ -5,6 +5,7 @@ import * as auth from '../util/auth.js';
 import * as config from '../state/config.js';
 import * as db from '../db/manager.js';
 import * as shared from '../api/shared.js';
+import { isActiveJukeboxToken } from '../api/remote.js';
 import WebError from '../util/web-error.js';
 
 export function setup(mstream) {
@@ -69,6 +70,11 @@ export function setup(mstream) {
 
     // Handle jukebox tokens
     if (decoded.jukebox === true && decoded.username) {
+      // Verify the token belongs to an active jukebox session
+      if (!isActiveJukeboxToken(token)) {
+        throw new WebError('Jukebox session expired', 401);
+      }
+
       const user = db.getUserByUsername(decoded.username);
       if (!user) { throw new WebError('Authentication Error', 401); }
       const libIds = db.getUserLibraryIds(user);
@@ -76,7 +82,10 @@ export function setup(mstream) {
       req.user = {
         ...user,
         vpaths: libraries.map(l => l.name),
-        admin: user.is_admin === 1
+        admin: false,
+        allow_upload: 0,
+        allow_mkdir: 0,
+        allow_file_modify: 0
       };
       return next();
     }

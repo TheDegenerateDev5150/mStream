@@ -8,7 +8,8 @@ const VUEPLAYERCORE = (() => {
   mstreamModule.altLayout = {
     'moveMeta': false,
     'audioBookCtrls': false,
-    'flipPlayer': false
+    'flipPlayer': false,
+    'compressArt': false
   };
 
   try {
@@ -16,6 +17,7 @@ const VUEPLAYERCORE = (() => {
     mstreamModule.altLayout.flipPlayer = typeof altLayout.flipPlayer === 'boolean' ? altLayout.flipPlayer : false;
     mstreamModule.altLayout.audioBookCtrls = typeof altLayout.audioBookCtrls === 'boolean' ? altLayout.audioBookCtrls : false;
     mstreamModule.altLayout.moveMeta = typeof altLayout.moveMeta === 'boolean' ? altLayout.moveMeta : false;
+    mstreamModule.altLayout.compressArt = typeof altLayout.compressArt === 'boolean' ? altLayout.compressArt : false;
 
     if (altLayout.flipPlayer === true) {
       document.getElementById('content').classList.add('col-rev');
@@ -108,6 +110,15 @@ const VUEPLAYERCORE = (() => {
       gsi2: function() {
         openMetadataModal(cps.metadata, cps.rawFilePath);
       },
+      downloadSong2: function() {
+        if (cps && cps.url) {
+          const link = document.createElement('a');
+          link.download = '';
+          link.href = cps.url;
+          link.click();
+        }
+        document.getElementById("pop-d").style.visibility = "hidden";
+      },
       goToArtist: function() {
         const el = document.createElement('DIV');
         el.setAttribute('data-artist', this.meta.artist);
@@ -148,27 +159,29 @@ const VUEPLAYERCORE = (() => {
   // Template for playlist items
   Vue.component('playlist-item', {
     template: `
-      <li class="noselect collection-item" v-bind:class="{ playing: (this.index === positionCache.val), playError: (this.songError && this.songError === true) }" >
-        <div v-on:click="goToSong($event)" class="playlist-item">
-          <span onclick="event.stopPropagation()" class="drag-handle">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="24" height="24"><path fill="#FFF" d="M4 7v2h24V7Zm0 8v2h24v-2Zm0 8v2h24v-2Z"/></svg>
+      <li class="noselect np-queue-item" v-bind:class="{ 'np-queue-active': (this.index === positionCache.val), playError: (this.songError && this.songError === true) }">
+        <span onclick="event.stopPropagation()" class="drag-handle">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="16" height="16"><path fill="#666" d="M4 7v2h24V7Zm0 8v2h24v-2Zm0 8v2h24v-2Z"/></svg>
+        </span>
+        <img v-if="albumArt" class="np-queue-art" loading="lazy" :src="albumArt">
+        <div v-else class="np-queue-art-placeholder">
+          <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 24 24" fill="#555"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
+        </div>
+        <div v-on:click="goToSong($event)" class="np-queue-info">
+          <div class="np-queue-title">{{ songTitle }}</div>
+          <div class="np-queue-artist" v-if="songArtist">{{ songArtist }}</div>
+        </div>
+        <div onclick="event.stopPropagation()" class="np-queue-actions">
+          <span v-on:click="createPopper($event)" class="np-queue-action pop-c" title="Rate">
+            {{ratingNumber}}
+            <svg class="pop-c" width="14" height="14" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 53.867 53.867"><path class="pop-c" d="m26.934 1.318 8.322 16.864 18.611 2.705L40.4 34.013l3.179 18.536-16.645-8.751-16.646 8.751 3.179-18.536L0 20.887l18.611-2.705z" fill="#efce4a"/></svg>
           </span>
-          <span class="song-area">{{ comtext }}</span>
-          <div onclick="event.stopPropagation()" class="song-button-box">
-            <span v-on:click="removeSong($event)" class="removeSong">
-              <svg width="12" height="12" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" xml:space="preserve"><path d="M507.8 392 371.7 256l136-136c5.6-5.6 5.6-14.8 0-20.4L412.4 4.2c-5.6-5.6-14.8-5.6-20.4 0l-136 136-136-136c-5.4-5.4-15-5.4-20.4 0L4.3 99.5c-2.7 2.7-4.2 6.4-4.2 10.2s1.5 7.5 4.2 10.2l136 136L4.2 392c-2.7 2.7-4.2 6.4-4.2 10.2 0 3.8 1.5 7.5 4.2 10.2l95.3 95.3c2.7 2.7 6.4 4.2 10.2 4.2 3.8 0 7.5-1.5 10.2-4.2l136.1-136 136.1 136c2.8 2.8 6.5 4.2 10.2 4.2 3.7 0 7.4-1.4 10.2-4.2l95.3-95.3c5.6-5.6 5.6-14.7 0-20.4z"/></svg>
-            </span>
-            <span v-on:click="createPopper($event)" class="songDropdown pop-c">
-              {{ratingNumber}}
-              <svg class="pop-c" width="12" height="12" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 53.867 53.867"><path class="pop-c" d="m26.934 1.318 8.322 16.864 18.611 2.705L40.4 34.013l3.179 18.536-16.645-8.751-16.646 8.751 3.179-18.536L0 20.887l18.611-2.705z" fill="#efce4a"/></svg>
-            </span>
-            <span class="downloadPlaylistSong" v-on:click="downloadSong($event)">
-              <svg width="12" height="12" viewBox="0 0 2048 2048" xmlns="http://www.w3.org/2000/svg"><path d="M1803 960q0 53-37 90l-651 652q-39 37-91 37-53 0-90-37l-651-652q-38-36-38-90 0-53 38-91l74-75q39-37 91-37 53 0 90 37l294 294v-704q0-52 38-90t90-38h128q52 0 90 38t38 90v704l294-294q37-37 90-37 52 0 91 37l75 75q37 39 37 91z"/></svg>
-            </span>
-            <span v-on:click="createPopper2($event)" class="popperMenu pop-d">
-              <svg class="pop-d" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 292.362 292.362"><path class="pop-d" d="M286.935 69.377c-3.614-3.617-7.898-5.424-12.848-5.424H18.274c-4.952 0-9.233 1.807-12.85 5.424C1.807 72.998 0 77.279 0 82.228c0 4.948 1.807 9.229 5.424 12.847l127.907 127.907c3.621 3.617 7.902 5.428 12.85 5.428s9.233-1.811 12.847-5.428L286.935 95.074c3.613-3.617 5.427-7.898 5.427-12.847 0-4.948-1.814-9.229-5.427-12.85z"/></svg>
-            </span>
-          </div>
+          <span v-on:click="createPopper2($event)" class="np-queue-action popperMenu pop-d" title="More">
+            <svg class="pop-d" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"><path class="pop-d" fill="#aaa" d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+          </span>
+          <span v-on:click="removeSong($event)" class="np-queue-action np-queue-remove" title="Remove">
+            <svg width="10" height="10" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          </span>
         </div>
       </li>`,
 
@@ -280,15 +293,25 @@ const VUEPLAYERCORE = (() => {
     computed: {
       comtext: function () {
         let returnThis = this.song.filepath.split('/').pop();
-
         if (this.song.metadata.title) {
           returnThis = this.song.metadata.title;
           if (this.song.metadata.artist) {
             returnThis = this.song.metadata.artist + ' - ' + returnThis;
           }
         }
-
         return returnThis;
+      },
+      songTitle: function () {
+        return this.song.metadata.title || this.song.filepath.split('/').pop();
+      },
+      songArtist: function () {
+        return this.song.metadata.artist || '';
+      },
+      albumArt: function () {
+        if (this.song.metadata && this.song.metadata['album-art']) {
+          return MSTREAMAPI.currentServer.host + 'album-art/' + this.song.metadata['album-art'] + '?compress=s&token=' + (this.song.authToken || MSTREAMAPI.currentServer.token);
+        }
+        return null;
       },
       songError: function () {
         return this.song.error;

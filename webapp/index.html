@@ -701,6 +701,7 @@
           </div>
           <div style="visibility:hidden; position: absolute;" class="pop-d" id="pop-d" role="tooltip">
             <div class="pop-list-item" v-on:click="gsi2" >Song Info</div>
+            <div class="pop-list-item" v-on:click="downloadSong2">Download</div>
             <div class="pop-d pop-playlist">Add To Playlist:</div>
             <div v-for="(playlist, index) in playlists" is="popper-playlist-item" :key="index" :index="index" :playlist="playlist"></div>
           </div>
