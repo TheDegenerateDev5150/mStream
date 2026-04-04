@@ -1,7 +1,7 @@
 // SQLite schema definitions and migration system for mStream.
 // Uses PRAGMA user_version for tracking which migrations have been applied.
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export const SCHEMA_V1 = `
   -- Users
@@ -151,8 +151,24 @@ export const SCHEMA_V3 = `
   ALTER TABLE users ADD COLUMN allow_file_modify INTEGER NOT NULL DEFAULT 1;
 `;
 
+export const SCHEMA_V4 = `
+  ALTER TABLE users ADD COLUMN listenbrainz_token TEXT;
+
+  CREATE TABLE IF NOT EXISTS smart_playlists (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    filters_json TEXT NOT NULL DEFAULT '{}',
+    sort TEXT NOT NULL DEFAULT 'artist',
+    limit_n INTEGER NOT NULL DEFAULT 50,
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(name, user_id)
+  );
+`;
+
 export const MIGRATIONS = [
   { version: 1, sql: SCHEMA_V1 },
   { version: 2, sql: SCHEMA_V2 },
   { version: 3, sql: SCHEMA_V3 },
+  { version: 4, sql: SCHEMA_V4 },
 ];

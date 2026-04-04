@@ -285,20 +285,12 @@ export function setup(mstream) {
   // Podcasts
   mstream.get('/api/v1/podcast/feeds', (req, res) => res.json([]));
 
-  // Smart playlists
-  mstream.get('/api/v1/smart-playlists', (req, res) => res.json({ playlists: [] }));
-  mstream.post('/api/v1/smart-playlists/run', (req, res) => res.json([]));
-  mstream.post('/api/v1/smart-playlists/count', (req, res) => res.json({ count: 0 }));
+  // Smart playlists — handled by smart-playlists.js (loaded before stubs)
 
   // Waveform
   mstream.get('/api/v1/db/waveform', (req, res) => res.status(404).json({ error: 'not available' }));
 
-  // ListenBrainz
-  mstream.get('/api/v1/listenbrainz/status', (req, res) => res.json({ serverEnabled: false, linked: false }));
-  mstream.post('/api/v1/listenbrainz/playing-now', (req, res) => res.json({ ok: true }));
-  mstream.post('/api/v1/listenbrainz/scrobble-by-filepath', (req, res) => res.json({ ok: true }));
-  mstream.post('/api/v1/listenbrainz/connect', (req, res) => res.status(501).json({ error: 'Not implemented' }));
-  mstream.post('/api/v1/listenbrainz/disconnect', (req, res) => res.json({ ok: true }));
+  // ListenBrainz — handled by listenbrainz.js (loaded before stubs)
 
   // Last.fm status (extends existing scrobbler)
   mstream.get('/api/v1/lastfm/status', (req, res) => res.json({ serverEnabled: false, hasApiKey: false }));
@@ -320,6 +312,5 @@ export function setup(mstream) {
   // File delete (recordings)
   mstream.delete('/api/v1/files/recording', (req, res) => res.status(501).json({ error: 'Not implemented' }));
 
-  // Playlist rename
-  mstream.post('/api/v1/playlist/rename', (req, res) => res.status(501).json({ error: 'Not implemented' }));
+  // Playlist rename — handled by playlist.js
 }

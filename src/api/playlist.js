@@ -169,6 +169,30 @@ export function setup(mstream) {
     res.json({});
   });
 
+  // ── Rename playlist ─────────────────────────────────────────────────────
+
+  mstream.post('/api/v1/playlist/rename', (req, res) => {
+    const schema = Joi.object({
+      oldName: Joi.string().required(),
+      newName: Joi.string().required()
+    });
+    joiValidate(schema, req.body);
+
+    const existing = d().prepare(
+      'SELECT id FROM playlists WHERE name = ? AND user_id = ?'
+    ).get(req.body.newName, req.user.id);
+
+    if (existing) {
+      return res.status(400).json({ error: 'A playlist with that name already exists' });
+    }
+
+    d().prepare(
+      'UPDATE playlists SET name = ? WHERE name = ? AND user_id = ?'
+    ).run(req.body.newName, req.body.oldName, req.user.id);
+
+    res.json({});
+  });
+
   // ── Get all playlists ───────────────────────────────────────────────────
 
   mstream.get('/api/v1/playlist/getall', (req, res) => {

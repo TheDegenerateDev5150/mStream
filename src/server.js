@@ -29,6 +29,8 @@ import * as ytdlApi from './api/ytdl.js';
 import * as serverPlaybackApi from './api/server-playback.js';
 import * as albumArtApi from './api/album-art.js';
 import * as velvetStubs from './api/velvet-stubs.js';
+import * as listenbrainzApi from './api/listenbrainz.js';
+import * as smartPlaylistsApi from './api/smart-playlists.js';
 import WebError from './util/web-error.js';
 import { sanitizeFilename } from './util/validation.js';
 
@@ -196,8 +198,10 @@ export async function serveIt(configFile) {
   albumArtApi.setup(mstream);
   serverPlaybackApi.setup(mstream);
 
-  // Velvet UI stub endpoints — only loaded when velvet UI is active
+  // Velvet UI endpoints — only loaded when velvet UI is active
   if (config.program.ui === 'velvet') {
+    listenbrainzApi.setup(mstream);
+    smartPlaylistsApi.setup(mstream);
     velvetStubs.setup(mstream);
   }
 
