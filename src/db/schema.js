@@ -1,7 +1,7 @@
 // SQLite schema definitions and migration system for mStream.
 // Uses PRAGMA user_version for tracking which migrations have been applied.
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const SCHEMA_V1 = `
   -- Users
@@ -147,7 +147,12 @@ export const SCHEMA_V2 = `
   CREATE INDEX IF NOT EXISTS idx_track_genres_genre ON track_genres(genre_id);
 `;
 
+export const SCHEMA_V3 = `
+  ALTER TABLE users ADD COLUMN allow_file_modify INTEGER NOT NULL DEFAULT 1;
+`;
+
 export const MIGRATIONS = [
   { version: 1, sql: SCHEMA_V1 },
   { version: 2, sql: SCHEMA_V2 },
+  { version: 3, sql: SCHEMA_V3 },
 ];

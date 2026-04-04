@@ -323,9 +323,56 @@
           <p><b>Replay Gain:</b> <span id="meta--rg"></span></p>
           <p><b>File Path:</b> <a href="#" target="_blank" id="meta--fp"></a></p>
           <p><b>Album Art:</b> <a href="#" target="_blank" id="meta--aa"></a></p>
+          <button class="btn blue" style="margin-top:12px;" onclick="var _a=document.getElementById('meta--artist').innerText, _al=document.getElementById('meta--album').innerText, _t=document.getElementById('meta--title').innerText, _fp=document.getElementById('meta--fp').innerText; myModal.close(); setTimeout(function(){ openAlbumArtModal({artist:_a, album:_al, title:_t}, _fp); }, 300);">Change Album Art</button>
         </div>
       </div>
     </div> 
+  </div>
+
+  <div class="hystmodal" id="albumArtModal" aria-hidden="true">
+    <div class="hystmodal__wrap">
+      <div class="hystmodal__window" role="dialog" aria-modal="true" style="max-width:600px;">
+        <a data-hystclose class="hystmodal__close">Close</a>
+        <div class="hystmodal__styled no-margin">
+          <h5>Change Album Art</h5>
+          <div id="aa-song-info" style="margin-bottom:12px;padding:10px;background:rgba(255,255,255,.05);border-radius:4px;">
+            <div id="aa-info-title" style="font-weight:bold;"></div>
+            <div id="aa-info-artist" style="color:#aaa;font-size:13px;"></div>
+            <div id="aa-info-album" style="color:#aaa;font-size:13px;"></div>
+            <div id="aa-info-filepath" style="color:#666;font-size:11px;margin-top:4px;word-break:break-all;"></div>
+          </div>
+          <div id="aa-search-status" style="padding:10px 0;color:#888;">Loading album art...</div>
+          <div id="aa-results" style="display:flex;flex-wrap:wrap;gap:10px;margin:10px 0;"></div>
+
+          <div style="margin:16px 0;padding:16px 0;border-top:1px solid #444;">
+            <b>Upload Custom Image</b>
+            <p style="color:#888;font-size:12px;margin:4px 0;">JPEG, PNG, or WebP. Max 10MB.</p>
+            <input type="file" id="aa-upload-input" accept="image/jpeg,image/png,image/webp" style="margin:8px 0;">
+          </div>
+
+          <div style="margin:12px 0;">
+            <label>
+              <input type="checkbox" id="aa-write-folder" class="filled-in">
+              <span>Save cover.jpg to album folder</span>
+            </label>
+          </div>
+          <div id="aa-embed-row" style="margin:12px 0;">
+            <label>
+              <input type="checkbox" id="aa-write-file" class="filled-in">
+              <span>Embed album art in audio file</span>
+            </label>
+          </div>
+
+          <div style="margin-top:16px;">
+            <button class="btn blue" id="aa-upload-btn" onclick="uploadCustomAlbumArt()">Upload & Apply</button>
+          </div>
+
+          <input type="hidden" id="aa-filepath">
+          <input type="hidden" id="aa-artist">
+          <input type="hidden" id="aa-album">
+        </div>
+      </div>
+    </div>
   </div>
 
   <div id="sidenav">

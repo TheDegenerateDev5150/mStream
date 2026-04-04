@@ -27,6 +27,7 @@ export function setup(mstream) {
       transcode,
       noMkdir: config.program.noMkdir || req.user.allow_mkdir === false || req.user.allow_mkdir === 0,
       noUpload: config.program.noUpload || req.user.allow_upload === false || req.user.allow_upload === 0,
+      noFileModify: config.program.noFileModify || req.user.allow_file_modify === false || req.user.allow_file_modify === 0,
       supportedAudioFiles: config.program.supportedAudioFiles,
       vpathMetaData: {}
     };

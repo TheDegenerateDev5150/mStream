@@ -21,7 +21,13 @@ const scanOptions = Joi.object({
   bootScanDelay: Joi.number().default(3),
   maxConcurrentTasks: Joi.number().integer().min(1).default(1),
   compressImage: Joi.boolean().default(true),
-  scanBatchSize: Joi.number().integer().min(1).default(100)
+  scanBatchSize: Joi.number().integer().min(1).default(100),
+  autoAlbumArt: Joi.boolean().default(true),
+  albumArtWriteToFolder: Joi.boolean().default(false),
+  albumArtWriteToFile: Joi.boolean().default(false),
+  albumArtServices: Joi.array().items(
+    Joi.string().valid('musicbrainz', 'itunes', 'deezer')
+  ).default(['musicbrainz', 'itunes', 'deezer'])
 });
 
 const dbOptions = Joi.object({
@@ -70,6 +76,7 @@ const schema = Joi.object({
   scanOptions: scanOptions.default(scanOptions.validate({}).value),
   noUpload: Joi.boolean().default(false),
   noMkdir: Joi.boolean().default(false),
+  noFileModify: Joi.boolean().default(false),
   writeLogs: Joi.boolean().default(false),
   lockAdmin: Joi.boolean().default(false),
   storage: storageJoi.default(storageJoi.validate({}).value),

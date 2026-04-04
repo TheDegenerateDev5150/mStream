@@ -705,6 +705,12 @@ const advancedView = Vue.component('advanced-view', {
                       </td>
                     </tr>
                     <tr>
+                      <td><b>File Modification:</b> {{params.noFileModify === false ? 'Enabled' : 'Disabled'}}</td>
+                      <td>
+                        [<a v-on:click="toggleFileModify()">edit</a>]
+                      </td>
+                    </tr>
+                    <tr>
                       <td><b>Auth Key:</b> ****************{{params.secret}}</td>
                       <td>
                         [<a v-on:click="generateNewKey()">edit</a>]
@@ -932,6 +938,34 @@ const advancedView = Vue.component('advanced-view', {
         ]
       });
     },
+    toggleFileModify: function() {
+      const self = this;
+      iziToast.question({
+        timeout: 20000, close: false, overlayClose: true, overlay: true,
+        displayMode: 'once', id: 'question', zindex: 99999, layout: 2, maxWidth: 600,
+        title: `<b>${self.params.noFileModify === false ? 'Disable' : 'Enable'} File Modification?</b>`,
+        message: 'Controls whether album art can be embedded directly into audio files',
+        position: 'center',
+        buttons: [
+          [`<button><b>${self.params.noFileModify === false ? 'Disable' : 'Enable'}</b></button>`, (instance, toast) => {
+            instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
+            API.axios({
+              method: 'POST',
+              url: `${API.url()}/api/v1/admin/config/nofilemodify`,
+              data: { noFileModify: !self.params.noFileModify }
+            }).then(() => {
+              Vue.set(ADMINDATA.serverParams, 'noFileModify', !self.params.noFileModify);
+              iziToast.success({ title: 'Updated Successfully', position: 'topCenter', timeout: 3500 });
+            }).catch(() => {
+              iziToast.error({ title: 'Failed', position: 'topCenter', timeout: 3500 });
+            });
+          }, true],
+          ['<button>Go Back</button>', (instance, toast) => {
+            instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
+          }],
+        ]
+      });
+    },
     toggleFileUpload: function() {
       iziToast.question({
         timeout: 20000,
@@ -1071,6 +1105,41 @@ const dbView = Vue.component('db-view', {
                       <td><b>Max Concurrent Scans:</b> {{dbParams.maxConcurrentTasks}}</td>
                       <td>
                         [<a v-on:click="openModal('edit-max-scan-modal')">edit</a>]
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div class="col s12">
+            <div class="card">
+              <div class="card-content">
+                <span class="card-title">Album Art Lookup</span>
+                <table>
+                  <tbody>
+                    <tr>
+                      <td><b>Auto Lookup:</b> {{dbParams.autoAlbumArt ? 'Enabled' : 'Disabled'}}</td>
+                      <td>
+                        [<a v-on:click="toggleAutoAlbumArt()">edit</a>]
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><b>Write to Folder:</b> {{dbParams.albumArtWriteToFolder ? 'Enabled' : 'Disabled'}}</td>
+                      <td>
+                        [<a v-on:click="toggleAlbumArtWriteToFolder()">edit</a>]
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><b>Embed in File:</b> {{dbParams.albumArtWriteToFile ? 'Enabled' : 'Disabled'}}</td>
+                      <td>
+                        [<a v-on:click="toggleAlbumArtWriteToFile()">edit</a>]
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><b>Service Order:</b> {{dbParams.albumArtServices ? dbParams.albumArtServices.join(', ') : 'musicbrainz, itunes, deezer'}}</td>
+                      <td>
+                        [<a v-on:click="openModal('edit-album-art-services-modal')">edit</a>]
                       </td>
                     </tr>
                   </tbody>
@@ -1413,6 +1482,33 @@ const dbView = Vue.component('db-view', {
           }],
         ]
       });
+    },
+    toggleAutoAlbumArt: function() {
+      const self = this;
+      API.axios({ method: 'POST', url: `${API.url()}/api/v1/admin/db/params/auto-album-art`,
+        data: { autoAlbumArt: !self.dbParams.autoAlbumArt }
+      }).then(() => {
+        Vue.set(ADMINDATA.dbParams, 'autoAlbumArt', !self.dbParams.autoAlbumArt);
+        iziToast.success({ title: 'Updated', position: 'topCenter', timeout: 3500 });
+      }).catch(() => { iziToast.error({ title: 'Failed', position: 'topCenter', timeout: 3500 }); });
+    },
+    toggleAlbumArtWriteToFolder: function() {
+      const self = this;
+      API.axios({ method: 'POST', url: `${API.url()}/api/v1/admin/db/params/album-art-write-to-folder`,
+        data: { albumArtWriteToFolder: !self.dbParams.albumArtWriteToFolder }
+      }).then(() => {
+        Vue.set(ADMINDATA.dbParams, 'albumArtWriteToFolder', !self.dbParams.albumArtWriteToFolder);
+        iziToast.success({ title: 'Updated', position: 'topCenter', timeout: 3500 });
+      }).catch(() => { iziToast.error({ title: 'Failed', position: 'topCenter', timeout: 3500 }); });
+    },
+    toggleAlbumArtWriteToFile: function() {
+      const self = this;
+      API.axios({ method: 'POST', url: `${API.url()}/api/v1/admin/db/params/album-art-write-to-file`,
+        data: { albumArtWriteToFile: !self.dbParams.albumArtWriteToFile }
+      }).then(() => {
+        Vue.set(ADMINDATA.dbParams, 'albumArtWriteToFile', !self.dbParams.albumArtWriteToFile);
+        iziToast.success({ title: 'Updated', position: 'topCenter', timeout: 3500 });
+      }).catch(() => { iziToast.error({ title: 'Failed', position: 'topCenter', timeout: 3500 }); });
     },
     openModal: function(modalView) {
       modVM.currentViewModal = modalView;
@@ -3457,6 +3553,56 @@ const editRustPlayerPortModal = Vue.component('edit-rust-player-port-modal', {
   }
 });
 
+const editAlbumArtServicesModal = Vue.component('edit-album-art-services-modal', {
+  data() {
+    return {
+      submitPending: false,
+      services: (ADMINDATA.dbParams.albumArtServices || ['musicbrainz', 'itunes', 'deezer']).slice()
+    };
+  },
+  template: `
+    <form @submit.prevent="updateServices">
+      <div class="modal-content">
+        <h4>Album Art Service Order</h4>
+        <p>Drag to reorder. Services are tried in order until album art is found.</p>
+        <div style="margin:16px 0;">
+          <div v-for="(service, index) in services" :key="service" style="display:flex;align-items:center;padding:10px 12px;margin:4px 0;background:#2a2a2a;border-radius:4px;">
+            <span style="flex:1;">{{service}}</span>
+            <button type="button" v-if="index > 0" @click="moveUp(index)" style="margin:0 4px;cursor:pointer;">&#9650;</button>
+            <button type="button" v-if="index < services.length - 1" @click="moveDown(index)" style="margin:0 4px;cursor:pointer;">&#9660;</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <a href="#!" class="modal-close waves-effect waves-green btn-flat">Go Back</a>
+        <button class="btn green waves-effect waves-light" type="submit" :disabled="submitPending">
+          {{submitPending ? 'Saving...' : 'Save Order'}}
+        </button>
+      </div>
+    </form>`,
+  methods: {
+    moveUp(i) { const s = this.services.splice(i, 1)[0]; this.services.splice(i - 1, 0, s); },
+    moveDown(i) { const s = this.services.splice(i, 1)[0]; this.services.splice(i + 1, 0, s); },
+    updateServices: async function() {
+      try {
+        this.submitPending = true;
+        await API.axios({
+          method: 'POST',
+          url: `${API.url()}/api/v1/admin/db/params/album-art-services`,
+          data: { albumArtServices: this.services }
+        });
+        Vue.set(ADMINDATA.dbParams, 'albumArtServices', this.services.slice());
+        M.Modal.getInstance(document.getElementById('admin-modal')).close();
+        iziToast.success({ title: 'Service order updated', position: 'topCenter', timeout: 3500 });
+      } catch(err) {
+        iziToast.error({ title: 'Failed', position: 'topCenter', timeout: 3500 });
+      } finally {
+        this.submitPending = false;
+      }
+    }
+  }
+});
+
 const modVM = new Vue({
   el: '#dynamic-modal',
   components: {
@@ -3477,6 +3623,7 @@ const modVM = new Vue({
     'lastfm-modal': lastFMModal,
     'federation-generate-invite-modal': federationGenerateInvite,
     'edit-rust-player-port-modal': editRustPlayerPortModal,
+    'edit-album-art-services-modal': editAlbumArtServicesModal,
     'null-modal': nullModal
   },
   data: {

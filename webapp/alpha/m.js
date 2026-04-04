@@ -853,6 +853,128 @@ function openMetadataModal(metadata, fp) {
   myModal.open('#metadataModel');
 }
 
+function openAlbumArtModal(metadata, fp) {
+  document.getElementById('aa-filepath').value = fp;
+  document.getElementById('aa-artist').value = metadata.artist || '';
+  document.getElementById('aa-album').value = metadata.album || '';
+  document.getElementById('aa-results').innerHTML = '';
+  document.getElementById('aa-search-status').innerHTML = 'Loading album art...';
+  document.getElementById('aa-upload-input').value = '';
+  document.getElementById('aa-write-folder').checked = false;
+  document.getElementById('aa-write-file').checked = false;
+
+  // Show song info
+  document.getElementById('aa-info-title').innerText = metadata.title || fp.split('/').pop();
+  document.getElementById('aa-info-artist').innerText = metadata.artist ? 'Artist: ' + metadata.artist : '';
+  document.getElementById('aa-info-album').innerText = metadata.album ? 'Album: ' + metadata.album : '';
+  document.getElementById('aa-info-filepath').innerText = fp;
+
+  // Hide embed checkbox if ffmpeg not available or file modification not allowed
+  const embedRow = document.getElementById('aa-embed-row');
+  if (embedRow) {
+    fetch(MSTREAMAPI.currentServer.host + 'api/v1/album-art/ffmpeg-status', {
+      headers: { 'x-access-token': MSTREAMAPI.currentServer.token }
+    }).then(r => r.json()).then(d => {
+      embedRow.style.display = d.available ? '' : 'none';
+    }).catch(() => { embedRow.style.display = 'none'; });
+  }
+
+  myModal.open('#albumArtModal');
+
+  // Auto-search after modal opens
+  if (metadata.artist || metadata.album) {
+    searchAlbumArt();
+  }
+}
+
+async function searchAlbumArt() {
+  const artist = document.getElementById('aa-artist').value;
+  const album = document.getElementById('aa-album').value;
+
+  if (!artist && !album) {
+    document.getElementById('aa-search-status').innerHTML = 'No artist or album info available for search';
+    return;
+  }
+
+  document.getElementById('aa-search-status').innerHTML = 'Searching...';
+  document.getElementById('aa-results').innerHTML = '';
+
+  try {
+    const res = await MSTREAMAPI.searchAlbumArt({ artist: artist || '', album: album || '' });
+
+    if (!res.results || res.results.length === 0) {
+      document.getElementById('aa-search-status').innerHTML = 'No album art found';
+      return;
+    }
+
+    document.getElementById('aa-search-status').innerHTML = `Found ${res.results.length} results. Click to select:`;
+
+    let html = '';
+    res.results.forEach((r, i) => {
+      html += `<div style="cursor:pointer;text-align:center;width:130px;" onclick="selectAlbumArt('${r.url.replace(/'/g, "\\'")}')">
+        <img src="${r.url}" style="width:120px;height:120px;object-fit:cover;border-radius:4px;border:2px solid transparent;"
+             onerror="this.parentElement.style.display='none'" loading="lazy">
+        <div style="font-size:11px;color:#aaa;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${r.label}</div>
+      </div>`;
+    });
+
+    document.getElementById('aa-results').innerHTML = html;
+  } catch (err) {
+    document.getElementById('aa-search-status').innerHTML = 'Search failed: ' + (err.message || 'Unknown error');
+  }
+}
+
+async function selectAlbumArt(url) {
+  const filepath = document.getElementById('aa-filepath').value;
+  const writeToFolder = document.getElementById('aa-write-folder').checked;
+  const writeToFile = document.getElementById('aa-write-file').checked;
+
+  try {
+    await MSTREAMAPI.setAlbumArtFromUrl({ filepath, url, writeToFolder, writeToFile });
+    iziToast.success({ title: 'Album art updated!', position: 'topCenter', timeout: 3500 });
+    myModal.close();
+  } catch (err) {
+    iziToast.error({ title: 'Failed to set album art', position: 'topCenter', timeout: 3500 });
+  }
+}
+
+async function uploadCustomAlbumArt() {
+  const input = document.getElementById('aa-upload-input');
+  if (!input.files || input.files.length === 0) {
+    return iziToast.warning({ title: 'Select an image file first', position: 'topCenter', timeout: 3500 });
+  }
+
+  const file = input.files[0];
+
+  // Client-side validation
+  if (file.size > 10 * 1024 * 1024) {
+    return iziToast.error({ title: 'Image too large (max 10MB)', position: 'topCenter', timeout: 3500 });
+  }
+
+  const validTypes = ['image/jpeg', 'image/png', 'image/webp'];
+  if (!validTypes.includes(file.type)) {
+    return iziToast.error({ title: 'Invalid format. Use JPEG, PNG, or WebP.', position: 'topCenter', timeout: 3500 });
+  }
+
+  const filepath = document.getElementById('aa-filepath').value;
+  const writeToFolder = document.getElementById('aa-write-folder').checked;
+  const writeToFile = document.getElementById('aa-write-file').checked;
+
+  // Read file as base64
+  const reader = new FileReader();
+  reader.onload = async function () {
+    const base64 = reader.result.split(',')[1]; // strip data:image/...;base64,
+    try {
+      await MSTREAMAPI.uploadAlbumArt({ filepath, image: base64, writeToFolder, writeToFile });
+      iziToast.success({ title: 'Album art updated!', position: 'topCenter', timeout: 3500 });
+      myModal.close();
+    } catch (err) {
+      iziToast.error({ title: 'Upload failed', position: 'topCenter', timeout: 3500 });
+    }
+  };
+  reader.readAsDataURL(file);
+}
+
 function openEditModal() {
   document.getElementById('server_address').value = MSTREAMAPI.currentServer.host;
   document.getElementById('server_username').value = MSTREAMAPI.currentServer.username;

@@ -27,6 +27,7 @@ import * as federationApi from './api/federation.js';
 // scanner.js removed — parser now writes directly to SQLite
 import * as ytdlApi from './api/ytdl.js';
 import * as serverPlaybackApi from './api/server-playback.js';
+import * as albumArtApi from './api/album-art.js';
 import WebError from './util/web-error.js';
 import { sanitizeFilename } from './util/validation.js';
 
@@ -178,6 +179,7 @@ export async function serveIt(configFile) {
   syncthing.setup();
   federationApi.setup(mstream);
   ytdlApi.setup(mstream);
+  albumArtApi.setup(mstream);
   serverPlaybackApi.setup(mstream);
 
   // Versioned APIs

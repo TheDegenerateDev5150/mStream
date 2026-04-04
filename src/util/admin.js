@@ -138,13 +138,13 @@ export async function editUserVPaths(username, vpaths) {
   db.invalidateCache();
 }
 
-export async function editUserAccess(username, admin, allowMkdir, allowUpload) {
+export async function editUserAccess(username, admin, allowMkdir, allowUpload, allowFileModify = true) {
   const user = db.getUserByUsername(username);
   if (!user) { throw new Error(`'${username}' does not exist`); }
 
   db.getDB().prepare(
-    'UPDATE users SET is_admin = ?, allow_mkdir = ?, allow_upload = ? WHERE id = ?'
-  ).run(admin ? 1 : 0, allowMkdir ? 1 : 0, allowUpload ? 1 : 0, user.id);
+    'UPDATE users SET is_admin = ?, allow_mkdir = ?, allow_upload = ?, allow_file_modify = ? WHERE id = ?'
+  ).run(admin ? 1 : 0, allowMkdir ? 1 : 0, allowUpload ? 1 : 0, allowFileModify ? 1 : 0, user.id);
 
   db.invalidateCache();
 }
@@ -179,6 +179,13 @@ export async function editMkdir(val) {
   loadConfig.noMkdir = val;
   await saveFile(loadConfig, config.configFile);
   config.program.noMkdir = val;
+}
+
+export async function editFileModify(val) {
+  const loadConfig = await loadFile(config.configFile);
+  loadConfig.noFileModify = val;
+  await saveFile(loadConfig, config.configFile);
+  config.program.noFileModify = val;
 }
 
 export async function editAddress(val) {
@@ -242,6 +249,38 @@ export async function editScanBatchSize(val) {
   loadConfig.scanOptions.scanBatchSize = val;
   await saveFile(loadConfig, config.configFile);
   config.program.scanOptions.scanBatchSize = val;
+}
+
+export async function editAutoAlbumArt(val) {
+  const loadConfig = await loadFile(config.configFile);
+  if (!loadConfig.scanOptions) { loadConfig.scanOptions = {}; }
+  loadConfig.scanOptions.autoAlbumArt = val;
+  await saveFile(loadConfig, config.configFile);
+  config.program.scanOptions.autoAlbumArt = val;
+}
+
+export async function editAlbumArtWriteToFolder(val) {
+  const loadConfig = await loadFile(config.configFile);
+  if (!loadConfig.scanOptions) { loadConfig.scanOptions = {}; }
+  loadConfig.scanOptions.albumArtWriteToFolder = val;
+  await saveFile(loadConfig, config.configFile);
+  config.program.scanOptions.albumArtWriteToFolder = val;
+}
+
+export async function editAlbumArtWriteToFile(val) {
+  const loadConfig = await loadFile(config.configFile);
+  if (!loadConfig.scanOptions) { loadConfig.scanOptions = {}; }
+  loadConfig.scanOptions.albumArtWriteToFile = val;
+  await saveFile(loadConfig, config.configFile);
+  config.program.scanOptions.albumArtWriteToFile = val;
+}
+
+export async function editAlbumArtServices(val) {
+  const loadConfig = await loadFile(config.configFile);
+  if (!loadConfig.scanOptions) { loadConfig.scanOptions = {}; }
+  loadConfig.scanOptions.albumArtServices = val;
+  await saveFile(loadConfig, config.configFile);
+  config.program.scanOptions.albumArtServices = val;
 }
 
 export async function editWriteLogs(val) {

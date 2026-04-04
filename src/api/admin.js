@@ -144,6 +144,38 @@ export function setup(mstream) {
     res.json({});
   });
 
+  mstream.post("/api/v1/admin/db/params/auto-album-art", async (req, res) => {
+    const schema = Joi.object({ autoAlbumArt: Joi.boolean().required() });
+    joiValidate(schema, req.body);
+    await admin.editAutoAlbumArt(req.body.autoAlbumArt);
+    res.json({});
+  });
+
+  mstream.post("/api/v1/admin/db/params/album-art-write-to-folder", async (req, res) => {
+    const schema = Joi.object({ albumArtWriteToFolder: Joi.boolean().required() });
+    joiValidate(schema, req.body);
+    await admin.editAlbumArtWriteToFolder(req.body.albumArtWriteToFolder);
+    res.json({});
+  });
+
+  mstream.post("/api/v1/admin/db/params/album-art-write-to-file", async (req, res) => {
+    const schema = Joi.object({ albumArtWriteToFile: Joi.boolean().required() });
+    joiValidate(schema, req.body);
+    await admin.editAlbumArtWriteToFile(req.body.albumArtWriteToFile);
+    res.json({});
+  });
+
+  mstream.post("/api/v1/admin/db/params/album-art-services", async (req, res) => {
+    const schema = Joi.object({
+      albumArtServices: Joi.array().items(
+        Joi.string().valid('musicbrainz', 'itunes', 'deezer')
+      ).required()
+    });
+    joiValidate(schema, req.body);
+    await admin.editAlbumArtServices(req.body.albumArtServices);
+    res.json({});
+  });
+
   mstream.get("/api/v1/admin/users", (req, res) => {
     const users = db.getAllUsers();
     const result = {};
@@ -154,7 +186,8 @@ export function setup(mstream) {
         admin: user.is_admin === 1,
         vpaths: libraries.map(l => l.name),
         allowMkdir: user.allow_mkdir === 1,
-        allowUpload: user.allow_upload === 1
+        allowUpload: user.allow_upload === 1,
+        allowFileModify: user.allow_file_modify === 1
       };
     }
     res.json(result);
@@ -280,11 +313,12 @@ export function setup(mstream) {
       username: Joi.string().required(),
       admin: Joi.boolean().required(),
       allowMkdir: Joi.boolean().required(),
-      allowUpload: Joi.boolean().required()
+      allowUpload: Joi.boolean().required(),
+      allowFileModify: Joi.boolean().optional().default(true)
     });
     joiValidate(schema, req.body);
 
-    await admin.editUserAccess(req.body.username, req.body.admin, req.body.allowMkdir, req.body.allowUpload);
+    await admin.editUserAccess(req.body.username, req.body.admin, req.body.allowMkdir, req.body.allowUpload, req.body.allowFileModify);
     res.json({});
   });
 
@@ -294,6 +328,7 @@ export function setup(mstream) {
       port: config.program.port,
       noUpload: config.program.noUpload,
       noMkdir: config.program.noMkdir,
+      noFileModify: config.program.noFileModify,
       writeLogs: config.program.writeLogs,
       secret: config.program.secret.slice(-4),
       ssl: config.program.ssl,
@@ -351,6 +386,16 @@ export function setup(mstream) {
     joiValidate(schema, req.body);
 
     await admin.editMkdir(req.body.noMkdir);
+    res.json({});
+  });
+
+  mstream.post("/api/v1/admin/config/nofilemodify", async (req, res) => {
+    const schema = Joi.object({
+      noFileModify: Joi.boolean().required()
+    });
+    joiValidate(schema, req.body);
+
+    await admin.editFileModify(req.body.noFileModify);
     res.json({});
   });
 
