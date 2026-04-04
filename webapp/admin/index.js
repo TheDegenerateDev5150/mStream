@@ -1049,21 +1049,9 @@ const dbView = Vue.component('db-view', {
                       </td>
                     </tr>
                     <tr>
-                    <td><b>Save Interval:</b> {{dbParams.saveInterval}} files</td>
-                      <td>
-                        [<a v-on:click="openModal('edit-save-interval-modal')">edit</a>]
-                      </td>
-                    </tr>
-                    <tr>
                       <td><b>Boot Scan Delay:</b> {{dbParams.bootScanDelay}} seconds</td>
                       <td>
                         [<a v-on:click="openModal('edit-boot-scan-delay-modal')">edit</a>]
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><b>Pause Between Files:</b> {{dbParams.pause}} milliseconds</td>
-                      <td>
-                        [<a v-on:click="openModal('edit-pause-modal')">edit</a>]
                       </td>
                     </tr>
                     <tr>
@@ -1077,12 +1065,6 @@ const dbView = Vue.component('db-view', {
                       <td>
                         [<a v-on:click="recompressImages()">re-compress</a>]
                         [<a v-on:click="toggleCompressImage()">edit</a>]
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><b>Use Rust Parser:</b> {{dbParams.rustParser}}</td>
-                      <td>
-                        [<a v-on:click="toggleRustParser()">edit</a>]
                       </td>
                     </tr>
                     <tr>
@@ -1412,45 +1394,6 @@ const dbView = Vue.component('db-view', {
             }).then(() => {
               // update fronted data
               Vue.set(ADMINDATA.dbParams, 'skipImg', !this.dbParams.skipImg);
-
-              iziToast.success({
-                title: 'Updated Successfully',
-                position: 'topCenter',
-                timeout: 3500
-              });
-            }).catch(() => {
-              iziToast.error({
-                title: 'Failed',
-                position: 'topCenter',
-                timeout: 3500
-              });
-            });
-          }, true],
-          ['<button>Go Back</button>', (instance, toast) => {
-            instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
-          }],
-        ]
-      });
-    },
-    toggleRustParser: function() {
-      iziToast.question({
-        displayMode: 'once',
-        id: 'question',
-        zindex: 99999,
-        layout: 2,
-        maxWidth: 600,
-        title: `<b>${this.dbParams.rustParser === true ? 'Disable' : 'Enable'} Rust Parser?</b>`,
-        position: 'center',
-        buttons: [
-          [`<button><b>${this.dbParams.rustParser === true ? 'Disable' : 'Enable'}</b></button>`, (instance, toast) => {
-            instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
-            API.axios({
-              method: 'POST',
-              url: `${API.url()}/api/v1/admin/db/params/rust-parser`,
-              data: { rustParser: !this.dbParams.rustParser }
-            }).then(() => {
-              // update frontend data
-              Vue.set(ADMINDATA.dbParams, 'rustParser', !this.dbParams.rustParser);
 
               iziToast.success({
                 title: 'Updated Successfully',
@@ -2942,68 +2885,6 @@ const editMaxScanModal = Vue.component('edit-max-scans-modal', {
   }
 });
 
-const editPauseModal = Vue.component('edit-pause-modal', {
-  data() {
-    return {
-      params: ADMINDATA.dbParams,
-      submitPending: false,
-      editValue: ADMINDATA.dbParams.pause
-    };
-  },
-  template: `
-    <form @submit.prevent="updateParam">
-      <div class="modal-content">
-        <h4>Scan Pause</h4>
-        <div class="input-field">
-          <input v-model="editValue" id="edit-db-pause" required type="number" min="1">
-          <label for="edit-db-pause">Edit Pause</label>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <a href="#!" class="modal-close waves-effect waves-green btn-flat">Go Back</a>
-        <button class="btn green waves-effect waves-light" type="submit" :disabled="submitPending === true">
-          {{submitPending === false ? 'Update' : 'Updating...'}}
-        </button>
-      </div>
-    </form>`,
-  mounted: function () {
-    M.updateTextFields();
-  },
-  methods: {
-    updateParam: async function() {
-      try {
-        this.submitPending = true;
-
-        await API.axios({
-          method: 'POST',
-          url: `${API.url()}/api/v1/admin/db/params/pause`,
-          data: { pause: this.editValue }
-        });
-
-        // update fronted data
-        Vue.set(ADMINDATA.dbParams, 'pause', this.editValue);
-  
-        // close & reset the modal
-        M.Modal.getInstance(document.getElementById('admin-modal')).close();
-
-        iziToast.success({
-          title: 'Updated Successfully',
-          position: 'topCenter',
-          timeout: 3500
-        });
-      } catch(err) {
-        iziToast.error({
-          title: 'Update Failed',
-          position: 'topCenter',
-          timeout: 3500
-        });
-      }finally {
-        this.submitPending = false;
-      }
-    }
-  }
-});
-
 const editBootScanView = Vue.component('edit-boot-scan-delay-modal', {
   data() {
     return {
@@ -3044,68 +2925,6 @@ const editBootScanView = Vue.component('edit-boot-scan-delay-modal', {
 
         // update fronted data
         Vue.set(ADMINDATA.dbParams, 'bootScanDelay', this.editValue);
-  
-        // close & reset the modal
-        M.Modal.getInstance(document.getElementById('admin-modal')).close();
-
-        iziToast.success({
-          title: 'Updated Successfully',
-          position: 'topCenter',
-          timeout: 3500
-        });
-      } catch(err) {
-        iziToast.error({
-          title: 'Update Failed',
-          position: 'topCenter',
-          timeout: 3500
-        });
-      }finally {
-        this.submitPending = false;
-      }
-    }
-  }
-});
-
-const editSaveIntervalView = Vue.component('edit-save-interval-modal', {
-  data() {
-    return {
-      params: ADMINDATA.dbParams,
-      submitPending: false,
-      editValue: ADMINDATA.dbParams.saveInterval
-    };
-  },
-  template: `
-    <form @submit.prevent="updateParam">
-      <div class="modal-content">
-        <h4>Save Interval</h4>
-        <div class="input-field">
-          <input v-model="editValue" id="edit-save-interval" required type="number" min="1">
-          <label for="edit-save-interval">Save Interval</label>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <a href="#!" class="modal-close waves-effect waves-green btn-flat">Go Back</a>
-        <button class="btn green waves-effect waves-light" type="submit" :disabled="submitPending === true">
-          {{submitPending === false ? 'Update' : 'Updating...'}}
-        </button>
-      </div>
-    </form>`,
-  mounted: function () {
-    M.updateTextFields();
-  },
-  methods: {
-    updateParam: async function() {
-      try {
-        this.submitPending = true;
-
-        await API.axios({
-          method: 'POST',
-          url: `${API.url()}/api/v1/admin/db/params/save-interval`,
-          data: { saveInterval: this.editValue }
-        });
-
-        // update fronted data
-        Vue.set(ADMINDATA.dbParams, 'saveInterval', this.editValue);
   
         // close & reset the modal
         M.Modal.getInstance(document.getElementById('admin-modal')).close();
@@ -3649,12 +3468,10 @@ const modVM = new Vue({
     'edit-request-size-modal': editRequestSizeModal,
     'edit-address-modal': editAddressModal,
     'edit-scan-interval-modal': editScanIntervalView,
-    'edit-save-interval-modal': editSaveIntervalView,
     'edit-boot-scan-delay-modal': editBootScanView,
     'edit-select-codec-modal': editTranscodeCodecModal,
     'edit-transcode-bitrate-modal': editTranscodeDefaultBitrate,
     'edit-transcode-algorithm-modal': editTranscodeDefaultAlgorithm,
-    'edit-pause-modal': editPauseModal,
     'edit-max-scan-modal': editMaxScanModal,
     'edit-ssl-modal': editSslModal,
     'lastfm-modal': lastFMModal,
