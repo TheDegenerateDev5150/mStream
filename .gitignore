@@ -34,6 +34,8 @@ save/*.json
 
 *.log
 *.db
+*.db-wal
+*.db-shm
 frp/*.ini
 
 dist/*
