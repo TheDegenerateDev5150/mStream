@@ -80,6 +80,7 @@ const schema = Joi.object({
   writeLogs: Joi.boolean().default(false),
   lockAdmin: Joi.boolean().default(false),
   storage: storageJoi.default(storageJoi.validate({}).value),
+  ui: Joi.string().valid('default', 'velvet').default('default'),
   webAppDirectory: Joi.string().default(path.join(__dirname, '../../webapp')),
   rpn: rpnOptions.default(rpnOptions.validate({}).value),
   transcode: transcodeOptions.default(transcodeOptions.validate({}).value),

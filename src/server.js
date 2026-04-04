@@ -28,6 +28,7 @@ import * as federationApi from './api/federation.js';
 import * as ytdlApi from './api/ytdl.js';
 import * as serverPlaybackApi from './api/server-playback.js';
 import * as albumArtApi from './api/album-art.js';
+import * as velvetStubs from './api/velvet-stubs.js';
 import WebError from './util/web-error.js';
 import { sanitizeFilename } from './util/validation.js';
 
@@ -133,6 +134,11 @@ export async function serveIt(configFile) {
       return next();
     }
 
+    // Velvet UI has its own built-in login screen — no redirect needed
+    if (config.program.ui === 'velvet') {
+      return next();
+    }
+
     try {
       jwt.verify(req.cookies['x-access-token'], config.program.secret);
       next();
@@ -142,6 +148,11 @@ export async function serveIt(configFile) {
   });
 
   mstream.get('/login', (req, res, next) => {
+    // Velvet UI has integrated login — redirect to root
+    if (config.program.ui === 'velvet') {
+      return res.redirect(302, '/');
+    }
+
     if (dbManager.getAllUsers().length === 0) {
       return res.redirect(302, '..');
     }
@@ -158,7 +169,10 @@ export async function serveIt(configFile) {
   serverPlaybackApi.setupBeforeAuth(mstream);
 
   // Give access to public folder
-  mstream.use('/', express.static(config.program.webAppDirectory));
+  const webappDir = config.program.ui === 'velvet'
+    ? path.join(config.program.webAppDirectory, 'velvet')
+    : config.program.webAppDirectory;
+  mstream.use('/', express.static(webappDir));
 
   // Public APIs
   remoteApi.setupBeforeAuth(mstream, server);
@@ -181,6 +195,11 @@ export async function serveIt(configFile) {
   ytdlApi.setup(mstream);
   albumArtApi.setup(mstream);
   serverPlaybackApi.setup(mstream);
+
+  // Velvet UI stub endpoints — only loaded when velvet UI is active
+  if (config.program.ui === 'velvet') {
+    velvetStubs.setup(mstream);
+  }
 
   // Versioned APIs
   mstream.get('/api/', (req, res) => res.json({ "server": packageJson.version, "apiVersions": ["1"] }));
