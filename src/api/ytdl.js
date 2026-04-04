@@ -2,13 +2,13 @@ import commandExists from "command-exists";
 import { spawn } from "child_process";
 import winston from "winston";
 import Joi from 'joi';
-import ffbinaries from 'ffbinaries';
 import path from 'path';
 import * as config from '../state/config.js';
 import * as transcode from './transcode.js';
 import { joiValidate } from '../util/validation.js';
 import * as vpath from '../util/vpath.js';
 import * as db from '../db/manager.js';
+import { ffmpegBin } from '../util/ffmpeg-bootstrap.js';
 import { parseFile } from 'music-metadata';
 import { Jimp } from 'jimp';
 import mime from 'mime-types';
@@ -16,7 +16,6 @@ import crypto from 'crypto';
 import fs from 'fs/promises';
 
 const downloadTracker = new Map();
-const platform = ffbinaries.detectPlatform();
 
 const youtubeUrlSchema = Joi.string().uri({ scheme: ['http', 'https'] }).required().custom((value) => {
   const parsed = new URL(value);
@@ -103,7 +102,7 @@ export function setup(mstream) {
     value.url = sanitizeYoutubeUrl(value.url);
 
     // Pass in ffmpeg directory
-    const ffmpegPath = path.join(config.program.transcode.ffmpegDirectory, ffbinaries.getBinaryFilename("ffmpeg", platform));
+    const ffmpegPath = ffmpegBin();
 
     try {
       const exists = await commandExists('yt-dlp')
