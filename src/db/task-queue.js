@@ -5,6 +5,7 @@ import winston from 'winston';
 import { nanoid } from 'nanoid';
 import * as config from '../state/config.js';
 import * as db from './manager.js';
+import { addToKillQueue } from '../state/kill-list.js';
 import { getDirname } from '../util/esm-helpers.js';
 
 const __dirname = getDirname(import.meta.url);
@@ -86,6 +87,7 @@ function runScan(scanObj) {
   const jsonLoad = {
     dbPath: dbPath,
     libraryId: library.id,
+    vpath: scanObj.vpath,
     directory: library.root_path,
     skipImg: config.program.scanOptions.skipImg,
     albumArtDirectory: config.program.storage.albumArtDirectory,
@@ -114,6 +116,9 @@ function runScan(scanObj) {
   runningTasks.add(forkedScan);
   vpathLimiter.add(scanObj.vpath);
 
+  // Ensure scanner is killed on server shutdown
+  addToKillQueue(() => { try { forkedScan.kill(); } catch (_) {} });
+
   forkedScan.stdout.on('data', (data) => {
     winston.info(data.toString().trim());
   });
@@ -126,6 +131,12 @@ function runScan(scanObj) {
     winston.info(`File scan completed with code ${code}`);
     runningTasks.delete(forkedScan);
     vpathLimiter.delete(scanObj.vpath);
+
+    // Clean up progress row (scanner should have deleted it, but handle crashes)
+    try {
+      db.getDB()?.prepare('DELETE FROM scan_progress WHERE scan_id = ?').run(scanObj.id);
+    } catch (_) {}
+
     nextTask();
   });
 }
@@ -150,6 +161,9 @@ export function getAdminStats() {
 }
 
 export function runAfterBoot() {
+  // Clear any stale scan progress rows left from a previous crash
+  try { db.getDB()?.prepare('DELETE FROM scan_progress').run(); } catch (_) {}
+
   setTimeout(() => {
     if (config.program.scanOptions.scanInterval > 0 && scanIntervalTimer === null) {
       scanAll();

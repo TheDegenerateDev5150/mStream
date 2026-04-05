@@ -3,6 +3,7 @@
 // stubs for features that aren't implemented yet.
 
 import * as db from '../db/manager.js';
+import * as config from '../state/config.js';
 import { renderMetadataObj, libraryFilter, trackQuery } from './db.js';
 
 const d = () => db.getDB();
@@ -250,32 +251,26 @@ export function setup(mstream) {
     res.json(libs.map(l => ({ name: l.name, root: l.root_path, type: l.type })));
   });
 
-  // ── Scan progress ────────────────────────────────────────────
+  // ── Scan progress (reads from scan_progress table written by scanners) ──
   mstream.get('/api/v1/admin/db/scan/progress', (req, res) => {
-    // TODO: wire to actual task-queue status
-    res.json({ scanning: false });
+    const rows = d().prepare('SELECT * FROM scan_progress').all();
+    res.json(rows.map(r => ({
+      vpath: r.vpath || 'Scanning…',
+      pct: r.expected ? Math.min(100, Math.round((r.scanned / r.expected) * 100)) : null,
+      scanned: r.scanned || 0,
+      expected: r.expected || null,
+      currentFile: r.current_file || null,
+      countingFound: 0
+    })));
   });
 
   // ══════════════════════════════════════════════════════════════
   // STUBS — features not yet implemented, return safe defaults
   // ══════════════════════════════════════════════════════════════
 
-  // User settings (save/load preferences)
-  mstream.get('/api/v1/user/settings', (req, res) => res.json({ prefs: {} }));
-  mstream.post('/api/v1/user/settings', (req, res) => res.json({ ok: true }));
+  // User settings — handled by user-settings.js (loaded before stubs)
 
-  // Wrapped / stats tracking
-  mstream.post('/api/v1/wrapped/play-start', (req, res) => res.json({ ok: true }));
-  mstream.post('/api/v1/wrapped/play-stop', (req, res) => res.json({ ok: true }));
-  mstream.post('/api/v1/wrapped/play-end', (req, res) => res.json({ ok: true }));
-  mstream.post('/api/v1/wrapped/play-skip', (req, res) => res.json({ ok: true }));
-  mstream.post('/api/v1/wrapped/pause', (req, res) => res.json({ ok: true }));
-  mstream.post('/api/v1/wrapped/radio-start', (req, res) => res.json({ ok: true }));
-  mstream.post('/api/v1/wrapped/radio-stop', (req, res) => res.json({ ok: true }));
-  mstream.post('/api/v1/wrapped/podcast-start', (req, res) => res.json({ ok: true }));
-  mstream.post('/api/v1/wrapped/podcast-end', (req, res) => res.json({ ok: true }));
-  mstream.get('/api/v1/user/wrapped', (req, res) => res.json({ stats: {} }));
-  mstream.get('/api/v1/user/wrapped/periods', (req, res) => res.json([]));
+  // Wrapped / stats — handled by wrapped.js (loaded before stubs)
 
   // Radio
   mstream.get('/api/v1/radio/stations', (req, res) => res.json([]));
@@ -287,27 +282,154 @@ export function setup(mstream) {
 
   // Smart playlists — handled by smart-playlists.js (loaded before stubs)
 
-  // Waveform
-  mstream.get('/api/v1/db/waveform', (req, res) => res.status(404).json({ error: 'not available' }));
+  // Waveform — handled by waveform.js (loaded before stubs)
 
   // ListenBrainz — handled by listenbrainz.js (loaded before stubs)
 
-  // Last.fm status (extends existing scrobbler)
-  mstream.get('/api/v1/lastfm/status', (req, res) => res.json({ serverEnabled: false, hasApiKey: false }));
-  mstream.get('/api/v1/lastfm/similar-artists', (req, res) => res.json({ artists: [] }));
-  mstream.post('/api/v1/lastfm/connect', (req, res) => res.status(501).json({ error: 'Not implemented' }));
-  mstream.post('/api/v1/lastfm/disconnect', (req, res) => res.json({ ok: true }));
+  // Last.fm status
+  mstream.get('/api/v1/lastfm/status', (req, res) => {
+    const hasApiKey = !!(config.program.lastFM?.apiKey);
+    const linkedUser = req.user?.lastfm_user || null;
+    res.json({
+      serverEnabled: hasApiKey,
+      hasApiKey,
+      linkedUser
+    });
+  });
 
-  // Discogs
-  mstream.get('/api/v1/admin/discogs/config', (req, res) => res.json({ enabled: false }));
-  mstream.get('/api/v1/deezer/search', (req, res) => res.json({ data: [] }));
-  mstream.get('/api/v1/discogs/coverart', (req, res) => res.json({}));
+  // Last.fm connect/disconnect (update user's lastfm credentials in DB)
+  mstream.post('/api/v1/lastfm/connect', (req, res) => {
+    const { lastfmUser, lastfmPassword } = req.body;
+    if (!lastfmUser || !lastfmPassword || !req.user?.id) {
+      return res.status(400).json({ error: 'Username and password required' });
+    }
+    d().prepare('UPDATE users SET lastfm_user = ?, lastfm_password = ? WHERE id = ?')
+      .run(lastfmUser, lastfmPassword, req.user.id);
+    db.invalidateCache();
+    res.json({ ok: true });
+  });
+
+  mstream.post('/api/v1/lastfm/disconnect', (req, res) => {
+    if (!req.user?.id) return res.json({ ok: true });
+    d().prepare('UPDATE users SET lastfm_user = NULL, lastfm_password = NULL WHERE id = ?')
+      .run(req.user.id);
+    db.invalidateCache();
+    res.json({ ok: true });
+  });
+
+  // Similar artists via Last.fm API (powers Auto-DJ recommendations)
+  mstream.get('/api/v1/lastfm/similar-artists', async (req, res) => {
+    const artist = req.query.artist;
+    const apiKey = config.program.lastFM?.apiKey;
+    if (!artist || !apiKey) return res.json({ artists: [] });
+
+    try {
+      const url = `https://ws.audioscrobbler.com/2.0/?method=artist.getsimilar&artist=${encodeURIComponent(artist)}&api_key=${apiKey}&format=json&limit=15`;
+      const r = await fetch(url, { headers: { 'User-Agent': 'mStream/6.0' } });
+      if (!r.ok) return res.json({ artists: [] });
+      const data = await r.json();
+      const names = (data?.similarartists?.artist || []).map(a => a.name).filter(Boolean);
+      res.json({ artists: names });
+    } catch (_) {
+      res.json({ artists: [] });
+    }
+  });
+
+  // Cue points — handled by cuepoints.js (loaded before stubs)
+
+  // Wrapped session end — handled by wrapped.js
+
+  // Discogs — handled by discogs.js (loaded before stubs)
 
   // Subsonic password
   mstream.post('/api/v1/admin/users/subsonic-password', (req, res) => res.status(501).json({ error: 'Not implemented' }));
 
-  // ID3 tag writing
-  mstream.post('/api/v1/admin/tags/write', (req, res) => res.status(501).json({ error: 'Not implemented' }));
+  // ID3 tag writing — write metadata tags to audio files via ffmpeg
+  mstream.post('/api/v1/admin/tags/write', async (req, res) => {
+    if (!req.user?.id) return res.status(401).json({ error: 'unauthorized' });
+
+    const { filepath, title, artist, album, year, genre, track, disk } = req.body;
+    if (!filepath) return res.status(400).json({ error: 'filepath required' });
+
+    // Check file modification permission
+    const canModify = !config.program.noFileModify
+      && req.user.allow_file_modify !== false
+      && req.user.allow_file_modify !== 0;
+    if (!canModify) return res.status(403).json({ error: 'File modification not allowed' });
+
+    // Resolve the file path
+    const { getVPathInfo } = await import('../util/vpath.js');
+    const { ffmpegBin } = await import('../util/ffmpeg-bootstrap.js');
+    const { isDownloaded } = await import('./transcode.js');
+    const { spawn } = await import('child_process');
+    const fsp = (await import('fs/promises')).default;
+    const path = (await import('path')).default;
+
+    if (!isDownloaded()) return res.status(500).json({ error: 'ffmpeg not available' });
+
+    let pathInfo;
+    try { pathInfo = getVPathInfo(filepath, req.user); } catch (_) {
+      return res.status(404).json({ error: 'file not found' });
+    }
+    const lib = db.getLibraryByName(pathInfo.vpath);
+    if (!lib) return res.status(404).json({ error: 'library not found' });
+
+    const fullPath = path.join(lib.root_path, pathInfo.relativePath);
+    const ext = path.extname(fullPath).toLowerCase();
+    const tmpOut = fullPath + '.tmp_tags' + ext;
+
+    // Build ffmpeg metadata args
+    const ffmpegArgs = ['-i', fullPath, '-c', 'copy'];
+    if (title !== undefined)  ffmpegArgs.push('-metadata', `title=${title}`);
+    if (artist !== undefined) ffmpegArgs.push('-metadata', `artist=${artist}`);
+    if (album !== undefined)  ffmpegArgs.push('-metadata', `album=${album}`);
+    if (year !== undefined)   ffmpegArgs.push('-metadata', `date=${year}`);
+    if (genre !== undefined)  ffmpegArgs.push('-metadata', `genre=${genre}`);
+    if (track !== undefined)  ffmpegArgs.push('-metadata', `track=${track}`);
+    if (disk !== undefined)   ffmpegArgs.push('-metadata', `disc=${disk}`);
+    ffmpegArgs.push('-y', tmpOut);
+
+    try {
+      await new Promise((resolve, reject) => {
+        const proc = spawn(ffmpegBin(), ffmpegArgs, { stdio: ['ignore', 'ignore', 'pipe'] });
+        const timer = setTimeout(() => { proc.kill('SIGTERM'); reject(new Error('ffmpeg timeout')); }, 30000);
+        proc.on('close', (code) => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error('ffmpeg failed')); });
+        proc.on('error', (err) => { clearTimeout(timer); reject(err); });
+      });
+
+      await fsp.rename(tmpOut, fullPath);
+
+      // Update DB to match new tags
+      const updates = [];
+      const params = [];
+      if (title !== undefined) { updates.push('title = ?'); params.push(title || null); }
+      if (year !== undefined)  { updates.push('year = ?');  params.push(year ? Number(year) || null : null); }
+      if (track !== undefined) { updates.push('track_number = ?'); params.push(track ? Number(track) || null : null); }
+      if (disk !== undefined)  { updates.push('disc_number = ?');  params.push(disk ? Number(disk) || null : null); }
+      if (genre !== undefined) { updates.push('genre = ?'); params.push(genre || null); }
+
+      if (artist !== undefined) {
+        const artistId = db.findOrCreateArtist(artist || null);
+        updates.push('artist_id = ?'); params.push(artistId);
+      }
+      if (album !== undefined) {
+        const artistName = artist !== undefined ? artist : null;
+        const artistId = db.findOrCreateArtist(artistName);
+        const albumId = db.findOrCreateAlbum(album || null, artistId, year ? Number(year) || null : null);
+        updates.push('album_id = ?'); params.push(albumId);
+      }
+
+      if (updates.length > 0) {
+        params.push(pathInfo.relativePath, lib.id);
+        d().prepare(`UPDATE tracks SET ${updates.join(', ')} WHERE filepath = ? AND library_id = ?`).run(...params);
+      }
+
+      res.json({ ok: true });
+    } catch (e) {
+      try { await fsp.unlink(tmpOut); } catch (_) {}
+      res.status(500).json({ error: e.message || 'Tag write failed' });
+    }
+  });
 
   // File delete (recordings)
   mstream.delete('/api/v1/files/recording', (req, res) => res.status(501).json({ error: 'Not implemented' }));

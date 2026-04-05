@@ -439,4 +439,241 @@ export function setup(mstream) {
     }
     res.json({ downloads });
   });
+
+  // ══════════════════════════════════════════════════════════════
+  // VELVET UI ONLY — adapter endpoints
+  // The Velvet frontend calls different paths/formats than our
+  // original API. These adapters translate between the two.
+  // TODO: standardize with the original endpoints so both UIs
+  // use the same routes and response shapes.
+  // ══════════════════════════════════════════════════════════════
+
+  // VELVET: GET /api/v1/ytdl/info?url=...
+  // Wraps our GET /api/v1/ytdl/metadata but returns { thumb } instead of { thumbnail }
+  mstream.get("/api/v1/ytdl/info", async (req, res) => {
+    const schema = Joi.object({ url: youtubeUrlSchema });
+    const { value } = joiValidate(schema, req.query);
+
+    try {
+      await commandExists('yt-dlp');
+    } catch (err) {
+      return res.status(500).json({ error: 'yt-dlp is not installed' });
+    }
+
+    const url = sanitizeYoutubeUrl(value.url);
+    const metadata = await lookupMetadata(url);
+    res.json({
+      title: metadata.title,
+      artist: metadata.artist,
+      album: metadata.album,
+      thumb: metadata.thumbnail,
+    });
+  });
+
+  // VELVET: POST /api/v1/ytdl/download
+  // Accepts { url, title, artist, album, format } and waits for completion,
+  // returning { filePath, vpath }. Our original POST /api/v1/ytdl/ starts
+  // async and returns immediately. TODO: unify into one endpoint.
+  mstream.post("/api/v1/ytdl/download", async (req, res) => {
+    if (config.program.noUpload === true) {
+      return res.status(403).json({ error: 'Uploading Disabled' });
+    }
+    if (req.user.allowUpload === false) {
+      return res.status(403).json({ error: 'Uploading Disabled' });
+    }
+    if (!config.program.transcode || config.program.transcode.enabled !== true) {
+      return res.status(500).json({ error: 'Transcoding disabled' });
+    }
+    if (!transcode.isDownloaded()) {
+      return res.status(500).json({ error: 'FFmpeg not downloaded yet' });
+    }
+
+    try {
+      await commandExists('yt-dlp');
+    } catch (err) {
+      return res.status(500).json({ error: 'yt-dlp is not installed' });
+    }
+
+    const { url, title, artist, album, format } = req.body;
+    if (!url) return res.status(400).json({ error: 'url required' });
+
+    // Map format names: Velvet uses 'opus'/'mp3', our backend uses outputCodec
+    const outputCodec = format || 'opus';
+
+    // Find a download directory — use the first vpath the user has access to
+    const userVpaths = req.user.vpaths || [];
+    if (!userVpaths.length) {
+      return res.status(400).json({ error: 'No library folder available' });
+    }
+
+    // Use the first vpath as download target
+    const targetVpath = userVpaths[0];
+    const directory = targetVpath;
+
+    // Verify path exists
+    let pathInfo;
+    try {
+      pathInfo = vpath.getVPathInfo(directory, req.user);
+    } catch (e) {
+      return res.status(400).json({ error: 'Invalid directory' });
+    }
+
+    let sanitizedUrl;
+    try {
+      sanitizedUrl = sanitizeYoutubeUrl(url);
+    } catch (e) {
+      return res.status(400).json({ error: 'Invalid YouTube URL' });
+    }
+
+    const ffmpegPath = ffmpegBin();
+    const downloadDir = path.join(pathInfo.fullPath, `%(title)s.%(ext)s`);
+    const formatMap = { 'ogg': 'vorbis', 'm4b': 'm4a' };
+    const ytdlAudioFormat = formatMap[outputCodec] || outputCodec;
+    const ytdlArgs = ['-f', 'ba', '-x', sanitizedUrl, '-o', downloadDir,
+      '--ffmpeg-location', ffmpegPath, '--audio-format', ytdlAudioFormat, '--embed-metadata'];
+    const noEmbedThumbnail = ['wav', 'opus', 'ogg'];
+    if (!noEmbedThumbnail.includes(outputCodec)) {
+      ytdlArgs.push('--embed-thumbnail', '--convert-thumbnails', 'jpg');
+    }
+
+    const startTime = Date.now();
+    const extMap = { 'aac': 'm4a' };
+    const expectedExt = extMap[outputCodec] || outputCodec;
+
+    // Run yt-dlp and wait for completion
+    try {
+      await new Promise((resolve, reject) => {
+        const ytdl = spawn('yt-dlp', ytdlArgs);
+        let stderr = '';
+
+        ytdl.stderr.on('data', (data) => { stderr += data.toString(); });
+
+        const timer = setTimeout(() => {
+          ytdl.kill('SIGTERM');
+          reject(new Error('Download timed out'));
+        }, 300000);
+
+        ytdl.on('close', (code) => {
+          clearTimeout(timer);
+          if (code !== 0) {
+            winston.warn(`yt-dlp exited with code ${code}`);
+          }
+          resolve();
+        });
+        ytdl.on('error', (err) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+      });
+    } catch (e) {
+      return res.status(500).json({ error: e.message || 'Download failed' });
+    }
+
+    // Find the downloaded file
+    let downloadedFile = null;
+    try {
+      const dirFiles = await fs.readdir(pathInfo.fullPath);
+      for (const file of dirFiles) {
+        if (!file.endsWith('.' + expectedExt)) continue;
+        const filePath = path.join(pathInfo.fullPath, file);
+        const stat = await fs.stat(filePath);
+        if (stat.mtime.getTime() >= startTime) {
+          downloadedFile = filePath;
+          break;
+        }
+      }
+    } catch (e) { /* ignore */ }
+
+    if (!downloadedFile) {
+      return res.status(500).json({ error: 'Download completed but file not found' });
+    }
+
+    // Write user metadata tags if provided
+    const userMeta = {};
+    if (title) userMeta.title = title;
+    if (artist) userMeta.artist = artist;
+    if (album) userMeta.album = album;
+
+    if (Object.keys(userMeta).length > 0) {
+      try {
+        const tmpFile = downloadedFile + '.tmp.' + expectedExt;
+        const ffmpegArgs = ['-i', downloadedFile, '-c', 'copy'];
+        if (userMeta.title) ffmpegArgs.push('-metadata', `title=${userMeta.title}`);
+        if (userMeta.artist) ffmpegArgs.push('-metadata', `artist=${userMeta.artist}`);
+        if (userMeta.album) ffmpegArgs.push('-metadata', `album=${userMeta.album}`);
+        ffmpegArgs.push('-y', tmpFile);
+
+        await new Promise((resolve, reject) => {
+          const proc = spawn(ffmpegPath, ffmpegArgs);
+          proc.on('close', (c) => c === 0 ? resolve() : reject(new Error('ffmpeg metadata failed')));
+          proc.on('error', reject);
+        });
+        await fs.rename(tmpFile, downloadedFile);
+      } catch (tagErr) {
+        winston.warn('ytdl/download: failed to write metadata tags', { stack: tagErr });
+        try { await fs.unlink(downloadedFile + '.tmp.' + expectedExt); } catch { /* ignore */ }
+      }
+    }
+
+    // Parse metadata and add to DB
+    const skipImg = config.program.scanOptions.skipImg === true;
+    let metadata;
+    try {
+      metadata = (await parseFile(downloadedFile, { skipCovers: skipImg })).common;
+    } catch (err) {
+      metadata = { track: { no: null, of: null }, disk: { no: null, of: null } };
+    }
+
+    const fileBuffer = await fs.readFile(downloadedFile);
+    const hash = crypto.createHash('md5').update(fileBuffer).digest('hex');
+    const relativePath = path.relative(pathInfo.basePath, downloadedFile).replace(/\\/g, '/');
+
+    // Extract album art
+    let aaFile = null;
+    if (!skipImg && metadata.picture && metadata.picture[0]) {
+      try {
+        const picData = metadata.picture[0].data;
+        const picHash = crypto.createHash('md5').update(picData.toString('utf-8')).digest('hex');
+        const extension = mime.extension(metadata.picture[0].format) || 'jpg';
+        aaFile = picHash + '.' + extension;
+
+        const aaDir = config.program.storage.albumArtDirectory;
+        const aaFilePath = path.join(aaDir, aaFile);
+        try { await fs.access(aaFilePath); } catch {
+          await fs.writeFile(aaFilePath, picData);
+          if (config.program.scanOptions.compressImage) {
+            const img = await Jimp.fromBuffer(picData);
+            await img.scaleToFit({ w: 256, h: 256 }).write(path.join(aaDir, 'zl-' + aaFile));
+            await img.scaleToFit({ w: 92, h: 92 }).write(path.join(aaDir, 'zs-' + aaFile));
+          }
+        }
+      } catch (err) { /* ignore */ }
+    }
+
+    // Insert into DB
+    const d = db.getDB();
+    const lib = db.getLibraryByName(targetVpath);
+    if (d && lib) {
+      const artistId = db.findOrCreateArtist(userMeta.artist || metadata.artist || null);
+      const albumId = db.findOrCreateAlbum(userMeta.album || metadata.album || null, artistId, metadata.year || null);
+      d.prepare(
+        `INSERT OR REPLACE INTO tracks (filepath, library_id, title, artist_id, album_id, track_number,
+         disc_number, year, format, file_hash, album_art_file, genre, replaygain_track_db,
+         modified, scan_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        relativePath, lib.id,
+        userMeta.title || metadata.title || null, artistId, albumId,
+        metadata.track?.no || null, metadata.disk?.no || null,
+        metadata.year || null, expectedExt, hash,
+        aaFile, metadata.genre?.[0] || null, null,
+        Date.now(), 'ytdl'
+      );
+    }
+
+    res.json({
+      filePath: relativePath,
+      vpath: targetVpath,
+    });
+  });
 }

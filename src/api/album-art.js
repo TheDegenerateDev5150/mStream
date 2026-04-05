@@ -22,7 +22,7 @@ import { isDownloaded as ffmpegIsDownloaded } from './transcode.js';
 
 // ── HTTP helpers ────────────────────────────────────────────────────────────
 
-function httpGet(url) {
+export function httpGet(url) {
   return new Promise((resolve, reject) => {
     const follow = (u, redirects = 0) => {
       if (redirects > 5) return reject(new Error('Too many redirects'));
@@ -49,7 +49,7 @@ function httpGet(url) {
   });
 }
 
-async function httpGetJson(url) {
+export async function httpGetJson(url) {
   const buf = await httpGet(url);
   return JSON.parse(buf.toString('utf8'));
 }
@@ -105,7 +105,7 @@ async function searchDeezerUrls(artist, album) {
 
 // ── Art save helpers ────────────────────────────────────────────────────────
 
-async function saveImageToCache(imgBuf, albumArtDir) {
+export async function saveImageToCache(imgBuf, albumArtDir) {
   const hash = crypto.createHash('md5').update(imgBuf).digest('hex');
   const filename = hash + '.jpg';
   const artPath = path.join(albumArtDir, filename);
@@ -123,7 +123,7 @@ async function saveImageToCache(imgBuf, albumArtDir) {
   return filename;
 }
 
-function embedArtInFile(audioFilePath, imgBuf) {
+export function embedArtInFile(audioFilePath, imgBuf) {
   return new Promise(async (resolve, reject) => {
     const ffmpeg = ffmpegBin();
     try { await fsp.access(ffmpeg); } catch { return resolve(); }

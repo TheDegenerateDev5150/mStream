@@ -335,7 +335,8 @@ export function setup(mstream) {
       storage: config.program.storage,
       maxRequestSize: config.program.maxRequestSize,
       autoBootServerAudio: config.program.autoBootServerAudio,
-      rustPlayerPort: config.program.rustPlayerPort
+      rustPlayerPort: config.program.rustPlayerPort,
+      ui: config.program.ui || 'default'
     });
   });
 
@@ -346,6 +347,16 @@ export function setup(mstream) {
     joiValidate(schema, req.body);
 
     await admin.editMaxRequestSize(req.body.maxRequestSize);
+    res.json({});
+  });
+
+  mstream.post("/api/v1/admin/config/ui", async (req, res) => {
+    const schema = Joi.object({
+      ui: Joi.string().valid('default', 'velvet').required()
+    });
+    joiValidate(schema, req.body);
+
+    await admin.editUI(req.body.ui);
     res.json({});
   });
 

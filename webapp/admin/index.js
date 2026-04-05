@@ -745,6 +745,12 @@ const advancedView = Vue.component('advanced-view', {
                         [<a v-on:click="openModal('edit-address-modal')">edit</a>]
                       </td>
                     </tr>
+                    <tr>
+                      <td><b>Frontend:</b> {{params.ui === 'velvet' ? 'Velvet' : 'Default'}}</td>
+                      <td>
+                        [<a v-on:click="switchUI()">switch to {{params.ui === 'velvet' ? 'Default' : 'Velvet'}}</a>]
+                      </td>
+                    </tr>
                   </tbody>
                 </table>
               </div>
@@ -808,6 +814,50 @@ const advancedView = Vue.component('advanced-view', {
     openModal: function(modalView) {
       modVM.currentViewModal = modalView;
       M.Modal.getInstance(document.getElementById('admin-modal')).open();
+    },
+    switchUI: function() {
+      const newUI = this.params.ui === 'velvet' ? 'default' : 'velvet';
+      const label = newUI === 'velvet' ? 'Velvet' : 'Default';
+      iziToast.question({
+        timeout: 20000,
+        close: false,
+        overlayClose: true,
+        overlay: true,
+        displayMode: 'once',
+        id: 'question',
+        zindex: 99999,
+        layout: 2,
+        maxWidth: 600,
+        title: `<b>Switch to ${label} frontend?</b>`,
+        message: 'The server will restart to apply the change.',
+        position: 'center',
+        buttons: [
+          [`<button><b>Switch to ${label}</b></button>`, (instance, toast) => {
+            instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
+            API.axios({
+              method: 'POST',
+              url: `${API.url()}/api/v1/admin/config/ui`,
+              data: { ui: newUI }
+            }).then(() => {
+              iziToast.success({
+                title: `Switching to ${label}...`,
+                message: 'Server is restarting',
+                position: 'topCenter',
+                timeout: 3500
+              });
+            }).catch(() => {
+              iziToast.error({
+                title: 'Error',
+                position: 'topCenter',
+                timeout: 3500
+              });
+            });
+          }, true],
+          ['<button>Cancel</button>', (instance, toast) => {
+            instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
+          }],
+        ]
+      });
     },
     removeSSL: function() {
       iziToast.question({

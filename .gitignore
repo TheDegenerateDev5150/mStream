@@ -45,3 +45,6 @@ dist/*
 
 rust-parser/target/
 rust-server-audio/target/
+
+waveform-cache/*
+!waveform-cache/README.md

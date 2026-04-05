@@ -20,6 +20,8 @@ struct ScanConfig {
     db_path: String,
     #[serde(rename = "libraryId")]
     library_id: i64,
+    #[serde(default)]
+    vpath: String,
     directory: String,
     #[serde(rename = "skipImg")]
     skip_img: bool,
@@ -80,9 +82,25 @@ fn run_scan(config: &ScanConfig) -> Result<(), Box<dyn std::error::Error>> {
         .filter(|e| e.file_type().is_file())
         .collect();
 
-    let mut file_count = 0u64;
+    // Count expected audio files for progress reporting
+    let expected_files: u64 = entries.iter()
+        .filter(|e| {
+            let ext = file_ext(e.path()).to_lowercase();
+            config.supported_files.get(&ext).copied().unwrap_or(false)
+        })
+        .count() as u64;
+
+    // Insert initial progress row
+    let _ = conn.execute(
+        "INSERT OR REPLACE INTO scan_progress (scan_id, library_id, vpath, scanned, expected) VALUES (?1, ?2, ?3, 0, ?4)",
+        rusqlite::params![config.scan_id, config.library_id, config.vpath, expected_files],
+    );
+
+    let mut file_count = 0u64;      // new/modified files parsed
+    let mut total_processed = 0u64; // all files touched (including unchanged — for progress)
     let mut batch_count = 0u64;
     let batch_size = config.scan_batch_size;
+    let progress_interval = 25u64;
 
     // Use explicit transactions for batch performance.
     // Without this, SQLite does a disk fsync per INSERT (~50 files/sec).
@@ -99,19 +117,36 @@ fn run_scan(config: &ScanConfig) -> Result<(), Box<dyn std::error::Error>> {
             Ok(true) => {
                 file_count += 1;
                 batch_count += 1;
-                if batch_count >= batch_size {
-                    conn.execute_batch("COMMIT; BEGIN")?;
-                    batch_count = 0;
-                }
             }
             Ok(false) => {} // skipped (unchanged)
             Err(e) => {
                 eprintln!("Warning: failed to process {}: {}", entry.path().display(), e);
             }
         }
+
+        // Track all files (including unchanged) for progress
+        total_processed += 1;
+
+        // Periodically commit and report progress so the API can see
+        // updates between batches. Also serves as the batch commit.
+        if batch_count >= batch_size || total_processed % progress_interval == 0 {
+            let rel = entry.path().strip_prefix(&config.directory)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
+            conn.execute_batch("COMMIT")?;
+            let _ = conn.execute(
+                "UPDATE scan_progress SET scanned = ?1, current_file = ?2 WHERE scan_id = ?3",
+                rusqlite::params![total_processed, rel, config.scan_id],
+            );
+            conn.execute_batch("BEGIN")?;
+            batch_count = 0;
+        }
     }
 
     conn.execute_batch("COMMIT")?;
+
+    // Remove progress row — scan is done
+    let _ = conn.execute("DELETE FROM scan_progress WHERE scan_id = ?1", rusqlite::params![config.scan_id]);
 
     // Remove tracks not seen in this scan (deleted files)
     let deleted = conn.execute(
