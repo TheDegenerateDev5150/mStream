@@ -1,7 +1,7 @@
 import Joi from 'joi';
 import * as config from '../state/config.js';
 import * as db from '../db/manager.js';
-import { joiValidate } from '../util/validation.js';
+import { joiValidate, resolveId } from '../util/validation.js';
 
 export function setup(mstream) {
   const d = () => db.getDB();
@@ -94,21 +94,20 @@ export function setup(mstream) {
   // ── Remove song from playlist ───────────────────────────────────────────
 
   mstream.post('/api/v1/playlist/remove-song', (req, res) => {
-    const schema = Joi.object({ lokiid: Joi.number().integer().required() });
-    joiValidate(schema, req.body);
+    const trackId = resolveId(req.body);
 
-    // lokiid maps to playlist_tracks.id now
+    // id maps to playlist_tracks.id
     const track = d().prepare(`
       SELECT pt.id, p.user_id FROM playlist_tracks pt
       JOIN playlists p ON pt.playlist_id = p.id
       WHERE pt.id = ?
-    `).get(req.body.lokiid);
+    `).get(trackId);
 
     if (!track || track.user_id !== req.user.id) {
       throw new Error('Access denied or track not found');
     }
 
-    d().prepare('DELETE FROM playlist_tracks WHERE id = ?').run(req.body.lokiid);
+    d().prepare('DELETE FROM playlist_tracks WHERE id = ?').run(trackId);
     res.json({});
   });
 

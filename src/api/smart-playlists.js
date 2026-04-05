@@ -147,7 +147,8 @@ export function setup(mstream) {
       name: r.name,
       filters: JSON.parse(r.filters_json),
       sort: r.sort,
-      limit_n: r.limit_n
+      limit_n: r.limit_n,
+      limit: r.limit_n  // alias — frontend reads both `limit` and `limit_n`
     }));
     res.json({ playlists });
   });

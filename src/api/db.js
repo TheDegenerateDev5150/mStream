@@ -3,7 +3,7 @@ import path from 'path';
 import * as vpath from '../util/vpath.js';
 import * as dbQueue from '../db/task-queue.js';
 import * as db from '../db/manager.js';
-import { joiValidate } from '../util/validation.js';
+import { joiValidate, dualId } from '../util/validation.js';
 import WebError from '../util/web-error.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -463,7 +463,7 @@ export function setup(mstream) {
         if (result.metadata) { metadata = result.metadata; }
       } catch (_e) {}
 
-      returnThis.push({ id: pt.id, filepath: pt.filepath, metadata });
+      returnThis.push({ ...dualId(pt.id), filepath: pt.filepath, metadata });
     }
 
     res.json(returnThis);

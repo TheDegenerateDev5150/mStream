@@ -42,6 +42,7 @@ export function setup(mstream) {
     res.json({
       enabled: config.program.discogs.enabled,
       allowArtUpdate: config.program.discogs.allowArtUpdate,
+      allowId3Edit: !config.program.noFileModify,
       apiKey: config.program.discogs.apiKey || '',
       apiSecret: config.program.discogs.apiSecret ? '••••••••' : '',
     });
