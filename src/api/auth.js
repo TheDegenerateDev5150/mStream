@@ -61,8 +61,8 @@ export function setup(mstream) {
         username: 'mstream-user',
         admin: !adminLocked,
         id: null,
-        allowUpload: adminLocked ? false : true,
-        allowMkdir: adminLocked ? false : true,
+        allow_upload: adminLocked ? 0 : 1,
+        allow_mkdir: adminLocked ? 0 : 1,
         allow_file_modify: adminLocked ? 0 : 1
       };
       return next();

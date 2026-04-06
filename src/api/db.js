@@ -34,8 +34,18 @@ export function renderMetadataObj(row) {
 }
 
 // Build library filter clause for user access
-export function libraryFilter(user) {
-  const libIds = db.getUserLibraryIds(user);
+export function libraryFilter(user, ignoreVPaths) {
+  let libIds = db.getUserLibraryIds(user);
+
+  // Filter out ignored libraries by name (matches v5.16 ignoreVPaths behavior)
+  if (Array.isArray(ignoreVPaths) && ignoreVPaths.length > 0) {
+    const allLibs = db.getAllLibraries();
+    const ignoredIds = new Set(
+      allLibs.filter(l => ignoreVPaths.includes(l.name)).map(l => l.id)
+    );
+    libIds = libIds.filter(id => !ignoredIds.has(id));
+  }
+
   if (libIds.length === 0) { return { clause: '1=0', params: [] }; }
   return {
     clause: `t.library_id IN (${libIds.map(() => '?').join(',')})`,
@@ -88,7 +98,7 @@ export function setup(mstream) {
   // ── Status ──────────────────────────────────────────────────────────────
 
   mstream.get('/api/v1/db/status', (req, res) => {
-    const filter = libraryFilter(req.user);
+    const filter = libraryFilter(req.user, req.body?.ignoreVPaths);
     const row = d().prepare(
       `SELECT COUNT(*) AS total FROM tracks t WHERE ${filter.clause}`
     ).get(...filter.params);
@@ -116,7 +126,7 @@ export function setup(mstream) {
   // ── Artists ─────────────────────────────────────────────────────────────
 
   function getArtists(req) {
-    const filter = libraryFilter(req.user);
+    const filter = libraryFilter(req.user, req.body?.ignoreVPaths);
     const rows = d().prepare(`
       SELECT DISTINCT a.name
       FROM artists a
@@ -134,8 +144,10 @@ export function setup(mstream) {
   // ── Artist Albums ───────────────────────────────────────────────────────
 
   mstream.post('/api/v1/db/artists-albums', (req, res) => {
-    const filter = libraryFilter(req.user);
-    const rows = d().prepare(`
+    const filter = libraryFilter(req.user, req.body?.ignoreVPaths);
+
+    // Get albums for this artist
+    const albumRows = d().prepare(`
       SELECT DISTINCT al.name, al.year, al.album_art_file
       FROM albums al
       JOIN artists a ON al.artist_id = a.id
@@ -144,17 +156,36 @@ export function setup(mstream) {
       ORDER BY al.year DESC
     `).all(String(req.body.artist), ...filter.params);
 
-    res.json({ albums: rows.map(r => ({
+    const albums = albumRows.map(r => ({
       name: r.name,
       year: r.year,
       album_art_file: r.album_art_file || null
-    }))});
+    }));
+
+    // Check for tracks with no album (null album_id) by this artist
+    const nullAlbumRow = d().prepare(`
+      SELECT t.album_art_file
+      FROM tracks t
+      JOIN artists a ON t.artist_id = a.id
+      WHERE a.name = ? AND t.album_id IS NULL AND ${filter.clause}
+      LIMIT 1
+    `).get(String(req.body.artist), ...filter.params);
+
+    if (nullAlbumRow) {
+      albums.push({
+        name: null,
+        year: null,
+        album_art_file: nullAlbumRow.album_art_file || null
+      });
+    }
+
+    res.json({ albums });
   });
 
   // ── Albums ──────────────────────────────────────────────────────────────
 
   function getAlbums(req) {
-    const filter = libraryFilter(req.user);
+    const filter = libraryFilter(req.user, req.body?.ignoreVPaths);
     const rows = d().prepare(`
       SELECT DISTINCT al.name, al.year, al.album_art_file
       FROM albums al
@@ -176,7 +207,7 @@ export function setup(mstream) {
   // ── Genres ──────────────────────────────────────────────────────────────
 
   function getGenres(req) {
-    const filter = libraryFilter(req.user);
+    const filter = libraryFilter(req.user, req.body?.ignoreVPaths);
     const rows = d().prepare(`
       SELECT DISTINCT g.name, COUNT(DISTINCT t.id) AS track_count
       FROM genres g
@@ -196,7 +227,7 @@ export function setup(mstream) {
   // ── Genre Songs ─────────────────────────────────────────────────────────
 
   mstream.post('/api/v1/db/genre-songs', (req, res) => {
-    const filter = libraryFilter(req.user);
+    const filter = libraryFilter(req.user, req.body?.ignoreVPaths);
     const allParams = req.user?.id
       ? [req.user.id, String(req.body.genre), ...filter.params]
       : [String(req.body.genre), ...filter.params];
@@ -215,7 +246,7 @@ export function setup(mstream) {
   // ── Album Songs ─────────────────────────────────────────────────────────
 
   mstream.post('/api/v1/db/album-songs', (req, res) => {
-    const filter = libraryFilter(req.user);
+    const filter = libraryFilter(req.user, req.body?.ignoreVPaths);
     const conditions = [filter.clause];
     const params = [...filter.params];
 
@@ -261,25 +292,37 @@ export function setup(mstream) {
     });
     joiValidate(schema, req.body);
 
-    const filter = libraryFilter(req.user);
+    const filter = libraryFilter(req.user, req.body?.ignoreVPaths);
     const searchPattern = `%${req.body.search}%`;
 
     const artists = req.body.noArtists ? [] : d().prepare(`
-      SELECT DISTINCT a.name
+      SELECT DISTINCT a.name, (
+        SELECT t2.album_art_file FROM tracks t2
+        WHERE t2.artist_id = a.id AND t2.album_art_file IS NOT NULL
+        LIMIT 1
+      ) AS album_art_file
       FROM artists a JOIN tracks t ON t.artist_id = a.id
       WHERE a.name LIKE ? AND ${filter.clause}
       ORDER BY a.name COLLATE NOCASE LIMIT 30
-    `).all(searchPattern, ...filter.params).map(r => ({ name: r.name }));
+    `).all(searchPattern, ...filter.params).map(r => ({
+      name: r.name,
+      album_art_file: r.album_art_file || null,
+      filepath: false
+    }));
 
     const albums = req.body.noAlbums ? [] : d().prepare(`
-      SELECT DISTINCT al.name
+      SELECT DISTINCT al.name, al.album_art_file
       FROM albums al JOIN tracks t ON t.album_id = al.id
       WHERE al.name LIKE ? AND ${filter.clause}
       ORDER BY al.name COLLATE NOCASE LIMIT 30
-    `).all(searchPattern, ...filter.params).map(r => ({ name: r.name }));
+    `).all(searchPattern, ...filter.params).map(r => ({
+      name: r.name,
+      album_art_file: r.album_art_file || null,
+      filepath: false
+    }));
 
     const title = req.body.noTitles ? [] : d().prepare(`
-      SELECT t.title, a.name AS artist_name, l.name AS library_name, t.filepath
+      SELECT t.title, t.album_art_file, a.name AS artist_name, l.name AS library_name, t.filepath
       FROM tracks t
       JOIN libraries l ON t.library_id = l.id
       LEFT JOIN artists a ON t.artist_id = a.id
@@ -287,17 +330,25 @@ export function setup(mstream) {
       LIMIT 30
     `).all(searchPattern, ...filter.params).map(r => {
       const fp = path.join(r.library_name, r.filepath).replace(/\\/g, '/');
-      return { name: r.artist_name ? `${r.artist_name} - ${r.title}` : r.title, filepath: fp };
+      return {
+        name: r.artist_name ? `${r.artist_name} - ${r.title}` : r.title,
+        album_art_file: r.album_art_file || null,
+        filepath: fp
+      };
     });
 
     const files = req.body.noFiles ? [] : d().prepare(`
-      SELECT l.name AS library_name, t.filepath
+      SELECT l.name AS library_name, t.filepath, t.album_art_file
       FROM tracks t JOIN libraries l ON t.library_id = l.id
       WHERE t.filepath LIKE ? AND ${filter.clause}
       LIMIT 30
     `).all(searchPattern, ...filter.params).map(r => {
       const fp = path.join(r.library_name, r.filepath).replace(/\\/g, '/');
-      return { name: fp, filepath: fp };
+      return {
+        name: fp,
+        album_art_file: r.album_art_file || null,
+        filepath: fp
+      };
     });
 
     res.json({ artists, albums, title, files });
@@ -307,7 +358,7 @@ export function setup(mstream) {
 
   function getRatedSongs(req) {
     if (!req.user?.id) { return []; }
-    const filter = libraryFilter(req.user);
+    const filter = libraryFilter(req.user, req.body?.ignoreVPaths);
     const rows = d().prepare(`
       ${trackQuery(req.user.id)}
       WHERE um.rating > 0 AND ${filter.clause}
@@ -356,7 +407,7 @@ export function setup(mstream) {
     });
     joiValidate(schema, req.body);
 
-    const filter = libraryFilter(req.user);
+    const filter = libraryFilter(req.user, req.body?.ignoreVPaths);
     const allParams = req.user?.id ? [req.user.id, ...filter.params] : filter.params;
 
     const rows = d().prepare(`
@@ -379,7 +430,7 @@ export function setup(mstream) {
     joiValidate(schema, req.body);
 
     if (!req.user?.id) { return res.json([]); }
-    const filter = libraryFilter(req.user);
+    const filter = libraryFilter(req.user, req.body?.ignoreVPaths);
 
     const rows = d().prepare(`
       ${trackQuery(req.user.id)}
@@ -401,7 +452,7 @@ export function setup(mstream) {
     joiValidate(schema, req.body);
 
     if (!req.user?.id) { return res.json([]); }
-    const filter = libraryFilter(req.user);
+    const filter = libraryFilter(req.user, req.body?.ignoreVPaths);
 
     const rows = d().prepare(`
       ${trackQuery(req.user.id)}
@@ -416,7 +467,7 @@ export function setup(mstream) {
   // ── Random Songs (Auto DJ) ──────────────────────────────────────────────
 
   mstream.post('/api/v1/db/random-songs', (req, res) => {
-    const filter = libraryFilter(req.user);
+    const filter = libraryFilter(req.user, req.body?.ignoreVPaths);
     const conditions = [filter.clause];
     const params = [...(req.user?.id ? [req.user.id] : []), ...filter.params];
 
@@ -425,18 +476,39 @@ export function setup(mstream) {
       params.push(Number(req.body.minRating));
     }
 
-    const row = d().prepare(`
+    // Get all matching songs (needed for ignoreList index-based deduplication)
+    const results = d().prepare(`
       ${trackQuery(req.user?.id)}
       WHERE ${conditions.join(' AND ')}
-      ORDER BY RANDOM()
-      LIMIT 1
-    `).get(...params);
+    `).all(...params);
 
-    if (!row) { throw new WebError('No songs that match criteria', 400); }
+    const count = results.length;
+    if (count === 0) { throw new WebError('No songs that match criteria', 400); }
+
+    // Restore v5.16 ignoreList deduplication behavior
+    let ignoreList = Array.isArray(req.body.ignoreList) ? [...req.body.ignoreList] : [];
+    let ignorePercentage = 0.5;
+    if (req.body.ignorePercentage && typeof req.body.ignorePercentage === 'number') {
+      ignorePercentage = req.body.ignorePercentage;
+    }
+
+    // Trim ignoreList when it grows too large
+    while (ignoreList.length > count * ignorePercentage) {
+      ignoreList.shift();
+    }
+
+    // Pick a random index not in ignoreList
+    let randomNumber = Math.floor(Math.random() * count);
+    while (ignoreList.indexOf(randomNumber) > -1) {
+      randomNumber = Math.floor(Math.random() * count);
+    }
+
+    const randomSong = results[randomNumber];
+    ignoreList.push(randomNumber);
 
     res.json({
-      songs: [renderMetadataObj(row)],
-      ignoreList: req.body.ignoreList || []
+      songs: [renderMetadataObj(randomSong)],
+      ignoreList: ignoreList
     });
   });
 
