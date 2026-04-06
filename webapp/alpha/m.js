@@ -9,14 +9,14 @@ const myDropzone = new Dropzone(document.body, {
 myDropzone.on("addedfile", (file) => {
   if (programState[0].state !== 'fileExplorer') {
     iziToast.error({
-      title: 'Files can only be added to the file explorer',
+      title: t('toast.filesExplorerOnly'),
       position: 'topCenter',
       timeout: 3500
     });
     myDropzone.removeFile(file);
   } else if (fileExplorerArray.length < 1) {
     iziToast.error({
-      title: 'Cannot Upload File Here',
+      title: t('toast.cannotUploadHere'),
       position: 'topCenter',
       timeout: 3500
     });
@@ -52,7 +52,7 @@ myDropzone.on('queuecomplete', (file, xhr, formData) => {
 
   if (successCount === myDropzone.files.length) {
     iziToast.success({
-      title: 'Files Uploaded',
+      title: t('toast.filesUploaded'),
       position: 'topCenter',
       timeout: 3500
     });
@@ -63,7 +63,7 @@ myDropzone.on('queuecomplete', (file, xhr, formData) => {
     // do nothing
   } else {
     iziToast.warning({
-      title: successCount + ' out of ' + myDropzone.files.length + ' were uploaded successfully',
+      title: t('toast.uploadPartial', { success: successCount, total: myDropzone.files.length }),
       position: 'topCenter',
       timeout: 3500
     });
@@ -78,7 +78,7 @@ myDropzone.on('queuecomplete', (file, xhr, formData) => {
 
 myDropzone.on('error', (err, msg, xhr) => {
   var iziStuff = {
-    title: 'Upload Failed',
+    title: t('toast.uploadFailed'),
     position: 'topCenter',
     timeout: 3500
   };
@@ -252,7 +252,7 @@ function setBrowserRootPanel(panelName, showBar) {
 
 ///////////////// File Explorer
 function loadFileExplorer() {
-  setBrowserRootPanel('File Explorer');
+  setBrowserRootPanel(t('panel.fileExplorer'));
   programState = [{ state: 'fileExplorer' }];
 
   // Reset file explorer vars
@@ -363,7 +363,7 @@ function handleDirClick(el){
 
 function boilerplateFailure(err) {
   console.log(err);
-  let msg = 'Call Failed';
+  let msg = t('error.callFailed');
   // TODO: Check this
   if (err.responseJSON && err.responseJSON.error) {
     msg = err.responseJSON.error;
@@ -456,8 +456,8 @@ async function queueAlbum(cardEl) {
     });
 
     iziToast.success({
-      title: 'Album Queued',
-      message: `${response.length} song${response.length !== 1 ? 's' : ''} added`,
+      title: t('toast.albumQueued'),
+      message: t('toast.albumQueuedMessage', { count: response.length }),
       position: 'topCenter',
       timeout: 2500
     });
@@ -476,7 +476,7 @@ async function init() {
     const response = await MSTREAMAPI.ping();
     MSTREAMAPI.currentServer.vpaths = response.vpaths;
     VUEPLAYERCORE.playlists.length = 0;
-    document.getElementById('pop-f').innerHTML = '<div class="pop-f pop-playlist">Add To Playlist:</div>';
+    document.getElementById('pop-f').innerHTML = `<div class="pop-f pop-playlist">${t('playlist.addToPlaylist')}</div>`;
 
     response.playlists.forEach(p => {
       VUEPLAYERCORE.playlists.push(p);
@@ -584,8 +584,8 @@ async function dbStatus() {
     }
 
     // Update status
-    document.getElementById('scan-status').innerHTML = 'Scan In Progress';
-    document.getElementById('scan-status-files').innerHTML = response.totalFileCount + ' files in DB';
+    document.getElementById('scan-status').innerHTML = t('status.scanInProgress');
+    document.getElementById('scan-status-files').innerHTML = t('status.filesInDB', { count: response.totalFileCount });
   }catch(err) {
     document.getElementById('scan-status').innerHTML = '';
     document.getElementById('scan-status-files').innerHTML = '';
@@ -719,7 +719,7 @@ async function submitMkdir() {
   try {
     await MSTREAMAPI.mkdir(directory);
     iziToast.success({
-      title: 'Folder Created',
+      title: t('toast.folderCreated'),
       position: 'topCenter',
       timeout: 3500
     });
@@ -727,7 +727,7 @@ async function submitMkdir() {
     senddir();
   } catch (err) {
     iziToast.error({
-      title: 'Failed to create folder',
+      title: t('toast.folderCreateFailed'),
       position: 'topCenter',
       timeout: 3500
     });
@@ -791,10 +791,10 @@ async function submitYtdl() {
   try {
     const parsed = new URL(url);
     if (parsed.hostname !== 'youtube.com' && !parsed.hostname.endsWith('.youtube.com') && parsed.hostname !== 'youtu.be') {
-      return iziToast.warning({ title: 'URL must be a YouTube link', position: 'topCenter', timeout: 3500 });
+      return iziToast.warning({ title: t('toast.youtubeUrlRequired'), position: 'topCenter', timeout: 3500 });
     }
   } catch (e) {
-    return iziToast.warning({ title: 'Invalid URL', position: 'topCenter', timeout: 3500 });
+    return iziToast.warning({ title: t('toast.invalidUrl'), position: 'topCenter', timeout: 3500 });
   }
 
   // Collect user-edited metadata overrides
@@ -816,7 +816,7 @@ async function submitYtdl() {
     document.getElementById('ytdl_url').value = '';
     document.getElementById('ytdl_metadata').classList.add('super-hide');
     iziToast.success({
-      title: 'Download Started',
+      title: t('toast.downloadStarted'),
       position: 'topCenter',
       timeout: 3000
     });
@@ -847,7 +847,7 @@ async function updateYtdlIndicator() {
 
     if (active.length > 0) {
       indicator.classList.remove('super-hide');
-      textEl.textContent = active.length === 1 ? 'Downloading audio...' : 'Downloading ' + active.length + ' files...';
+      textEl.textContent = active.length === 1 ? t('status.downloadingAudio') : t('status.downloadingFiles', { count: active.length });
     } else {
       indicator.classList.add('super-hide');
 
@@ -874,7 +874,7 @@ async function updateYtdlIndicator() {
 function openMetadataModal(metadata, fp) {
   if (metadata === null) {
     return iziToast.warning({
-      title: 'No Metadata Found',
+      title: t('toast.noMetadataFound'),
       position: 'topCenter',
       timeout: 3500
     });
@@ -905,7 +905,7 @@ function openAlbumArtModal(metadata, fp) {
   document.getElementById('aa-artist').value = metadata.artist || '';
   document.getElementById('aa-album').value = metadata.album || '';
   document.getElementById('aa-results').innerHTML = '';
-  document.getElementById('aa-search-status').innerHTML = 'Loading album art...';
+  document.getElementById('aa-search-status').innerHTML = t('albumArt.loadingAlbumArt');
   document.getElementById('aa-upload-input').value = '';
   document.getElementById('aa-write-folder').checked = false;
   document.getElementById('aa-write-file').checked = false;
@@ -939,22 +939,22 @@ async function searchAlbumArt() {
   const album = document.getElementById('aa-album').value;
 
   if (!artist && !album) {
-    document.getElementById('aa-search-status').innerHTML = 'No artist or album info available for search';
+    document.getElementById('aa-search-status').innerHTML = t('status.noArtistOrAlbumInfo');
     return;
   }
 
-  document.getElementById('aa-search-status').innerHTML = 'Searching...';
+  document.getElementById('aa-search-status').innerHTML = t('status.searching');
   document.getElementById('aa-results').innerHTML = '';
 
   try {
     const res = await MSTREAMAPI.searchAlbumArt({ artist: artist || '', album: album || '' });
 
     if (!res.results || res.results.length === 0) {
-      document.getElementById('aa-search-status').innerHTML = 'No album art found';
+      document.getElementById('aa-search-status').innerHTML = t('status.noAlbumArtFound');
       return;
     }
 
-    document.getElementById('aa-search-status').innerHTML = `Found ${res.results.length} results. Click to select:`;
+    document.getElementById('aa-search-status').innerHTML = t('status.albumArtResults', { count: res.results.length });
 
     let html = '';
     res.results.forEach((r, i) => {
@@ -967,7 +967,7 @@ async function searchAlbumArt() {
 
     document.getElementById('aa-results').innerHTML = html;
   } catch (err) {
-    document.getElementById('aa-search-status').innerHTML = 'Search failed: ' + (err.message || 'Unknown error');
+    document.getElementById('aa-search-status').innerHTML = t('status.searchFailed', { error: err.message || err });
   }
 }
 
@@ -978,29 +978,29 @@ async function selectAlbumArt(url) {
 
   try {
     await MSTREAMAPI.setAlbumArtFromUrl({ filepath, url, writeToFolder, writeToFile });
-    iziToast.success({ title: 'Album art updated!', position: 'topCenter', timeout: 3500 });
+    iziToast.success({ title: t('toast.albumArtUpdated'), position: 'topCenter', timeout: 3500 });
     myModal.close();
   } catch (err) {
-    iziToast.error({ title: 'Failed to set album art', position: 'topCenter', timeout: 3500 });
+    iziToast.error({ title: t('toast.albumArtFailed'), position: 'topCenter', timeout: 3500 });
   }
 }
 
 async function uploadCustomAlbumArt() {
   const input = document.getElementById('aa-upload-input');
   if (!input.files || input.files.length === 0) {
-    return iziToast.warning({ title: 'Select an image file first', position: 'topCenter', timeout: 3500 });
+    return iziToast.warning({ title: t('toast.selectImageFirst'), position: 'topCenter', timeout: 3500 });
   }
 
   const file = input.files[0];
 
   // Client-side validation
   if (file.size > 10 * 1024 * 1024) {
-    return iziToast.error({ title: 'Image too large (max 10MB)', position: 'topCenter', timeout: 3500 });
+    return iziToast.error({ title: t('toast.imageTooLarge'), position: 'topCenter', timeout: 3500 });
   }
 
   const validTypes = ['image/jpeg', 'image/png', 'image/webp'];
   if (!validTypes.includes(file.type)) {
-    return iziToast.error({ title: 'Invalid format. Use JPEG, PNG, or WebP.', position: 'topCenter', timeout: 3500 });
+    return iziToast.error({ title: t('toast.invalidImageFormat'), position: 'topCenter', timeout: 3500 });
   }
 
   const filepath = document.getElementById('aa-filepath').value;
@@ -1013,10 +1013,10 @@ async function uploadCustomAlbumArt() {
     const base64 = reader.result.split(',')[1]; // strip data:image/...;base64,
     try {
       await MSTREAMAPI.uploadAlbumArt({ filepath, image: base64, writeToFolder, writeToFile });
-      iziToast.success({ title: 'Album art updated!', position: 'topCenter', timeout: 3500 });
+      iziToast.success({ title: t('toast.albumArtUpdated'), position: 'topCenter', timeout: 3500 });
       myModal.close();
     } catch (err) {
-      iziToast.error({ title: 'Upload failed', position: 'topCenter', timeout: 3500 });
+      iziToast.error({ title: t('toast.uploadFailed'), position: 'topCenter', timeout: 3500 });
     }
   };
   reader.readAsDataURL(file);
@@ -1033,13 +1033,13 @@ async function addToPlaylistUI(playlist) {
   try {
     await MSTREAMAPI.addToPlaylist(playlist, curFileTracker);
     iziToast.success({
-      title: 'Song Added!',
+      title: t('toast.songAdded'),
       position: 'topCenter',
       timeout: 3500
     });
   }catch(err) {
     iziToast.error({
-      title: 'Failed to add song',
+      title: t('toast.failedAddSong'),
       position: 'topCenter',
       timeout: 3500
     });
@@ -1159,16 +1159,16 @@ async function onBackButton() {
 
 ///////////////////// Playlists
 async function getAllPlaylists() {
-  setBrowserRootPanel('Playlists');
+  setBrowserRootPanel(t('panel.playlists'));
   document.getElementById('filelist').innerHTML = getLoadingSvg();
-  document.getElementById('directoryName').innerHTML = '<input class="newPlaylistButton btn green" style="height:24px;" value="New Playlist" type="button" onclick="openNewPlaylistModal();">';
+  document.getElementById('directoryName').innerHTML = `<input class="newPlaylistButton btn green" style="height:24px;" value="${t('label.newPlaylist')}" type="button" onclick="openNewPlaylistModal();">`;
   programState = [ {state: 'allPlaylists' }];
 
   try {
     const response = await MSTREAMAPI.getAllPlaylists();
     VUEPLAYERCORE.playlists.length = 0;
-    document.getElementById('pop-f').innerHTML = '<div class="pop-f pop-playlist">Add To Playlist:</div>';
-    document.getElementById('live-playlist-select').innerHTML = `<option value="" disabled selected>Select Playlist</option>`;
+    document.getElementById('pop-f').innerHTML = `<div class="pop-f pop-playlist">${t('playlist.addToPlaylist')}</div>`;
+    document.getElementById('live-playlist-select').innerHTML = `<option value="" disabled selected>${t('livePlaylist.selectPlaylist')}</option>`;
 
     // loop through the json array and make an array of corresponding divs
     let playlists = '<ul class="collection">';
@@ -1184,7 +1184,7 @@ async function getAllPlaylists() {
 
     document.getElementById('filelist').innerHTML = playlists;
   }catch (err) {
-    document.getElementById('filelist').innerHTML = '<div>Server call failed</div>';
+    document.getElementById('filelist').innerHTML = `<div>${t('error.serverCallFailed')}</div>`;
     return boilerplateFailure(err);
   }
 }
@@ -1252,7 +1252,7 @@ async function onPlaylistClick(el) {
 
     document.getElementById('filelist').innerHTML = files;
   }catch(err) {
-    document.getElementById('filelist').innerHTML = '<div>Server call failed</div>';
+    document.getElementById('filelist').innerHTML = `<div>${t('error.serverCallFailed')}</div>`;
     boilerplateFailure(response, error);
   }
 }
@@ -1280,7 +1280,7 @@ async function newPlaylist() {
     await MSTREAMAPI.newPlaylist(title);
     myModal.close();
     iziToast.success({
-      title: 'Playlist Created',
+      title: t('toast.playlistCreated'),
       position: 'topCenter',
       timeout: 3000
     });
@@ -1376,7 +1376,7 @@ async function setLivePlaylist() {
 async function savePlaylist() {
   if (MSTREAMPLAYER.playlist.length == 0) {
     iziToast.warning({
-      title: 'No playlist to save!',
+      title: t('toast.noPlaylistToSave'),
       position: 'topCenter',
       timeout: 3500
     });
@@ -1397,7 +1397,7 @@ async function savePlaylist() {
 
     myModal.close();
     iziToast.success({
-      title: 'Playlist Saved',
+      title: t('toast.playlistSaved'),
       position: 'topCenter',
       timeout: 3000
     });
@@ -1418,7 +1418,7 @@ async function savePlaylist() {
 
 /////////////// Artists
 async function getAllArtists() {
-  setBrowserRootPanel('Artists');
+  setBrowserRootPanel(t('panel.artists'));
   document.getElementById('filelist').innerHTML = getLoadingSvg();
   programState = [{ state: 'allArtists' }];
 
@@ -1439,7 +1439,7 @@ async function getAllArtists() {
 
     document.getElementById('filelist').innerHTML = artists;
   }catch(err) {
-    document.getElementById('filelist').innerHTML = '<div>Server call failed</div>';
+    document.getElementById('filelist').innerHTML = `<div>${t('error.serverCallFailed')}</div>`;
     boilerplateFailure(err);
   }
 }
@@ -1457,8 +1457,8 @@ function getArtistz(el) {
 }
 
 async function getArtistsAlbums(artist) {
-  setBrowserRootPanel('Albums');
-  document.getElementById('directoryName').innerHTML = 'Artist: ' + artist;
+  setBrowserRootPanel(t('panel.albums'));
+  document.getElementById('directoryName').innerHTML = t('label.artist') + ' ' + artist;
   document.getElementById('filelist').innerHTML = getLoadingSvg();
 
   try {
@@ -1479,14 +1479,14 @@ async function getArtistsAlbums(artist) {
 
     document.getElementById('filelist').innerHTML = albums;
   }catch(err) {
-    document.getElementById('filelist').innerHTML = '<div>Server call failed</div>';
+    document.getElementById('filelist').innerHTML = `<div>${t('error.serverCallFailed')}</div>`;
     boilerplateFailure(err);
   }
 }
 
 /////////////// Genres
 async function getAllGenres() {
-  setBrowserRootPanel('Genres');
+  setBrowserRootPanel(t('panel.genres'));
   document.getElementById('filelist').innerHTML = getLoadingSvg();
   programState = [{ state: 'allGenres' }];
 
@@ -1506,7 +1506,7 @@ async function getAllGenres() {
 
     document.getElementById('filelist').innerHTML = html;
   } catch(err) {
-    document.getElementById('filelist').innerHTML = '<div>Server call failed</div>';
+    document.getElementById('filelist').innerHTML = `<div>${t('error.serverCallFailed')}</div>`;
   }
 }
 
@@ -1522,8 +1522,8 @@ function getGenreSongsList(el) {
 }
 
 async function getGenreSongs(genre) {
-  setBrowserRootPanel('Songs');
-  document.getElementById('directoryName').innerHTML = 'Genre: ' + genre;
+  setBrowserRootPanel(t('panel.songs'));
+  document.getElementById('directoryName').innerHTML = t('label.genre') + ' ' + genre;
   document.getElementById('filelist').innerHTML = getLoadingSvg();
 
   try {
@@ -1544,13 +1544,13 @@ async function getGenreSongs(genre) {
 
     document.getElementById('filelist').innerHTML = songs;
   } catch(err) {
-    document.getElementById('filelist').innerHTML = '<div>Server call failed</div>';
+    document.getElementById('filelist').innerHTML = `<div>${t('error.serverCallFailed')}</div>`;
   }
 }
 
 /////////////// Albums
 async function getAllAlbums() {
-  setBrowserRootPanel('Albums');
+  setBrowserRootPanel(t('panel.albums'));
   document.getElementById('filelist').innerHTML = getLoadingSvg();
   
   programState = [{ state: 'allAlbums' }];
@@ -1576,7 +1576,7 @@ async function getAllAlbums() {
 
     document.getElementById('filelist').innerHTML = albums;
   }catch (err) {
-    document.getElementById('filelist').innerHTML = '<div>Server call failed</div>';
+    document.getElementById('filelist').innerHTML = `<div>${t('error.serverCallFailed')}</div>`;
     return boilerplateFailure(err);
   }
 }
@@ -1624,14 +1624,14 @@ async function getAlbumSongs(album, artist, year) {
 
     document.getElementById('filelist').innerHTML = files;
   }catch(err) {
-    document.getElementById('filelist').innerHTML = '<div>Server call failed</div>';
+    document.getElementById('filelist').innerHTML = `<div>${t('error.serverCallFailed')}</div>`;
     boilerplateFailure(err);
   }
 }
 
 ////////////// Rated Songs
 async function getRatedSongs() {
-  setBrowserRootPanel('Starred');
+  setBrowserRootPanel(t('panel.starred'));
   document.getElementById('filelist').innerHTML = getLoadingSvg();
   programState = [{ state: 'allRated' }];
 
@@ -1664,16 +1664,16 @@ async function getRatedSongs() {
 
     document.getElementById('filelist').innerHTML = files;
   }catch (err) {
-    document.getElementById('filelist').innerHTML = '<div>Server call failed</div>';
+    document.getElementById('filelist').innerHTML = `<div>${t('error.serverCallFailed')}</div>`;
     return boilerplateFailure(err);
   }
 }
 
 ///////////////// Recently Played
 function getRecentlyPlayed() {
-  setBrowserRootPanel('Recently Played');
+  setBrowserRootPanel(t('panel.recentlyPlayed'));
   document.getElementById('filelist').innerHTML = getLoadingSvg();
-  document.getElementById('directoryName').innerHTML = 'Get last &nbsp;&nbsp;<input onkeydown="submitRecentlyPlayed();" onfocusout="redoRecentlyPlayed();" id="recently-played-limit" class="recently-added-input" type="number" min="1" step="1" value="100">&nbsp;&nbsp; songs';
+  document.getElementById('directoryName').innerHTML = `Get last &nbsp;&nbsp;<input onkeydown="submitRecentlyPlayed();" onfocusout="redoRecentlyPlayed();" id="recently-played-limit" class="recently-added-input" type="number" min="1" step="1" value="100">&nbsp;&nbsp; ${t('label.getLastSongs', { count: 2 })}`;
 
   redoRecentlyPlayed();
 }
@@ -1708,7 +1708,7 @@ async function redoRecentlyPlayed() {
   
     document.getElementById('filelist').innerHTML = filelist;
   }catch(err) {
-    document.getElementById('filelist').innerHTML = '<div>Server call failed</div>';
+    document.getElementById('filelist').innerHTML = `<div>${t('error.serverCallFailed')}</div>`;
     return boilerplateFailure(err);
   }
 }
@@ -1721,9 +1721,9 @@ function submitRecentlyPlayed() {
 
 ///////////////// Most Played
 function getMostPlayed() {
-  setBrowserRootPanel('Most Played');
+  setBrowserRootPanel(t('panel.mostPlayed'));
   document.getElementById('filelist').innerHTML = getLoadingSvg();
-  document.getElementById('directoryName').innerHTML = 'Get last &nbsp;&nbsp;<input onkeydown="submitMostPlayed();" onfocusout="redoMostPlayed();" id="most-played-limit" class="recently-added-input" type="number" min="1" step="1" value="100">&nbsp;&nbsp; songs';
+  document.getElementById('directoryName').innerHTML = `Get last &nbsp;&nbsp;<input onkeydown="submitMostPlayed();" onfocusout="redoMostPlayed();" id="most-played-limit" class="recently-added-input" type="number" min="1" step="1" value="100">&nbsp;&nbsp; ${t('label.getLastSongs', { count: 2 })}`;
 
   redoMostPlayed();
 }
@@ -1758,7 +1758,7 @@ async function redoMostPlayed() {
   
     document.getElementById('filelist').innerHTML = filelist;
   }catch(err) {
-    document.getElementById('filelist').innerHTML = '<div>Server call failed</div>';
+    document.getElementById('filelist').innerHTML = `<div>${t('error.serverCallFailed')}</div>`;
     return boilerplateFailure(err);
   }
 }
@@ -1771,9 +1771,9 @@ function submitMostPlayed() {
 
 ///////////////// Recently Added
 function getRecentlyAdded() {
-  setBrowserRootPanel('Recently Added');
+  setBrowserRootPanel(t('panel.recentlyAdded'));
   document.getElementById('filelist').innerHTML = getLoadingSvg();
-  document.getElementById('directoryName').innerHTML = 'Get last &nbsp;&nbsp;<input onkeydown="submitRecentlyAdded();" onfocusout="redoRecentlyAdded();" id="recently-added-limit" class="recently-added-input" type="number" min="1" step="1" value="100">&nbsp;&nbsp; songs';
+  document.getElementById('directoryName').innerHTML = `Get last &nbsp;&nbsp;<input onkeydown="submitRecentlyAdded();" onfocusout="redoRecentlyAdded();" id="recently-added-limit" class="recently-added-input" type="number" min="1" step="1" value="100">&nbsp;&nbsp; ${t('label.getLastSongs', { count: 2 })}`;
 
   redoRecentlyAdded();
 }
@@ -1808,7 +1808,7 @@ async function redoRecentlyAdded() {
   
     document.getElementById('filelist').innerHTML = filelist;
   }catch(err) {
-    document.getElementById('filelist').innerHTML = '<div>Server call failed</div>';
+    document.getElementById('filelist').innerHTML = `<div>${t('error.serverCallFailed')}</div>`;
     return boilerplateFailure(err);
   }
 }
@@ -1821,7 +1821,7 @@ function submitRecentlyAdded() {
 
 ///////////////// Transcode
 function setupTranscodePanel(){
-  setBrowserRootPanel('Transcode', false);
+  setBrowserRootPanel(t('panel.transcode'), false);
 
   if (!MSTREAMPLAYER.transcodeOptions.serverEnabled) {
     document.getElementById('filelist').innerHTML = '<div class="pad-6"><b>Transcoding is disabled on this server</b></div>';
@@ -1915,7 +1915,7 @@ function toggleTranscoding(el, manual){
 
 ///////////////////////////// Mobile Stuff
 function getMobilePanel(){
-  setBrowserRootPanel('Mobile Apps', false);
+  setBrowserRootPanel(t('panel.mobileApps'), false);
 
   document.getElementById('filelist').innerHTML = 
     `<div class="mobile-links pad-6">
@@ -1963,10 +1963,10 @@ async function submitShareForm() {
 
 ///////////////// Auto DJ
 function autoDjPanel() {
-  setBrowserRootPanel('Auto DJ', false);
+  setBrowserRootPanel(t('panel.autoDJ'), false);
 
-  let newHtml = `<div class="pad-6"><p>Auto DJ randomly generates a playlist.  Click the \'DJ\' button on the bottom enable it</p>
-    <h5>Use Folders</h5>`;
+  let newHtml = `<div class="pad-6"><p>${t('autoDJ.description')}</p>
+    <h5>${t('autoDJ.useFolders')}</h5>`;
   for (let i = 0; i < MSTREAMAPI.currentServer.vpaths.length; i++) {
     let checkedString = '';
     if (!MSTREAMPLAYER.ignoreVPaths[MSTREAMAPI.currentServer.vpaths[i]]) {
@@ -1980,12 +1980,12 @@ function autoDjPanel() {
       </label><br>`;
   }
 
-  newHtml += '<h5>Minimum Rating</h5> <select class="browser-default" onchange="updateAutoDJRatings(this)" id="autodj-ratings">';
+  newHtml += `<h5>${t('autoDJ.minRating')}</h5> <select class="browser-default" onchange="updateAutoDJRatings(this)" id="autodj-ratings">`;
   for (let i = 0; i < 11; i++) {
-    newHtml += `<option ${(Number(MSTREAMPLAYER.minRating) === i) ? 'selected' : ''} value="${i}">${(i ===0) ? 'Disabled' : +(i/2).toFixed(1)}</option>`;
+    newHtml += `<option ${(Number(MSTREAMPLAYER.minRating) === i) ? 'selected' : ''} value="${i}">${(i ===0) ? t('label.disabled') : +(i/2).toFixed(1)}</option>`;
   }
   newHtml += '</select>';
-  newHtml += '<br><p><input type="button" class="btn blue" value="Toggle Auto DJ" onclick="MSTREAMPLAYER.toggleAutoDJ();"></p></div>'
+  newHtml += `<br><p><input type="button" class="btn blue" value="${t('autoDJ.toggleButton')}" onclick="MSTREAMPLAYER.toggleAutoDJ();"></p></div>`
   
   document.getElementById('filelist').innerHTML = newHtml;
 }
@@ -1995,7 +1995,7 @@ function onAutoDJFolderChange(el) {
   if (document.querySelector('input[name=autodj-folders]:checked') === null) {
     el.checked = true;
     iziToast.warning({
-      title: 'Auto DJ requires a directory',
+      title: t('toast.autoDJRequiresDir'),
       position: 'topCenter',
       timeout: 3500
     });
@@ -2018,7 +2018,7 @@ function updateAutoDJRatings(el) {
 
 ////////////// Jukebox
 function setupJukeboxPanel() {
-  setBrowserRootPanel('Jukebox Mode', false);
+  setBrowserRootPanel(t('panel.jukeboxMode'), false);
 
   let newHtml;
   if (JUKEBOX.stats.live !== false && JUKEBOX.connection !== false) {
@@ -2026,13 +2026,13 @@ function setupJukeboxPanel() {
   } else {
     newHtml = `
       <div class="pad-6">
-        <h5>Jukebox Mode</h5>
-        <p style="color:#aaa;">Control this page remotely from another device</p>
-        <input class="btn green" value="Connect" type="button" onclick="connectToJukeBox(this)">
+        <h5>${t('jukebox.title')}</h5>
+        <p style="color:#aaa;">${t('jukebox.description')}</p>
+        <input class="btn green" value="${t('jukebox.connect')}" type="button" onclick="connectToJukeBox(this)">
         <div style="margin-top:28px; padding-top:20px; border-top:1px solid #444;">
-          <h5>Server Audio</h5>
-          <p style="color:#aaa;">Play music through the server's speakers instead of the browser</p>
-          <a class="btn blue" href="/server-remote" target="_blank">Open Server Audio Player</a>
+          <h5>${t('jukebox.serverAudio')}</h5>
+          <p style="color:#aaa;">${t('jukebox.serverAudioDescription')}</p>
+          <a class="btn blue" href="/server-remote" target="_blank">${t('jukebox.openServerAudio')}</a>
         </div>
       </div>`;
   }
@@ -2043,7 +2043,7 @@ function setupJukeboxPanel() {
 
 function createJukeboxPanel() {
   if (JUKEBOX.stats.error !== false) {
-    return '<div class="pad-6">An error occurred.  Please refresh the page and try again</div>';
+    return `<div class="pad-6">${t('error.genericError')}</div>`;
   }
 
   let address = '';
@@ -2147,7 +2147,7 @@ const searchMap = {
 };
 
 function setupSearchPanel(searchTerm) {
-  setBrowserRootPanel('Search DB');
+  setBrowserRootPanel(t('panel.searchDB'));
   document.getElementById('local_search_btn').style.display = 'none';
   programState = [{ state: 'searchPanel' }];
 
@@ -2260,11 +2260,11 @@ async function submitSearchForm() {
 
 ///////////////// Config
 function advancedConfig() {
-  setBrowserRootPanel('Config', false);
+  setBrowserRootPanel(t('panel.config'), false);
 
   let newHtml = `<div class="pad-6">
-    <h5>Use Folders</h5>
-    <p>Unchecked folders will be ignored in all DB queries (including Auto DJ)</p>`;
+    <h5>${t('autoDJ.useFolders')}</h5>
+    <p>${t('autoDJ.uncheckedHint')}</p>`;
   
   for (let i = 0; i < MSTREAMAPI.currentServer.vpaths.length; i++) {
     let checkedString = '';
@@ -2285,7 +2285,7 @@ function advancedConfig() {
 
 ////////////////// Layout
 function setupLayoutPanel() {
-  setBrowserRootPanel('Layout', false);
+  setBrowserRootPanel(t('panel.layout'), false);
 
   const newHtml = `
     <div>
@@ -2293,7 +2293,7 @@ function setupLayoutPanel() {
         <label>
           <input onchange="tglBookCtrls(this);" type="checkbox" ${VUEPLAYERCORE.altLayout.audioBookCtrls === true ? 'checked' : ''}>
           <span class="lever"></span>
-          Audio Book Controls
+          ${t('layout.audioBookControls')}
         </label>
       </div>
       <br>
@@ -2301,7 +2301,7 @@ function setupLayoutPanel() {
         <label>
           <input onchange="flipPlayer(this);" type="checkbox" ${VUEPLAYERCORE.altLayout.flipPlayer === true ? 'checked' : ''}>
           <span class="lever"></span>
-          Player On Bottom
+          ${t('layout.playerOnBottom')}
         </label>
       </div>
       <br>
@@ -2309,7 +2309,7 @@ function setupLayoutPanel() {
         <label>
           <input onchange="tglMoveMetadata(this);" type="checkbox" ${VUEPLAYERCORE.altLayout.moveMeta === true ? 'checked' : ''}>
           <span class="lever"></span>
-          Metadata in Queue
+          ${t('layout.metadataInQueue')}
         </label>
       </div>
       <br>
@@ -2317,7 +2317,7 @@ function setupLayoutPanel() {
         <label>
           <input onchange="tglCompressArt();" type="checkbox" ${VUEPLAYERCORE.altLayout.compressArt === true ? 'checked' : ''}>
           <span class="lever"></span>
-          Compress Album Art
+          ${t('layout.compressAlbumArt')}
         </label>
       </div>
       <br>
@@ -2336,10 +2336,32 @@ function setupLayoutPanel() {
           Light Mode
         </label>
       </div> -->
+      <br>
+      <label>${t('settings.language')}</label>
+      <select class="browser-default" id="lang-select" onchange="changeLanguage(this.value)">
+      </select>
     </div>`;
-  
+
   // Add the content
   document.getElementById('filelist').innerHTML = newHtml;
+
+  // Populate language selector
+  fetch('locales/languages.json').then(r => r.json()).then(langs => {
+    const sel = document.getElementById('lang-select');
+    const cur = I18N.getLanguage();
+    Object.entries(langs).forEach(([code, name]) => {
+      const opt = document.createElement('option');
+      opt.value = code;
+      opt.textContent = name;
+      if (code === cur) { opt.selected = true; }
+      sel.appendChild(opt);
+    });
+  }).catch(() => {});
+}
+
+async function changeLanguage(lang) {
+  await I18N.loadLanguage(lang);
+  setupLayoutPanel();
 }
 
 function tglMoveMetadata() {

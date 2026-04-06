@@ -19,13 +19,13 @@ document.getElementById("login").addEventListener("submit", async e => {
     window.location.assign(window.location.href.replace('/login', ''));
 
     iziToast.success({
-      title: 'Login Success!',
+      title: t('login.success'),
       position: 'topCenter',
       timeout: 3500
     });
   } catch (err) {
     iziToast.error({
-      title: 'Login Failed',
+      title: t('login.failed'),
       position: 'topCenter',
       timeout: 3500
     });
