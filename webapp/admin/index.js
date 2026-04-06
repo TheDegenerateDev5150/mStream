@@ -333,7 +333,7 @@ const foldersView = Vue.component('folders-view', {
       submitForm: async function () {
         if (ADMINDATA.folders[this.dirName]) {
           iziToast.warn({
-            title: 'Server Path already in use',
+            title: t('admin.folders.pathInUse'),
             position: 'topCenter',
             timeout: 3500
           });
@@ -368,7 +368,7 @@ const foldersView = Vue.component('folders-view', {
           });
         }catch(err) {
           iziToast.error({
-            title: 'Failed to add directory',
+            title: t('admin.folders.addFailed'),
             position: 'topCenter',
             timeout: 3500
           });
@@ -387,11 +387,11 @@ const foldersView = Vue.component('folders-view', {
           zindex: 99999,
           layout: 2,
           maxWidth: 600,
-          title: `Remove access to <b>${folder}</b>?`,
-          message: `No files will be deleted. Your server will need to reboot.`,
+          title: t('admin.folders.removeTitle', { folder: folder }),
+          message: t('admin.folders.removeMessage'),
           position: 'center',
           buttons: [
-            ['<button><b>Remove</b></button>', (instance, toast) => {
+            [`<button><b>${t('admin.folders.removeButton')}</b></button>`, (instance, toast) => {
               instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
               API.axios({
                 method: 'DELETE',
@@ -399,7 +399,7 @@ const foldersView = Vue.component('folders-view', {
                 data: { vpath: vpath }
               }).then(() => {
                 iziToast.warning({
-                  title: 'Server Rebooting. Please wait 30s for the server to come back online',
+                  title: t('admin.folders.rebooting'),
                   position: 'topCenter',
                   timeout: 3500
                 });
@@ -411,13 +411,13 @@ const foldersView = Vue.component('folders-view', {
                 });
               }).catch(() => {
                 iziToast.error({
-                  title: 'Failed to remove folder',
+                  title: t('admin.folders.removeFailed'),
                   position: 'topCenter',
                   timeout: 3500
                 });
               });
             }, true],
-            ['<button>Go Back</button>', (instance, toast) => {
+            [`<button>${t('admin.folders.goBack')}</button>`, (instance, toast) => {
               instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
             }],
           ]
@@ -587,10 +587,10 @@ const usersView = Vue.component('users-view', {
           displayMode: 'once',
           id: 'question',
           zindex: 99999,
-          title: `Delete <b>${username}</b>?`,
+          title: t('admin.users.deleteTitle', { username: username }),
           position: 'center',
           buttons: [
-            ['<button><b>Delete</b></button>', async (instance, toast) => {
+            [`<button><b>${t('admin.users.deleteButton')}</b></button>`, async (instance, toast) => {
               instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
               try {
                 await API.axios({
@@ -601,13 +601,13 @@ const usersView = Vue.component('users-view', {
                 Vue.delete(ADMINDATA.users, username);
               } catch (err) {
                 iziToast.error({
-                  title: 'Failed to delete user',
+                  title: t('admin.users.deleteFailed'),
                   position: 'topCenter',
                   timeout: 3500
                 });
               }
             }, true],
-            ['<button>Go Back</button>', (instance, toast) => {
+            [`<button>${t('admin.folders.goBack')}</button>`, (instance, toast) => {
               instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
             }],
           ]
@@ -647,9 +647,9 @@ const usersView = Vue.component('users-view', {
               displayMode: 'once',
               id: 'question',
               zindex: 99999,
-              title: 'You will be taken the login page',
+              title: t('admin.users.loginRedirect'),
               position: 'center',
-              buttons: [['<button>Go!</button>', (instance, toast) => {
+              buttons: [[`<button>${t('admin.users.go')}</button>`, (instance, toast) => {
                 API.logout();
                 instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
               }, true]],
@@ -661,7 +661,7 @@ const usersView = Vue.component('users-view', {
           });
         }catch(err) {
           iziToast.error({
-            title: 'Failed to add user',
+            title: t('admin.users.addFailed'),
             position: 'topCenter',
             timeout: 3500
           });
@@ -828,11 +828,11 @@ const advancedView = Vue.component('advanced-view', {
         zindex: 99999,
         layout: 2,
         maxWidth: 600,
-        title: `<b>Switch to ${label} frontend?</b>`,
-        message: 'The server will restart to apply the change.',
+        title: `<b>${t('admin.settings.switchFrontend', { label: label })}</b>`,
+        message: t('admin.settings.switchRestart'),
         position: 'center',
         buttons: [
-          [`<button><b>Switch to ${label}</b></button>`, (instance, toast) => {
+          [`<button><b>${t('admin.settings.switchingTo', { label: label })}</b></button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
             API.axios({
               method: 'POST',
@@ -840,20 +840,20 @@ const advancedView = Vue.component('advanced-view', {
               data: { ui: newUI }
             }).then(() => {
               iziToast.success({
-                title: `Switching to ${label}...`,
-                message: 'Server is restarting',
+                title: t('admin.settings.switchingTo', { label: label }),
+                message: t('admin.settings.serverRestarting'),
                 position: 'topCenter',
                 timeout: 3500
               });
             }).catch(() => {
               iziToast.error({
-                title: 'Error',
+                title: t('admin.settings.failed'),
                 position: 'topCenter',
                 timeout: 3500
               });
             });
           }, true],
-          ['<button>Cancel</button>', (instance, toast) => {
+          [`<button>${t('admin.settings.cancel')}</button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
           }],
         ]
@@ -870,11 +870,11 @@ const advancedView = Vue.component('advanced-view', {
         zindex: 99999,
         layout: 2,
         maxWidth: 600,
-        title: 'Remove SSL Keys?',
-        message: 'Your server will need to reboot',
+        title: t('admin.settings.removeSSLTitle'),
+        message: t('admin.settings.serverReboot'),
         position: 'center',
         buttons: [
-          [`<button><b>Remove SSL</b></button>`, async (instance, toast) => {
+          [`<button><b>${t('admin.folders.removeButton')} SSL</b></button>`, async (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
             try {
               await API.axios({
@@ -887,19 +887,19 @@ const advancedView = Vue.component('advanced-view', {
               }, 4000);
       
               iziToast.success({
-                title: 'Certs Deleted. You will be redirected shortly',
+                title: t('admin.settings.certsDeleted'),
                 position: 'topCenter',
                 timeout: 8500
               });
             } catch (err) {
               iziToast.error({
-                title: 'Failed to Delete Cert',
+                title: t('admin.settings.certDeleteFailed'),
                 position: 'topCenter',
                 timeout: 3500
               });
             }
           }, true],
-          ['<button>Go Back</button>', (instance, toast) => {
+          [`<button>${t('admin.folders.goBack')}</button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
           }],
         ]
@@ -920,11 +920,11 @@ const advancedView = Vue.component('advanced-view', {
         zindex: 99999,
         layout: 2,
         maxWidth: 600,
-        title: '<b>Generate a New Auth Key?</b>',
-        message: 'All active login sessions will be invalidated.  You will need to login after',
+        title: `<b>${t('admin.settings.generateAuthKey')}</b>`,
+        message: t('admin.settings.authKeyWarning'),
         position: 'center',
         buttons: [
-          [`<button><b>Generate Key</b></button>`, (instance, toast) => {
+          [`<button><b>${t('admin.settings.generateButton')}</b></button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
             API.axios({
               method: 'POST',
@@ -934,13 +934,13 @@ const advancedView = Vue.component('advanced-view', {
               API.logout();
             }).catch(() => {
               iziToast.error({
-                title: 'Failed',
+                title: t('admin.settings.failed'),
                 position: 'topCenter',
                 timeout: 3500
               });
             });
           }, true],
-          ['<button>Go Back</button>', (instance, toast) => {
+          [`<button>${t('admin.folders.goBack')}</button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
           }],
         ]
@@ -957,10 +957,10 @@ const advancedView = Vue.component('advanced-view', {
         zindex: 99999,
         layout: 2,
         maxWidth: 600,
-        title: `<b>${this.params.noMkdir === false ? 'Disable' : 'Enable'} Create Folder?</b>`,
+        title: `<b>${this.params.noMkdir === false ? t('admin.settings.disableFolders') : t('admin.settings.enableFolders')}</b>`,
         position: 'center',
         buttons: [
-          [`<button><b>${this.params.noMkdir === false ? 'Disable' : 'Enable'}</b></button>`, (instance, toast) => {
+          [`<button><b>${this.params.noMkdir === false ? t('admin.settings.disableButton') : t('admin.settings.enableButton')}</b></button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
             API.axios({
               method: 'POST',
@@ -970,19 +970,19 @@ const advancedView = Vue.component('advanced-view', {
               Vue.set(ADMINDATA.serverParams, 'noMkdir', !this.params.noMkdir);
 
               iziToast.success({
-                title: 'Updated Successfully',
+                title: t('admin.settings.updated'),
                 position: 'topCenter',
                 timeout: 3500
               });
             }).catch(() => {
               iziToast.error({
-                title: 'Failed',
+                title: t('admin.settings.failed'),
                 position: 'topCenter',
                 timeout: 3500
               });
             });
           }, true],
-          ['<button>Go Back</button>', (instance, toast) => {
+          [`<button>${t('admin.folders.goBack')}</button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
           }],
         ]
@@ -993,11 +993,11 @@ const advancedView = Vue.component('advanced-view', {
       iziToast.question({
         timeout: 20000, close: false, overlayClose: true, overlay: true,
         displayMode: 'once', id: 'question', zindex: 99999, layout: 2, maxWidth: 600,
-        title: `<b>${self.params.noFileModify === false ? 'Disable' : 'Enable'} File Modification?</b>`,
-        message: 'Controls whether album art can be embedded directly into audio files',
+        title: `<b>${self.params.noFileModify === false ? t('admin.settings.disableModify') : t('admin.settings.enableModify')}</b>`,
+        message: t('admin.settings.modifyHint'),
         position: 'center',
         buttons: [
-          [`<button><b>${self.params.noFileModify === false ? 'Disable' : 'Enable'}</b></button>`, (instance, toast) => {
+          [`<button><b>${self.params.noFileModify === false ? t('admin.settings.disableButton') : t('admin.settings.enableButton')}</b></button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
             API.axios({
               method: 'POST',
@@ -1005,12 +1005,12 @@ const advancedView = Vue.component('advanced-view', {
               data: { noFileModify: !self.params.noFileModify }
             }).then(() => {
               Vue.set(ADMINDATA.serverParams, 'noFileModify', !self.params.noFileModify);
-              iziToast.success({ title: 'Updated Successfully', position: 'topCenter', timeout: 3500 });
+              iziToast.success({ title: t('admin.settings.updated'), position: 'topCenter', timeout: 3500 });
             }).catch(() => {
-              iziToast.error({ title: 'Failed', position: 'topCenter', timeout: 3500 });
+              iziToast.error({ title: t('admin.settings.failed'), position: 'topCenter', timeout: 3500 });
             });
           }, true],
-          ['<button>Go Back</button>', (instance, toast) => {
+          [`<button>${t('admin.folders.goBack')}</button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
           }],
         ]
@@ -1027,10 +1027,10 @@ const advancedView = Vue.component('advanced-view', {
         zindex: 99999,
         layout: 2,
         maxWidth: 600,
-        title: `<b>${this.params.noUpload === false ? 'Disable' : 'Enable'} File Uploading?</b>`,
+        title: `<b>${this.params.noUpload === false ? t('admin.settings.disableUploading') : t('admin.settings.enableUploading')}</b>`,
         position: 'center',
         buttons: [
-          [`<button><b>${this.params.noUpload === false ? 'Disable' : 'Enable'}</b></button>`, (instance, toast) => {
+          [`<button><b>${this.params.noUpload === false ? t('admin.settings.disableButton') : t('admin.settings.enableButton')}</b></button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
             API.axios({
               method: 'POST',
@@ -1041,19 +1041,19 @@ const advancedView = Vue.component('advanced-view', {
               Vue.set(ADMINDATA.serverParams, 'noUpload', !this.params.noUpload);
 
               iziToast.success({
-                title: 'Updated Successfully',
+                title: t('admin.settings.updated'),
                 position: 'topCenter',
                 timeout: 3500
               });
             }).catch(() => {
               iziToast.error({
-                title: 'Failed',
+                title: t('admin.settings.failed'),
                 position: 'topCenter',
                 timeout: 3500
               });
             });
           }, true],
-          ['<button>Go Back</button>', (instance, toast) => {
+          [`<button>${t('admin.folders.goBack')}</button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
           }],
         ]
@@ -1070,11 +1070,11 @@ const advancedView = Vue.component('advanced-view', {
         zindex: 99999,
         layout: 2,
         maxWidth: 600,
-        title: `<b>${this.params.autoBootServerAudio ? 'Disable' : 'Enable'} Auto-Boot Server Audio?</b>`,
-        message: 'When enabled, mStream will automatically start the Rust audio player on boot',
+        title: `<b>${this.params.autoBootServerAudio ? t('admin.settings.disableAutoBoot') : t('admin.settings.enableAutoBoot')}</b>`,
+        message: t('admin.settings.autoBootHint'),
         position: 'center',
         buttons: [
-          [`<button><b>${this.params.autoBootServerAudio ? 'Disable' : 'Enable'}</b></button>`, (instance, toast) => {
+          [`<button><b>${this.params.autoBootServerAudio ? t('admin.settings.disableButton') : t('admin.settings.enableButton')}</b></button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
             API.axios({
               method: 'POST',
@@ -1083,19 +1083,19 @@ const advancedView = Vue.component('advanced-view', {
             }).then(() => {
               Vue.set(ADMINDATA.serverParams, 'autoBootServerAudio', !this.params.autoBootServerAudio);
               iziToast.success({
-                title: 'Updated Successfully',
+                title: t('admin.settings.updated'),
                 position: 'topCenter',
                 timeout: 3500
               });
             }).catch(() => {
               iziToast.error({
-                title: 'Failed',
+                title: t('admin.settings.failed'),
                 position: 'topCenter',
                 timeout: 3500
               });
             });
           }, true],
-          ['<button>Go Back</button>', (instance, toast) => {
+          [`<button>${t('admin.folders.goBack')}</button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
           }],
         ]
@@ -1271,7 +1271,7 @@ const dbView = Vue.component('db-view', {
         this.dbStats = res.data
       } catch (err) {
         iziToast.error({
-          title: 'Failed to Pull Data',
+          title: t('admin.db.pullDataFailed'),
           position: 'topCenter',
           timeout: 3500
         });
@@ -1285,7 +1285,7 @@ const dbView = Vue.component('db-view', {
         await ADMINDATA.getSharedPlaylists();
       } catch (err) {
         iziToast.error({
-          title: 'Failed to Pull Data',
+          title: t('admin.db.pullDataFailed'),
           position: 'topCenter',
           timeout: 3500
         });
@@ -1304,22 +1304,22 @@ const dbView = Vue.component('db-view', {
         zindex: 99999,
         layout: 2,
         maxWidth: 600,
-        title: `Delete playlist <b>${playlistObj.playlistId}</b>?`,
+        title: t('admin.db.deletePlaylistTitle', { id: playlistObj.playlistId }),
         position: 'center',
         buttons: [
-          [`<button><b>Delete</b></button>`, async (instance, toast) => {
+          [`<button><b>${t('admin.users.deleteButton')}</b></button>`, async (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
             try {
               await ADMINDATA.deleteSharedPlaylist(playlistObj);
             } catch (err) {
               iziToast.error({
-                title: 'Failed to Delete Playlist',
+                title: t('admin.db.deletePlaylistFailed'),
                 position: 'topCenter',
                 timeout: 3500
               });
             }
           }, true],
-          ['<button>Go Back</button>', (instance, toast) => {
+          [`<button>${t('admin.folders.goBack')}</button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
           }],
         ]
@@ -1336,10 +1336,10 @@ const dbView = Vue.component('db-view', {
         zindex: 99999,
         layout: 2,
         maxWidth: 600,
-        title: `Delete all playlists without expiration dates?`,
+        title: t('admin.db.deleteAllTitle'),
         position: 'center',
         buttons: [
-          [`<button><b>Delete</b></button>`, async (instance, toast) => {
+          [`<button><b>${t('admin.users.deleteButton')}</b></button>`, async (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
             try {
               this.isPullingShared = true;
@@ -1347,7 +1347,7 @@ const dbView = Vue.component('db-view', {
               await ADMINDATA.getSharedPlaylists();
             } catch (err) {
               iziToast.error({
-                title: 'Failed to Delete Shared Playlists',
+                title: t('admin.db.deleteAllFailed'),
                 position: 'topCenter',
                 timeout: 3500
               });
@@ -1355,7 +1355,7 @@ const dbView = Vue.component('db-view', {
               this.isPullingShared = false;
             }
           }, true],
-          ['<button>Go Back</button>', (instance, toast) => {
+          [`<button>${t('admin.folders.goBack')}</button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
           }],
         ]
@@ -1368,7 +1368,7 @@ const dbView = Vue.component('db-view', {
         await ADMINDATA.getSharedPlaylists();
       } catch (err) {
         iziToast.error({
-          title: 'Failed to Pull Data',
+          title: t('admin.db.pullDataFailed'),
           position: 'topCenter',
           timeout: 3500
         });
@@ -1384,13 +1384,13 @@ const dbView = Vue.component('db-view', {
         });
 
         iziToast.success({
-          title: 'Scan Started',
+          title: t('admin.db.scanStarted'),
           position: 'topCenter',
           timeout: 3500
         });
       } catch (err) {
         iziToast.error({
-          title: 'Failed to Start Scan',
+          title: t('admin.db.scanStartFailed'),
           position: 'topCenter',
           timeout: 3500
         });
@@ -1407,11 +1407,11 @@ const dbView = Vue.component('db-view', {
         zindex: 99999,
         layout: 2,
         maxWidth: 600,
-        title: '<b>Force Rescan All Libraries?</b>',
-        message: 'This will re-parse every file in your library, even if unchanged. Takes longer than a normal scan but ensures all metadata fields are up to date.',
+        title: `<b>${t('admin.db.forceRescanTitle')}</b>`,
+        message: t('admin.db.forceRescanDesc'),
         position: 'center',
         buttons: [
-          ['<button><b>Force Rescan</b></button>', async (instance, toast) => {
+          [`<button><b>${t('admin.db.forceRescan')}</b></button>`, async (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
             try {
               await API.axios({
@@ -1419,19 +1419,19 @@ const dbView = Vue.component('db-view', {
                 url: `${API.url()}/api/v1/admin/db/scan/force-rescan`
               });
               iziToast.success({
-                title: 'Force Rescan Started',
+                title: t('admin.db.forceRescanStarted'),
                 position: 'topCenter',
                 timeout: 3500
               });
             } catch (err) {
               iziToast.error({
-                title: 'Failed to Start Rescan',
+                title: t('admin.db.rescanStartFailed'),
                 position: 'topCenter',
                 timeout: 3500
               });
             }
           }, true],
-          ['<button>Cancel</button>', (instance, toast) => {
+          [`<button>${t('admin.settings.cancel')}</button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
           }],
         ]
@@ -1448,11 +1448,11 @@ const dbView = Vue.component('db-view', {
         zindex: 99999,
         layout: 2,
         maxWidth: 600,
-        title: `<b>Compress All Images?</b>`,
-        message: 'This process will run in the background',
+        title: `<b>${t('admin.db.compressAllTitle')}</b>`,
+        message: t('admin.db.compressBackground'),
         position: 'center',
         buttons: [
-          [`<button><b>Start</b></button>`, async (instance, toast) => {
+          [`<button><b>${t('admin.db.startButton')}</b></button>`, async (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
             
             try {
@@ -1463,13 +1463,13 @@ const dbView = Vue.component('db-view', {
 
               if (res.data.started === true) {
                 iziToast.success({
-                  title: 'Process Started',
+                  title: t('admin.db.processStarted'),
                   position: 'topCenter',
                   timeout: 3500
                 });
               } else {
                 iziToast.warning({
-                  title: 'Image Compression In Progress',
+                  title: t('admin.db.compressionInProgress'),
                   position: 'topCenter',
                   timeout: 3500
                 });
@@ -1477,13 +1477,13 @@ const dbView = Vue.component('db-view', {
 
             } catch (err) {
               iziToast.error({
-                title: 'Failed',
+                title: t('admin.settings.failed'),
                 position: 'topCenter',
                 timeout: 3500
               });
             }
           }, true],
-          ['<button>Go Back</button>', (instance, toast) => {
+          [`<button>${t('admin.folders.goBack')}</button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
           }],
         ]
@@ -1500,10 +1500,10 @@ const dbView = Vue.component('db-view', {
         zindex: 99999,
         layout: 2,
         maxWidth: 600,
-        title: `<b>${this.dbParams.compressImage === true ? 'Disable' : 'Enable'} Compress Images?</b>`,
+        title: `<b>${this.dbParams.compressImage === true ? t('admin.settings.disableButton') : t('admin.settings.enableButton')} ${t('admin.db.toggleCompressImages')}?</b>`,
         position: 'center',
         buttons: [
-          [`<button><b>${this.dbParams.compressImage === true ? 'Disable' : 'Enable'}</b></button>`, (instance, toast) => {
+          [`<button><b>${this.dbParams.compressImage === true ? t('admin.settings.disableButton') : t('admin.settings.enableButton')}</b></button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
             API.axios({
               method: 'POST',
@@ -1514,19 +1514,19 @@ const dbView = Vue.component('db-view', {
               Vue.set(ADMINDATA.dbParams, 'compressImage', !this.dbParams.compressImage);
 
               iziToast.success({
-                title: 'Updated Successfully',
+                title: t('admin.settings.updated'),
                 position: 'topCenter',
                 timeout: 3500
               });
             }).catch(() => {
               iziToast.error({
-                title: 'Failed',
+                title: t('admin.settings.failed'),
                 position: 'topCenter',
                 timeout: 3500
               });
             });
           }, true],
-          ['<button>Go Back</button>', (instance, toast) => {
+          [`<button>${t('admin.folders.goBack')}</button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
           }],
         ]
@@ -1543,10 +1543,10 @@ const dbView = Vue.component('db-view', {
         zindex: 99999,
         layout: 2,
         maxWidth: 600,
-        title: `<b>${this.dbParams.skipImg === true ? 'Disable' : 'Enable'} Image Skip?</b>`,
+        title: `<b>${this.dbParams.skipImg === true ? t('admin.settings.disableButton') : t('admin.settings.enableButton')} ${t('admin.db.toggleSkipImg')}?</b>`,
         position: 'center',
         buttons: [
-          [`<button><b>${this.dbParams.skipImg === true ? 'Disable' : 'Enable'}</b></button>`, (instance, toast) => {
+          [`<button><b>${this.dbParams.skipImg === true ? t('admin.settings.disableButton') : t('admin.settings.enableButton')}</b></button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
             API.axios({
               method: 'POST',
@@ -1557,19 +1557,19 @@ const dbView = Vue.component('db-view', {
               Vue.set(ADMINDATA.dbParams, 'skipImg', !this.dbParams.skipImg);
 
               iziToast.success({
-                title: 'Updated Successfully',
+                title: t('admin.settings.updated'),
                 position: 'topCenter',
                 timeout: 3500
               });
             }).catch(() => {
               iziToast.error({
-                title: 'Failed',
+                title: t('admin.settings.failed'),
                 position: 'topCenter',
                 timeout: 3500
               });
             });
           }, true],
-          ['<button>Go Back</button>', (instance, toast) => {
+          [`<button>${t('admin.folders.goBack')}</button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
           }],
         ]
@@ -1581,8 +1581,8 @@ const dbView = Vue.component('db-view', {
         data: { autoAlbumArt: !self.dbParams.autoAlbumArt }
       }).then(() => {
         Vue.set(ADMINDATA.dbParams, 'autoAlbumArt', !self.dbParams.autoAlbumArt);
-        iziToast.success({ title: 'Updated', position: 'topCenter', timeout: 3500 });
-      }).catch(() => { iziToast.error({ title: 'Failed', position: 'topCenter', timeout: 3500 }); });
+        iziToast.success({ title: t('admin.settings.updated'), position: 'topCenter', timeout: 3500 });
+      }).catch(() => { iziToast.error({ title: t('admin.settings.failed'), position: 'topCenter', timeout: 3500 }); });
     },
     toggleAlbumArtWriteToFolder: function() {
       const self = this;
@@ -1590,8 +1590,8 @@ const dbView = Vue.component('db-view', {
         data: { albumArtWriteToFolder: !self.dbParams.albumArtWriteToFolder }
       }).then(() => {
         Vue.set(ADMINDATA.dbParams, 'albumArtWriteToFolder', !self.dbParams.albumArtWriteToFolder);
-        iziToast.success({ title: 'Updated', position: 'topCenter', timeout: 3500 });
-      }).catch(() => { iziToast.error({ title: 'Failed', position: 'topCenter', timeout: 3500 }); });
+        iziToast.success({ title: t('admin.settings.updated'), position: 'topCenter', timeout: 3500 });
+      }).catch(() => { iziToast.error({ title: t('admin.settings.failed'), position: 'topCenter', timeout: 3500 }); });
     },
     toggleAlbumArtWriteToFile: function() {
       const self = this;
@@ -1599,8 +1599,8 @@ const dbView = Vue.component('db-view', {
         data: { albumArtWriteToFile: !self.dbParams.albumArtWriteToFile }
       }).then(() => {
         Vue.set(ADMINDATA.dbParams, 'albumArtWriteToFile', !self.dbParams.albumArtWriteToFile);
-        iziToast.success({ title: 'Updated', position: 'topCenter', timeout: 3500 });
-      }).catch(() => { iziToast.error({ title: 'Failed', position: 'topCenter', timeout: 3500 }); });
+        iziToast.success({ title: t('admin.settings.updated'), position: 'topCenter', timeout: 3500 });
+      }).catch(() => { iziToast.error({ title: t('admin.settings.failed'), position: 'topCenter', timeout: 3500 }); });
     },
     openModal: function(modalView) {
       modVM.currentViewModal = modalView;
@@ -1886,11 +1886,11 @@ const transcodeView = Vue.component('transcode-view', {
         zindex: 99999,
         layout: 2,
         maxWidth: 600,
-        title: `<b>${this.params.enabled === true ? 'Disable' : 'Enable'} Transcoding?</b>`,
-        message: 'Enabling this will download FFmpeg',
+        title: `<b>${this.params.enabled === true ? t('admin.transcode.disableTitle') : t('admin.transcode.enableTitle')}</b>`,
+        message: t('admin.transcode.downloadFFmpeg'),
         position: 'center',
         buttons: [
-          [`<button><b>${this.params.enabled === true ? 'Disable' : 'Enable'}</b></button>`, async (instance, toast) => {
+          [`<button><b>${this.params.enabled === true ? t('admin.settings.disableButton') : t('admin.settings.enableButton')}</b></button>`, async (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
             try {
               await API.axios({
@@ -1904,19 +1904,19 @@ const transcodeView = Vue.component('transcode-view', {
               if (this.params.enabled === true) { this.downloadFFMpeg(); }
 
               iziToast.success({
-                title: 'Updated Successfully',
+                title: t('admin.settings.updated'),
                 position: 'topCenter',
                 timeout: 3500
               });
             } catch (err) {
               iziToast.error({
-                title: 'Failed',
+                title: t('admin.settings.failed'),
                 position: 'topCenter',
                 timeout: 3500
               });
             }
           }, true],
-          ['<button>Go Back</button>', (instance, toast) => {
+          [`<button>${t('admin.folders.goBack')}</button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
           }],
         ]
@@ -1943,13 +1943,13 @@ const transcodeView = Vue.component('transcode-view', {
         });
         Vue.set(ADMINDATA.transcodeParams, 'downloaded', true);
         iziToast.success({
-          title: 'FFmpeg Downloaded',
+          title: t('admin.transcode.ffmpegDownloaded'),
           position: 'topCenter',
           timeout: 3500
         });
       } catch (err) {
         iziToast.error({
-          title: 'Failed To Download FFmpeg',
+          title: t('admin.transcode.ffmpegFailed'),
           position: 'topCenter',
           timeout: 3500
         });
@@ -1959,7 +1959,7 @@ const transcodeView = Vue.component('transcode-view', {
     },
     changeFolder: function() {
       iziToast.warning({
-        title: 'Coming Soon',
+        title: t('admin.transcode.comingSoon'),
         position: 'topCenter',
         timeout: 3500
       });
@@ -2100,7 +2100,7 @@ const federationMainPanel = Vue.component('federation-main-panel', {
         });
       } catch (err) {
         iziToast.error({
-          title: 'Failed to accept invite',
+          title: t('admin.federation.acceptFailed'),
           position: 'topCenter',
           timeout: 3500
         });
@@ -2160,13 +2160,13 @@ const federationMainPanel = Vue.component('federation-main-panel', {
         zindex: 99999,
         layout: 2,
         maxWidth: 600,
-        title: `${this.enabled.val === true ? 'Disable' : 'Enable'} Federation?`,
+        title: `${this.enabled.val === true ? t('admin.federation.disableTitle') : t('admin.federation.enableTitle')}`,
         position: 'center',
         buttons: [
-          [`<button><b>${this.enabled.val === true ? 'Disable' : 'Enable'}</b></button>`, async (instance, toast) => {
+          [`<button><b>${this.enabled.val === true ? t('admin.settings.disableButton') : t('admin.settings.enableButton')}</b></button>`, async (instance, toast) => {
             try {
               this.enablePending = true;
-      
+
               await API.axios({
                 method: 'POST',
                 url: `${API.url()}/api/v1/admin/federation/enable`,
@@ -2174,20 +2174,20 @@ const federationMainPanel = Vue.component('federation-main-panel', {
                   enable: !this.enabled.val,
                 }
               });
-      
+
               // update fronted data
               Vue.set(ADMINDATA.federationEnabled, 'val', !this.enabled.val);
-        
+
               instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
 
               iziToast.success({
-                title: `Syncthing ${this.enabled.val === true ? 'Enabled' : 'Disabled'}`,
+                title: `Syncthing ${this.enabled.val === true ? t('admin.settings.enabled') : t('admin.settings.disabled')}`,
                 position: 'topCenter',
                 timeout: 3500
               });
             } catch(err) {
               iziToast.error({
-                title: 'Toggle Failed',
+                title: t('admin.federation.toggleFailed'),
                 position: 'topCenter',
                 timeout: 3500
               });
@@ -2195,7 +2195,7 @@ const federationMainPanel = Vue.component('federation-main-panel', {
               this.enablePending = false;
             }
           }, true],
-          ['<button>Go Back</button>', (instance, toast) => {
+          [`<button>${t('admin.folders.goBack')}</button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
           }],
         ]
@@ -2244,13 +2244,13 @@ const federationView = Vue.component('federation-view', {
         Vue.set(ADMINDATA.federationEnabled, 'val', !this.enabled.val);
   
         iziToast.success({
-          title: `Syncthing ${this.enabled.val === true ? 'Enabled' : 'Disabled'}`,
+          title: `Syncthing ${this.enabled.val === true ? t('admin.settings.enabled') : t('admin.settings.disabled')}`,
           position: 'topCenter',
           timeout: 3500
         });
       } catch(err) {
         iziToast.error({
-          title: 'Toggle Failed',
+          title: t('admin.federation.toggleFailed'),
           position: 'topCenter',
           timeout: 3500
         });
@@ -2307,7 +2307,7 @@ const logsView = Vue.component('logs-view', {
   methods: {
     changeLogsDir: function() {
       iziToast.warning({
-        title: 'Coming Soon',
+        title: t('admin.transcode.comingSoon'),
         position: 'topCenter',
         timeout: 3500
       });
@@ -2329,7 +2329,7 @@ const logsView = Vue.component('logs-view', {
       } catch (err) {
         console.log(err)
         iziToast.error({
-          title: 'Download Failed',
+          title: t('admin.logs.downloadFailed'),
           position: 'topCenter',
           timeout: 3500
         });
@@ -2346,10 +2346,10 @@ const logsView = Vue.component('logs-view', {
         zindex: 99999,
         layout: 2,
         maxWidth: 600,
-        title: `<b>${this.params.writeLogs === true ? 'Disable' : 'Enable'} Writing Logs To Disk?</b>`,
+        title: `<b>${this.params.writeLogs === true ? t('admin.logs.disableTitle') : t('admin.logs.enableTitle')}</b>`,
         position: 'center',
         buttons: [
-          [`<button><b>${this.params.writeLogs === true ? 'Disable' : 'Enable'}</b></button>`, (instance, toast) => {
+          [`<button><b>${this.params.writeLogs === true ? t('admin.settings.disableButton') : t('admin.settings.enableButton')}</b></button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
             API.axios({
               method: 'POST',
@@ -2360,19 +2360,19 @@ const logsView = Vue.component('logs-view', {
               Vue.set(ADMINDATA.serverParams, 'writeLogs', !this.params.writeLogs);
 
               iziToast.success({
-                title: 'Updated Successfully',
+                title: t('admin.settings.updated'),
                 position: 'topCenter',
                 timeout: 3500
               });
             }).catch(() => {
               iziToast.error({
-                title: 'Failed',
+                title: t('admin.settings.failed'),
                 position: 'topCenter',
                 timeout: 3500
               });
             });
           }, true],
-          ['<button>Go Back</button>', (instance, toast) => {
+          [`<button>${t('admin.folders.goBack')}</button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
           }],
         ]
@@ -2412,10 +2412,10 @@ const lockView = Vue.component('lock-view', {
           zindex: 99999,
           layout: 2,
           maxWidth: 600,
-          title: '<b>Disable Admin Panel?</b>',
+          title: `<b>${t('admin.lock.disableTitle')}</b>`,
           position: 'center',
           buttons: [
-            [`<button><b>Disable</b></button>`, (instance, toast) => {
+            [`<button><b>${t('admin.lock.disable')}</b></button>`, (instance, toast) => {
               instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
               API.axios({
                 method: 'POST',
@@ -2425,13 +2425,13 @@ const lockView = Vue.component('lock-view', {
                 window.location.reload();
               }).catch(() => {
                 iziToast.error({
-                  title: 'Failed to disable admin panel',
+                  title: t('admin.lock.disableFailed'),
                   position: 'topCenter',
                   timeout: 3500
                 });
               });
             }, true],
-            ['<button>Go Back</button>', (instance, toast) => {
+            [`<button>${t('admin.folders.goBack')}</button>`, (instance, toast) => {
               instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
             }],
           ]
@@ -2547,7 +2547,7 @@ const fileExplorerModal = Vue.component('file-explorer-modal', {
         });
       } catch(err) {
         iziToast.error({
-          title: 'Failed to get directory contents',
+          title: t('admin.fileExplorer.contentsFailed'),
           position: 'topCenter',
           timeout: 3500
         });
@@ -2573,7 +2573,7 @@ const fileExplorerModal = Vue.component('file-explorer-modal', {
         M.Modal.getInstance(document.getElementById('admin-modal')).close();
       }catch(err) {
         iziToast.error({
-          title: 'Cannot Select Directory',
+          title: t('admin.fileExplorer.cannotSelect'),
           position: 'topCenter',
           timeout: 3500
         });
@@ -2626,13 +2626,13 @@ const userPasswordView = Vue.component('user-password-view', {
         M.Modal.getInstance(document.getElementById('admin-modal')).close();
 
         iziToast.success({
-          title: 'Password Updated',
+          title: t('admin.modal.passwordUpdated'),
           position: 'topCenter',
           timeout: 3500
         });
       }catch(err) {
         iziToast.error({
-          title: 'Password Reset Failed',
+          title: t('admin.modal.passwordFailed'),
           position: 'topCenter',
           timeout: 3500
         });
@@ -2696,13 +2696,13 @@ const usersVpathsView = Vue.component('user-vpaths-view', {
           M.Modal.getInstance(document.getElementById('admin-modal')).close();
   
           iziToast.success({
-            title: 'User Permissions Updated',
+            title: t('admin.modal.permissionsUpdated'),
             position: 'topCenter',
             timeout: 3500
           });
         } catch(err) {
           iziToast.error({
-            title: 'Failed to Update Folders',
+            title: t('admin.modal.foldersFailed'),
             position: 'topCenter',
             timeout: 3500
           });
@@ -2778,13 +2778,13 @@ const userAccessView = Vue.component('user-access-view', {
           M.Modal.getInstance(document.getElementById('admin-modal')).close();
   
           iziToast.success({
-            title: 'User Permissions Updated',
+            title: t('admin.modal.permissionsUpdated'),
             position: 'topCenter',
             timeout: 3500
           });
         } catch(err) {
           iziToast.error({
-            title: 'Failed to Update User',
+            title: t('admin.modal.accessFailed'),
             position: 'topCenter',
             timeout: 3500
           });
@@ -2845,13 +2845,13 @@ const editRequestSizeModal = Vue.component('edit-request-size-modal', {
         M.Modal.getInstance(document.getElementById('admin-modal')).close();
 
         iziToast.success({
-          title: 'Success: Allow the server 30 seconds to reboot',
+          title: t('admin.modal.rebootSuccess'),
           position: 'topCenter',
           timeout: 3500
         });
       } catch(err) {
         iziToast.error({
-          title: 'Failed to Update',
+          title: t('admin.modal.updateFailed'),
           position: 'topCenter',
           timeout: 3500
         });
@@ -2915,13 +2915,13 @@ const editPortModal = Vue.component('edit-port-modal', {
         }, 4000);
 
         iziToast.success({
-          title: 'Port Updated.  You will be redirected shortly',
+          title: t('admin.modal.portUpdated'),
           position: 'topCenter',
           timeout: 3500
         });
       } catch(err) {
         iziToast.error({
-          title: 'Failed to Update Port',
+          title: t('admin.modal.portFailed'),
           position: 'topCenter',
           timeout: 3500
         });
@@ -2981,13 +2981,13 @@ const editAddressModal = Vue.component('edit-address-modal', {
         M.Modal.getInstance(document.getElementById('admin-modal')).close();
 
         iziToast.success({
-          title: 'Address Updated.  Server is rebooting',
+          title: t('admin.modal.addressUpdated'),
           position: 'topCenter',
           timeout: 3500
         });
       } catch(err) {
         iziToast.error({
-          title: 'Update Failed',
+          title: t('admin.modal.addressFailed'),
           position: 'topCenter',
           timeout: 3500
         });
@@ -3046,13 +3046,13 @@ const editMaxScanModal = Vue.component('edit-max-scans-modal', {
         M.Modal.getInstance(document.getElementById('admin-modal')).close();
 
         iziToast.success({
-          title: 'Updated Successfully',
+          title: t('admin.settings.updated'),
           position: 'topCenter',
           timeout: 3500
         });
       } catch(err) {
         iziToast.error({
-          title: 'Update Failed',
+          title: t('admin.modal.updateFailed'),
           position: 'topCenter',
           timeout: 3500
         });
@@ -3108,13 +3108,13 @@ const editBootScanView = Vue.component('edit-boot-scan-delay-modal', {
         M.Modal.getInstance(document.getElementById('admin-modal')).close();
 
         iziToast.success({
-          title: 'Updated Successfully',
+          title: t('admin.settings.updated'),
           position: 'topCenter',
           timeout: 3500
         });
       } catch(err) {
         iziToast.error({
-          title: 'Update Failed',
+          title: t('admin.modal.updateFailed'),
           position: 'topCenter',
           timeout: 3500
         });
@@ -3171,13 +3171,13 @@ const editScanIntervalView = Vue.component('edit-scan-interval-modal', {
         M.Modal.getInstance(document.getElementById('admin-modal')).close();
 
         iziToast.success({
-          title: 'Updated Successfully',
+          title: t('admin.settings.updated'),
           position: 'topCenter',
           timeout: 3500
         });
       } catch(err) {
         iziToast.error({
-          title: 'Update Failed',
+          title: t('admin.modal.updateFailed'),
           position: 'topCenter',
           timeout: 3500
         });
@@ -3241,13 +3241,13 @@ const editSslModal =  Vue.component('edit-ssl-modal', {
         }, 4000);
 
         iziToast.success({
-          title: 'Updated Successfully. You will be redirected shortly',
+          title: t('admin.settings.updated'),
           position: 'topCenter',
           timeout: 3500
         });
       } catch(err) {
         iziToast.error({
-          title: 'Update Failed',
+          title: t('admin.modal.updateFailed'),
           position: 'topCenter',
           timeout: 3500
         });
@@ -3308,13 +3308,13 @@ const editTranscodeCodecModal = Vue.component('edit-transcode-codec-modal', {
         M.Modal.getInstance(document.getElementById('admin-modal')).close();
 
         iziToast.success({
-          title: 'Updated Successfully',
+          title: t('admin.settings.updated'),
           position: 'topCenter',
           timeout: 3500
         });
       } catch(err) {
         iziToast.error({
-          title: 'Update Failed',
+          title: t('admin.modal.updateFailed'),
           position: 'topCenter',
           timeout: 3500
         });
@@ -3376,13 +3376,13 @@ const editTranscodeDefaultBitrate = Vue.component('edit-transcode-bitrate-modal'
         M.Modal.getInstance(document.getElementById('admin-modal')).close();
 
         iziToast.success({
-          title: 'Updated Successfully',
+          title: t('admin.settings.updated'),
           position: 'topCenter',
           timeout: 3500
         });
       } catch(err) {
         iziToast.error({
-          title: 'Update Failed',
+          title: t('admin.modal.updateFailed'),
           position: 'topCenter',
           timeout: 3500
         });
@@ -3467,7 +3467,7 @@ const federationGenerateInvite = Vue.component('federation-generate-invite-modal
 
         if(selectedDirs.length === 0) {
           iziToast.warning({
-            title: 'Nothing to Federate',
+            title: t('admin.modal.nothingToFederate'),
             position: 'topCenter',
             timeout: 3500
           });
@@ -3489,7 +3489,7 @@ const federationGenerateInvite = Vue.component('federation-generate-invite-modal
       } catch (err) {
         console.log(err)
         iziToast.error({
-          title: 'Failed to make invite',
+          title: t('admin.modal.inviteFailed'),
           position: 'topCenter',
           timeout: 3500
         });
@@ -3549,13 +3549,13 @@ const editRustPlayerPortModal = Vue.component('edit-rust-player-port-modal', {
 
         M.Modal.getInstance(document.getElementById('admin-modal')).close();
         iziToast.success({
-          title: 'Rust Player Port Updated',
+          title: t('admin.settings.updated'),
           position: 'topCenter',
           timeout: 3500
         });
       } catch(err) {
         iziToast.error({
-          title: 'Failed to Update Port',
+          title: t('admin.modal.portFailed'),
           position: 'topCenter',
           timeout: 3500
         });
@@ -3606,9 +3606,9 @@ const editAlbumArtServicesModal = Vue.component('edit-album-art-services-modal',
         });
         Vue.set(ADMINDATA.dbParams, 'albumArtServices', this.services.slice());
         M.Modal.getInstance(document.getElementById('admin-modal')).close();
-        iziToast.success({ title: 'Service order updated', position: 'topCenter', timeout: 3500 });
+        iziToast.success({ title: t('admin.settings.updated'), position: 'topCenter', timeout: 3500 });
       } catch(err) {
-        iziToast.error({ title: 'Failed', position: 'topCenter', timeout: 3500 });
+        iziToast.error({ title: t('admin.settings.failed'), position: 'topCenter', timeout: 3500 });
       } finally {
         this.submitPending = false;
       }
