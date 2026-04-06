@@ -9,14 +9,19 @@ import { joiValidate } from '../util/validation.js';
 import WebError from '../util/web-error.js';
 
 function lookupShared(playlistId) {
-  const playlistItem = db.getShareCollection().findOne({ 'playlistId': playlistId });
-  if (!playlistItem) { throw new WebError('Playlist Not Found'); }
+  const d = db.getDB();
+  const row = d.prepare(
+    'SELECT * FROM shared_playlists WHERE share_id = ?'
+  ).get(playlistId);
 
-  // make sure the token is still good
-  jwt.verify(playlistItem.token, config.program.secret);
+  if (!row) { throw new WebError('Playlist Not Found'); }
+
+  // Verify the token is still valid
+  jwt.verify(row.token, config.program.secret);
+
   return {
-    token: playlistItem.token,
-    playlist: playlistItem.playlist
+    token: row.token,
+    playlist: JSON.parse(row.playlist_json)
   };
 }
 
@@ -26,12 +31,10 @@ export function lookupPlaylist(playlistId) {
 
 export function setupBeforeSecurity(mstream) {
   mstream.get('/shared/:playlistId', async (req, res) => {
-    // don't end this with a slash. otherwise relative URLs don't work
     if (req.path.endsWith('/')) {
       const matchEnd = req.path.match(/(\/)+$/g);
       const queryString = req.url.match(/(\?.*)/g) === null ? '' : req.url.match(/(\?.*)/g);
-      // redirect to a more sane URL
-      return res.redirect(301, req.path.slice(0, (matchEnd[0].length)*-1) + queryString[0]);
+      return res.redirect(301, req.path.slice(0, (matchEnd[0].length) * -1) + queryString[0]);
     }
 
     if (!req.params.playlistId) { throw new WebError('Validation Error', 403); }
@@ -50,6 +53,8 @@ export function setupBeforeSecurity(mstream) {
 }
 
 export function setupAfterSecurity(mstream) {
+  const d = () => db.getDB();
+
   mstream.post('/api/v1/share', (req, res) => {
     const schema = Joi.object({
       playlist: Joi.array().items(Joi.string()).required(),
@@ -57,29 +62,31 @@ export function setupAfterSecurity(mstream) {
     });
     joiValidate(schema, req.body);
 
-    // Setup Token Data
-    const playlistId = nanoid(10);
+    const shareId = nanoid(10);
 
     const tokenData = {
-      playlistId: playlistId,
+      playlistId: shareId,
       shareToken: true,
       username: req.user.username
     };
 
     const jwtOptions = {};
     if (req.body.time) { jwtOptions.expiresIn = `${req.body.time}d`; }
-    const token = jwt.sign(tokenData, config.program.secret, jwtOptions)
+    const token = jwt.sign(tokenData, config.program.secret, jwtOptions);
 
-    const sharedItem = {
-      playlistId: playlistId,
+    const expires = req.body.time ? jwt.verify(token, config.program.secret).exp : null;
+
+    d().prepare(`
+      INSERT INTO shared_playlists (share_id, playlist_json, user_id, expires, token)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(shareId, JSON.stringify(req.body.playlist), req.user.id, expires, token);
+
+    res.json({
+      playlistId: shareId,
       playlist: req.body.playlist,
       user: req.user.username,
-      expires: req.body.time ? jwt.verify(token, config.program.secret).exp : null,
+      expires: expires,
       token: token
-    };
-
-    db.getShareCollection().insert(sharedItem);
-    db.saveShareDB();
-    res.json(sharedItem);
+    });
   });
 }

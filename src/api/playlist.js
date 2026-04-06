@@ -4,7 +4,10 @@ import * as db from '../db/manager.js';
 import { joiValidate } from '../util/validation.js';
 
 export function setup(mstream) {
-  // TODO: This is a legacy endpoint that should be improved
+  const d = () => db.getDB();
+
+  // ── Ping (initial app load) ─────────────────────────────────────────────
+
   mstream.get('/api/v1/ping', (req, res) => {
     let transcode = false;
     if (config.program.transcode && config.program.transcode.enabled) {
@@ -12,46 +15,48 @@ export function setup(mstream) {
         defaultCodec: config.program.transcode.defaultCodec,
         defaultBitrate: config.program.transcode.defaultBitrate,
         defaultAlgorithm: config.program.transcode.algorithm
-      }
+      };
     }
 
+    // Get user's library names
+    const vpaths = req.user.vpaths || [];
+
     const returnThis = {
-      vpaths: req.user.vpaths,
-      playlists: getPlaylists(req.user.username),
+      vpaths,
+      playlists: getPlaylists(req.user.id),
       transcode,
-      noMkdir: config.program.noMkdir || req.user.allowMkdir === false,
-      noUpload: config.program.noUpload || req.user.allowUpload === false,
+      noMkdir: config.program.noMkdir || req.user.allow_mkdir === false || req.user.allow_mkdir === 0,
+      noUpload: config.program.noUpload || req.user.allow_upload === false || req.user.allow_upload === 0,
+      noFileModify: config.program.noFileModify || req.user.allow_file_modify === false || req.user.allow_file_modify === 0,
       supportedAudioFiles: config.program.supportedAudioFiles,
       vpathMetaData: {}
     };
 
-    req.user.vpaths.forEach(p => {
-      if (config.program.folders[p]) {
-        returnThis.vpathMetaData[p] = {
-          type: config.program.folders[p].type
-        };
+    // Get library type metadata
+    for (const vpathName of vpaths) {
+      const lib = db.getLibraryByName(vpathName);
+      if (lib) {
+        returnThis.vpathMetaData[vpathName] = { type: lib.type };
       }
-    });
+    }
 
     res.json(returnThis);
   });
+
+  // ── Delete playlist ─────────────────────────────────────────────────────
 
   mstream.post('/api/v1/playlist/delete', (req, res) => {
     const schema = Joi.object({ playlistname: Joi.string().required() });
     joiValidate(schema, req.body);
 
-    if (!db.getPlaylistCollection()) { throw new Error('DB Error'); }
+    d().prepare(
+      'DELETE FROM playlists WHERE name = ? AND user_id = ?'
+    ).run(req.body.playlistname, req.user.id);
 
-    db.getPlaylistCollection().findAndRemove({
-      '$and': [
-        { 'user': { '$eq': req.user.username }},
-        { 'name': { '$eq': req.body.playlistname }}
-      ]
-    });
-
-    db.saveUserDB();
     res.json({});
   });
+
+  // ── Add song to playlist ────────────────────────────────────────────────
 
   mstream.post('/api/v1/playlist/add-song', (req, res) => {
     const schema = Joi.object({
@@ -60,58 +65,73 @@ export function setup(mstream) {
     });
     joiValidate(schema, req.body);
 
-    if (!db.getPlaylistCollection()) { throw new Error('No DB'); }
-    db.getPlaylistCollection().insert({
-      name: req.body.playlist,
-      filepath: req.body.song,
-      user: req.user.username
-    });
+    // Ensure playlist exists
+    let playlist = d().prepare(
+      'SELECT id FROM playlists WHERE name = ? AND user_id = ?'
+    ).get(req.body.playlist, req.user.id);
 
-    db.saveUserDB();
+    if (!playlist) {
+      const result = d().prepare(
+        'INSERT INTO playlists (name, user_id) VALUES (?, ?)'
+      ).run(req.body.playlist, req.user.id);
+      playlist = { id: Number(result.lastInsertRowid) };
+    }
+
+    // Get next position
+    const maxPos = d().prepare(
+      'SELECT COALESCE(MAX(position), -1) AS max_pos FROM playlist_tracks WHERE playlist_id = ?'
+    ).get(playlist.id);
+
+    d().prepare(
+      'INSERT INTO playlist_tracks (playlist_id, filepath, position) VALUES (?, ?, ?)'
+    ).run(playlist.id, req.body.song, maxPos.max_pos + 1);
+
     res.json({});
   });
+
+  // ── Remove song from playlist ───────────────────────────────────────────
 
   mstream.post('/api/v1/playlist/remove-song', (req, res) => {
     const schema = Joi.object({ lokiid: Joi.number().integer().required() });
     joiValidate(schema, req.body);
 
-    if (!db.getPlaylistCollection()) { throw new Error('No DB'); }
-    const result = db.getPlaylistCollection().get(req.body.lokiid);
-    if (result.user !== req.user.username) {
-      throw new Error(`User ${req.user.username} tried accessing a resource they don't have access to. Playlist Loki ID: ${req.body.lokiid}`);
+    // lokiid maps to playlist_tracks.id now
+    const track = d().prepare(`
+      SELECT pt.id, p.user_id FROM playlist_tracks pt
+      JOIN playlists p ON pt.playlist_id = p.id
+      WHERE pt.id = ?
+    `).get(req.body.lokiid);
+
+    if (!track || track.user_id !== req.user.id) {
+      throw new Error('Access denied or track not found');
     }
 
-    db.getPlaylistCollection().remove(result);
-    db.saveUserDB();
+    d().prepare('DELETE FROM playlist_tracks WHERE id = ?').run(req.body.lokiid);
     res.json({});
   });
+
+  // ── Create playlist ─────────────────────────────────────────────────────
 
   mstream.post('/api/v1/playlist/new', (req, res) => {
     const schema = Joi.object({ title: Joi.string().required() });
     joiValidate(schema, req.body);
 
-    const results = db.getPlaylistCollection().findOne({
-      '$and': [
-        { 'user': { '$eq': req.user.username } },
-        { 'name': { '$eq': req.body.title } }
-      ]
-    });
+    const existing = d().prepare(
+      'SELECT id FROM playlists WHERE name = ? AND user_id = ?'
+    ).get(req.body.title, req.user.id);
 
-    if (results !== null) {
+    if (existing) {
       return res.status(400).json({ error: 'Playlist Already Exists' });
     }
 
-    // insert null entry
-    db.getPlaylistCollection().insert({
-      name: req.body.title,
-      filepath: null,
-      user: req.user.username,
-      live: false
-    });
+    d().prepare(
+      'INSERT INTO playlists (name, user_id) VALUES (?, ?)'
+    ).run(req.body.title, req.user.id);
 
-    db.saveUserDB();
     res.json({});
   });
+
+  // ── Save playlist (overwrite) ───────────────────────────────────────────
 
   mstream.post('/api/v1/playlist/save', (req, res) => {
     const schema = Joi.object({
@@ -121,46 +141,44 @@ export function setup(mstream) {
     });
     joiValidate(schema, req.body);
 
-    // Delete existing playlist
-    db.getPlaylistCollection().findAndRemove({
-      '$and': [
-        { 'user': { '$eq': req.user.username } },
-        { 'name': { '$eq': req.body.title } }
-      ]
-    });
+    // Find or create playlist
+    let playlist = d().prepare(
+      'SELECT id FROM playlists WHERE name = ? AND user_id = ?'
+    ).get(req.body.title, req.user.id);
 
-    for (const song of req.body.songs) {
-      db.getPlaylistCollection().insert({
-        name: req.body.title,
-        filepath: song,
-        user: req.user.username
-      });
+    if (playlist) {
+      // Delete existing tracks
+      d().prepare('DELETE FROM playlist_tracks WHERE playlist_id = ?').run(playlist.id);
+    } else {
+      const result = d().prepare(
+        'INSERT INTO playlists (name, user_id) VALUES (?, ?)'
+      ).run(req.body.title, req.user.id);
+      playlist = { id: Number(result.lastInsertRowid) };
     }
 
-    // insert null entry
-    db.getPlaylistCollection().insert({
-      name: req.body.title,
-      filepath: null,
-      user: req.user.username,
-      live: typeof req.body.live === 'boolean' ? req.body.live : false
-    });
+    // Insert new tracks with positions
+    const insert = d().prepare(
+      'INSERT INTO playlist_tracks (playlist_id, filepath, position) VALUES (?, ?, ?)'
+    );
+    if (req.body.songs) {
+      for (let i = 0; i < req.body.songs.length; i++) {
+        insert.run(playlist.id, req.body.songs[i], i);
+      }
+    }
 
-
-    db.saveUserDB();
     res.json({});
   });
 
+  // ── Get all playlists ───────────────────────────────────────────────────
+
   mstream.get('/api/v1/playlist/getall', (req, res) => {
-    res.json(getPlaylists(req.user.username));
+    res.json(getPlaylists(req.user.id));
   });
 
-  function getPlaylists(username) {
-    const playlists = [];
-
-    const results = db.getPlaylistCollection().find({ 'user': { '$eq': username }, 'filepath': { '$eq': null } });
-    for (const row of results) {
-      playlists.push({ name: row.name });
-    }
-    return playlists;
+  function getPlaylists(userId) {
+    if (!userId) { return []; }
+    return d().prepare(
+      'SELECT name FROM playlists WHERE user_id = ? ORDER BY name COLLATE NOCASE'
+    ).all(userId).map(r => ({ name: r.name }));
   }
 }

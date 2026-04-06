@@ -3,8 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import winston from 'winston';
 import { nanoid } from 'nanoid';
-import jwt from 'jsonwebtoken';
 import * as config from '../state/config.js';
+import * as db from './manager.js';
 import { getDirname } from '../util/esm-helpers.js';
 
 const __dirname = getDirname(import.meta.url);
@@ -12,58 +12,24 @@ const __dirname = getDirname(import.meta.url);
 const taskQueue = [];
 const runningTasks = new Set();
 const vpathLimiter = new Set();
-let scanIntervalTimer = null; // This gets set after the server boots
-let rustBinaryReady = false; // tracks whether the rust binary is available
+let scanIntervalTimer = null;
 
-function addScanTask(vpath) {
-  const scanObj = { task: 'scan', vpath: vpath, id: nanoid(8) };
-  if (runningTasks.size < config.program.scanOptions.maxConcurrentTasks) {
-    runScan(scanObj);
-  } else {
-    taskQueue.push(scanObj);
-  }
-}
+// ── Rust parser binary detection ────────────────────────────────────────────
 
-function scanAll() {
-  Object.keys(config.program.folders).forEach((vpath) => {
-    addScanTask(vpath);
-  });
-}
-
-function nextTask() {
-  if (
-    taskQueue.length > 0
-    && runningTasks.size < config.program.scanOptions.maxConcurrentTasks
-    && !vpathLimiter.has(taskQueue[taskQueue.length - 1].vpath))
-  {
-    runScan(taskQueue.pop());
-  }
-}
-
-const rustParserDir = path.join(__dirname, '../../rust-parser');
 const ext = process.platform === 'win32' ? '.exe' : '';
+const rustParserDir = path.join(__dirname, '../../rust-parser');
 const prebuiltBin = path.join(__dirname, `../../bin/rust-parser/rust-parser-${process.platform}-${process.arch}${ext}`);
 const localBuildBin = path.join(rustParserDir, `target/release/rust-parser${ext}`);
 let rustParserBin = null;
+let rustBinaryReady = false;
 
-function buildRustParser() {
+function findRustParser() {
   if (rustBinaryReady) { return true; }
+  // Check local build first (may be newer than prebuilt during development)
+  if (fs.existsSync(localBuildBin)) { rustParserBin = localBuildBin; rustBinaryReady = true; return true; }
+  if (fs.existsSync(prebuiltBin)) { rustParserBin = prebuiltBin; rustBinaryReady = true; return true; }
 
-  // 1. Check for pre-built binary shipped with the project
-  if (fs.existsSync(prebuiltBin)) {
-    rustParserBin = prebuiltBin;
-    rustBinaryReady = true;
-    return true;
-  }
-
-  // 2. Check for locally compiled binary
-  if (fs.existsSync(localBuildBin)) {
-    rustParserBin = localBuildBin;
-    rustBinaryReady = true;
-    return true;
-  }
-
-  // 3. Try to build from source
+  // Try to build from source
   winston.info('Rust parser binary not found — building from source...');
   try {
     child.execSync('cargo build --release', { cwd: rustParserDir, stdio: 'pipe', timeout: 300000 });
@@ -79,26 +45,61 @@ function buildRustParser() {
   return false;
 }
 
+// ── Scan task management ────────────────────────────────────────────────────
+
+function addScanTask(vpath) {
+  const scanObj = { task: 'scan', vpath: vpath, id: nanoid(8) };
+  if (runningTasks.size < config.program.scanOptions.maxConcurrentTasks) {
+    runScan(scanObj);
+  } else {
+    taskQueue.push(scanObj);
+  }
+}
+
+function scanAll() {
+  // Read libraries from the database
+  const libraries = db.getAllLibraries();
+  for (const lib of libraries) {
+    addScanTask(lib.name);
+  }
+}
+
+function nextTask() {
+  if (
+    taskQueue.length > 0
+    && runningTasks.size < config.program.scanOptions.maxConcurrentTasks
+    && !vpathLimiter.has(taskQueue[taskQueue.length - 1].vpath)
+  ) {
+    runScan(taskQueue.pop());
+  }
+}
+
 function runScan(scanObj) {
+  const library = db.getLibraryByName(scanObj.vpath);
+  if (!library) {
+    winston.warn(`Library '${scanObj.vpath}' not found in database, skipping scan`);
+    return;
+  }
+
+  const dbPath = path.join(config.program.storage.dbDirectory, 'mstream.db');
+
   const jsonLoad = {
-    directory: config.program.folders[scanObj.vpath].root,
-    vpath: scanObj.vpath,
-    port: config.program.port,
-    token: jwt.sign({ scan: true }, config.program.secret),
-    albumArtDirectory: config.program.storage.albumArtDirectory,
+    dbPath: dbPath,
+    libraryId: library.id,
+    directory: library.root_path,
     skipImg: config.program.scanOptions.skipImg,
-    pause: config.program.scanOptions.pause,
-    supportedFiles: config.program.supportedAudioFiles,
+    albumArtDirectory: config.program.storage.albumArtDirectory,
     scanId: scanObj.id,
-    isHttps: config.getIsHttps(),
-    compressImage: config.program.scanOptions.compressImage
+    compressImage: config.program.scanOptions.compressImage,
+    supportedFiles: config.program.supportedAudioFiles,
+    scanBatchSize: config.program.scanOptions.scanBatchSize || 100
   };
 
   let forkedScan;
-  const useRust = config.program.scanOptions.rustParser && buildRustParser();
+  const useRust = findRustParser();
   if (useRust) {
     forkedScan = child.spawn(rustParserBin, [JSON.stringify(jsonLoad)], { stdio: ['ignore', 'pipe', 'pipe'] });
-    winston.info(`File scan started (Rust) on ${jsonLoad.directory}`);
+    winston.info(`File scan started (Rust) on ${library.root_path}`);
     forkedScan.on('error', (err) => {
       winston.error(`Rust parser failed to start: ${err.message}`);
       runningTasks.delete(forkedScan);
@@ -107,14 +108,14 @@ function runScan(scanObj) {
     });
   } else {
     forkedScan = child.fork(path.join(__dirname, './scanner.mjs'), [JSON.stringify(jsonLoad)], { silent: true });
-    winston.info(`File scan started on ${jsonLoad.directory}`);
+    winston.info(`File scan started on ${library.root_path}`);
   }
 
   runningTasks.add(forkedScan);
   vpathLimiter.add(scanObj.vpath);
 
   forkedScan.stdout.on('data', (data) => {
-    winston.info(`File scan message: ${data}`);
+    winston.info(data.toString().trim());
   });
 
   forkedScan.stderr.on('data', (data) => {
@@ -129,6 +130,8 @@ function runScan(scanObj) {
   });
 }
 
+// ── Public API ──────────────────────────────────────────────────────────────
+
 export function scanVPath(vPath) {
   addScanTask(vPath);
 }
@@ -136,7 +139,7 @@ export function scanVPath(vPath) {
 export { scanAll };
 
 export function isScanning() {
-  return runningTasks.size > 0 ? true : false;
+  return runningTasks.size > 0;
 }
 
 export function getAdminStats() {
@@ -148,7 +151,6 @@ export function getAdminStats() {
 
 export function runAfterBoot() {
   setTimeout(() => {
-    // This only gets run once after boot. Will not be run on server restart b/c scanIntervalTimer is already set
     if (config.program.scanOptions.scanInterval > 0 && scanIntervalTimer === null) {
       scanAll();
       scanIntervalTimer = setInterval(() => scanAll(), config.program.scanOptions.scanInterval * 60 * 60 * 1000);

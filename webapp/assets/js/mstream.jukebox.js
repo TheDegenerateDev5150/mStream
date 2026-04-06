@@ -117,6 +117,14 @@ var JUKEBOX = (function () {
         return;
       }
 
+      if (json.command === 'setVolume' && json.file) {
+        var vol = parseInt(json.file);
+        if (!isNaN(vol)) {
+          MSTREAMPLAYER.changeVolume(vol);
+        }
+        return;
+      }
+
       if (json.command === 'getPlaylist') {
         var playlist = MSTREAMPLAYER.playlist.map(function(song, index) {
           return {
@@ -153,7 +161,8 @@ var JUKEBOX = (function () {
           playing: MSTREAMPLAYER.playerStats.playing,
           index: MSTREAMPLAYER.positionCache.val,
           currentTime: (ct && isFinite(ct)) ? ct : 0,
-          duration: (dur && isFinite(dur)) ? dur : 0
+          duration: (dur && isFinite(dur)) ? dur : 0,
+          volume: MSTREAMPLAYER.playerStats.volume
         };
         fetch('/api/v1/jukebox/update-now-playing', {
           method: 'POST',

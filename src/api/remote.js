@@ -7,6 +7,7 @@ import jwt from 'jsonwebtoken';
 import { WebSocketServer } from 'ws';
 import winston from 'winston';
 import * as config from '../state/config.js';
+import * as db from '../db/manager.js';
 import { joiValidate } from '../util/validation.js';
 
 // list of currently connected clients (users)
@@ -27,13 +28,15 @@ const allowedCommands = [
   'getNowPlaying',
   'goToSong',
   'removeSong',
+  'setVolume',
 ];
 
 export function setupAfterAuth(mstream, server) {
   const wss = new WebSocketServer({ server: server, verifyClient: (info, cb) => {
     try {
       let decoded;
-      if (config.program.users && Object.keys(config.program.users).length !== 0) {
+      const allUsers = db.getAllUsers ? db.getAllUsers() : [];
+      if (allUsers.length !== 0) {
         const token = url.parse(info.req.url, true).query.token;
         if (!token) { throw new Error('Token Not Found'); }
         decoded = jwt.verify(token, config.program.secret);
@@ -190,4 +193,9 @@ export function setupBeforeAuth(mstream) {
     );
     res.send(sharePage);
   });
+}
+
+// Check if a jukebox JWT token belongs to an active session
+export function isActiveJukeboxToken(token) {
+  return Object.values(codeTokenMap).includes(token);
 }

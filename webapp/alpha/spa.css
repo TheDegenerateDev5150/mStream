@@ -375,7 +375,7 @@ body {
 }
 
 .h1 {
-  height: 100%;;
+  height: 100%;
 }
 
 .row-x {
@@ -431,8 +431,129 @@ body {
   cursor: pointer;
 }
 
+/* Legacy playing highlight */
 .playing {
   background-color: #4a463e !important;
+}
+
+/* ── Now Playing Queue ───────────────────────────────────────────────────── */
+
+.np-queue-item {
+  display: flex;
+  align-items: center;
+  padding: 6px 8px;
+  gap: 10px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+  cursor: default;
+  transition: background .12s;
+}
+
+.np-queue-item:hover {
+  background: rgba(255,255,255,.04);
+}
+
+.np-queue-active {
+  background: rgba(100,126,228,.15) !important;
+  border-left: 3px solid #657ee4;
+  padding-left: 5px;
+}
+
+.np-queue-art {
+  width: 40px;
+  height: 40px;
+  border-radius: 4px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.np-queue-art-placeholder {
+  width: 40px;
+  height: 40px;
+  border-radius: 4px;
+  background: rgba(255,255,255,.05);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.np-queue-info {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.np-queue-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: #eee;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.3;
+}
+
+.np-queue-artist {
+  font-size: 11px;
+  color: #888;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.3;
+  margin-top: 1px;
+}
+
+.np-queue-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.np-queue-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background .12s;
+}
+
+.np-queue-action:hover {
+  background: rgba(255,255,255,.1);
+}
+
+.np-queue-remove svg {
+  fill: #888;
+}
+
+.np-queue-remove:hover svg {
+  fill: #e57373;
+}
+
+.np-queue-action.popperMenu {
+  background-color: transparent;
+  border: none;
+  float: none;
+  min-width: unset !important;
+  height: 28px;
+  padding: 0;
+  font-size: unset;
+  border-radius: 50%;
+}
+
+.np-queue-action.popperMenu:hover {
+  background-color: rgba(255,255,255,.1);
+}
+
+.np-queue-action.popperMenu svg path {
+  fill: #aaa;
+}
+
+.np-queue-action.popperMenu:hover svg path {
+  fill: #fff;
 }
 
 .aa-card {
@@ -581,44 +702,44 @@ body {
 
 #pop-d, #pop-f {
   min-width: 50px;
-  background-color: #F5F5F5;
-
-  border-radius: 3px;
-  border: 1px solid #b4b4b4;
-  color: #000;
+  background-color: #2a2a2e;
+  border-radius: 6px;
+  border: 1px solid #444;
+  color: #ddd;
   z-index: 100;
+  box-shadow: 0 4px 16px rgba(0,0,0,.5);
+  overflow: hidden;
 }
 
 .pop-playlist {
-  padding-left: 7px;
-  padding-right: 7px;
-  padding-top: 5px;
-  padding-bottom: 5px;
-
-  border-bottom: 1px solid #9E9E9E;
+  padding: 5px 10px;
+  border-bottom: 1px solid #444;
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: .5px;
 }
 
 .pop-list-item {
-  padding-left: 7px;
-  padding-right: 7px;
-  padding-top: 5px;
-  padding-bottom: 5px;
-
-  cursor:pointer;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #ddd;
+  transition: background .12s;
 }
 
 .pop-list-item:hover {
-  background-color: #E6EBFA;
+  background-color: rgba(255,255,255,.1);
 }
 
 .popperMenu:hover, .downloadDir:hover, .downloadFileplaylist:hover, .fileAddToPlaylist:hover {
-  background-color: #9E9E9E;
+  background-color: rgba(255,255,255,.15);
 }
 
 .popperMenu, .downloadDir, .downloadFileplaylist, .fileAddToPlaylist {
   min-width: 28px !important;
   height: 14px;
-  background-color: #B5B5B5;
+  background-color: rgba(255,255,255,.08);
   float: right;
   text-align: center;
   font-size: 12px;
@@ -626,8 +747,9 @@ body {
   border-bottom-left-radius: 3px;
   padding-left: 3px;
   padding-right: 3px;
-  border-right: 1px solid #9E9E9E;
+  border-right: 1px solid rgba(255,255,255,.1);
   cursor: pointer;
+  color: #bbb;
 }
 
 .song-button-box svg {
@@ -705,7 +827,7 @@ body {
 
 #playlist-buttons svg {
   fill: #fff;
-  opacity: .7;;
+  opacity: .7;
 }
 
 #playlist-buttons svg:hover {
@@ -1009,6 +1131,126 @@ select {
 
 .no-margin p {
   margin: 0;
+}
+
+/* ── Album Grid ──────────────────────────────────────────────────────────── */
+
+.album-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 16px;
+  padding: 16px;
+}
+
+.album-grid-card {
+  cursor: pointer;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(255,255,255,.04);
+  transition: background .15s, transform .1s;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.album-grid-card:hover {
+  background: rgba(255,255,255,.08);
+}
+
+.album-grid-card:active {
+  transform: scale(.97);
+}
+
+.album-grid-art {
+  width: 100%;
+  aspect-ratio: 1;
+  background: rgba(255,255,255,.03);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+}
+
+.album-grid-play {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(30,215,96,.9);
+  color: #000;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity .2s, transform .2s, background .15s;
+  box-shadow: 0 4px 12px rgba(0,0,0,.4);
+  padding: 0;
+}
+
+.album-grid-play svg {
+  width: 20px;
+  height: 20px;
+  fill: #000;
+  opacity: 1;
+}
+
+.album-grid-card:hover .album-grid-play {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.album-grid-play:hover {
+  background: rgba(30,215,96,1);
+  transform: scale(1.08);
+}
+
+.album-grid-play:active {
+  transform: scale(.95);
+}
+
+.album-grid-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.album-grid-art svg {
+  width: 40%;
+  height: 40%;
+  opacity: .4;
+}
+
+.album-grid-info {
+  padding: 8px 10px 10px;
+}
+
+.album-grid-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #eee;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.album-grid-year {
+  font-size: 11px;
+  color: #888;
+  margin-top: 2px;
+}
+
+@media (max-width: 480px) {
+  .album-grid {
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 10px;
+    padding: 10px;
+  }
 }
 
 .make-white {

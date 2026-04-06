@@ -1,100 +1,105 @@
 import Joi from 'joi';
 import path from 'path';
-import escapeStringRegexp from 'escape-string-regexp';
 import * as vpath from '../util/vpath.js';
 import * as dbQueue from '../db/task-queue.js';
 import * as db from '../db/manager.js';
 import { joiValidate } from '../util/validation.js';
 import WebError from '../util/web-error.js';
 
-const mapFunDefault = (left, right) => {
-  return {
-    artist: left.artist,
-    album: left.album,
-    hash: left.hash,
-    track: left.track,
-    title: left.title,
-    year: left.year,
-    aaFile: left.aaFile,
-    filepath: left.filepath,
-    rating: right.rating,
-    "replaygain-track-db": left.replaygainTrackDb,
-    vpath: left.vpath
-  };
-};
-
-const rightFunDefault = (rightData) => {
-  return rightData.hash + '-' + rightData.user;
-};
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
 function renderMetadataObj(row) {
+  const lib = db.getLibraryByName(row.library_name || '');
+  const fullPath = lib
+    ? path.join(lib.name, row.filepath).replace(/\\/g, '/')
+    : row.filepath;
+
   return {
-    "filepath": path.join(row.vpath, row.filepath).replace(/\\/g, '/'),
-    "metadata": {
-      "artist": row.artist ? row.artist : null,
-      "hash": row.hash ? row.hash : null,
-      "album": row.album ? row.album : null,
-      "track": row.track ? row.track : null,
-      "disk": row.disk ? row.disk : null,
-      "title": row.title ? row.title : null,
-      "year": row.year ? row.year : null,
-      "album-art": row.aaFile ? row.aaFile : null,
-      "rating": row.rating ? row.rating : null,
-      "play-count": row.playCount ? row.playCount : null,
-      "last-played": row.lastPlayed ? row.lastPlayed : null,
-      "replaygain-track": row.replaygainTrack ? row.replaygainTrack : null
+    filepath: fullPath,
+    metadata: {
+      artist: row.artist_name || null,
+      hash: row.file_hash || null,
+      album: row.album_name || null,
+      track: row.track_number || null,
+      disk: row.disc_number || null,
+      title: row.title || null,
+      year: row.year || null,
+      'album-art': row.album_art_file || null,
+      rating: row.rating || null,
+      'play-count': row.play_count || null,
+      'last-played': row.last_played || null,
+      'replaygain-track': row.replaygain_track_db || null
     }
   };
 }
 
-function renderOrClause(vpaths, ignoreVPaths) {
-  if (vpaths.length === 1) {
-    return { 'vpath': { '$eq': vpaths[0] } };
-  }
-
-  const returnThis = { '$or': [] }
-  for (const vpathItem of vpaths) {
-    if (ignoreVPaths && typeof ignoreVPaths === 'object' && ignoreVPaths.includes(vpathItem)) {
-      continue;
-    }
-    returnThis['$or'].push({ 'vpath': { '$eq': vpathItem } })
-  }
-
-  return returnThis;
+// Build library filter clause for user access
+function libraryFilter(user) {
+  const libIds = db.getUserLibraryIds(user);
+  if (libIds.length === 0) { return { clause: '1=0', params: [] }; }
+  return {
+    clause: `t.library_id IN (${libIds.map(() => '?').join(',')})`,
+    params: libIds
+  };
 }
+
+// Base query: tracks joined with artists, albums, library, and optionally user_metadata
+function trackQuery(userId) {
+  return `
+    SELECT t.*, a.name AS artist_name, al.name AS album_name,
+           l.name AS library_name,
+           um.rating, um.play_count, um.last_played
+    FROM tracks t
+    LEFT JOIN artists a ON t.artist_id = a.id
+    LEFT JOIN albums al ON t.album_id = al.id
+    LEFT JOIN libraries l ON t.library_id = l.id
+    LEFT JOIN user_metadata um ON t.file_hash = um.track_hash AND um.user_id = ${userId ? '?' : 'NULL'}
+  `;
+}
+
+// ── Exported metadata lookup (used by other modules) ────────────────────────
 
 export function pullMetaData(filepath, user) {
-  const pathInfo = vpath.getVPathInfo(filepath, user);
-  if (!db.getFileCollection()) { return { "filepath": filepath, "metadata": null }; }
+  const d = db.getDB();
+  if (!d) { return { filepath: filepath, metadata: null }; }
 
-  const leftFun = (leftData) => {
-    return leftData.hash + '-' + user.username;
-  };
-
-  const result = db.getFileCollection().chain().find({ '$and': [{'filepath': pathInfo.relativePath}, {'vpath': pathInfo.vpath}] }, true)
-    .eqJoin(db.getUserMetadataCollection().chain(), leftFun, rightFunDefault, mapFunDefault).data();
-
-  if (!result || !result[0]) {
-    return { "filepath": filepath, "metadata": null };
+  let pathInfo;
+  try { pathInfo = vpath.getVPathInfo(filepath, user); } catch (_e) {
+    return { filepath: filepath, metadata: null };
   }
 
-  return renderMetadataObj(result[0]);
+  const lib = db.getLibraryByName(pathInfo.vpath);
+  if (!lib) { return { filepath: filepath, metadata: null }; }
+
+  const row = d.prepare(`
+    ${trackQuery(user?.id)}
+    WHERE t.filepath = ? AND t.library_id = ?
+  `).get(...(user?.id ? [user.id] : []), pathInfo.relativePath, lib.id);
+
+  if (!row) { return { filepath: filepath, metadata: null }; }
+  return renderMetadataObj(row);
 }
 
+// ── Route setup ─────────────────────────────────────────────────────────────
+
 export function setup(mstream) {
+  const d = () => db.getDB();
+
+  // ── Status ──────────────────────────────────────────────────────────────
+
   mstream.get('/api/v1/db/status', (req, res) => {
-    let total = 0;
-    if (db.getFileCollection()) {
-      for (const vpathItem of req.user.vpaths) {
-        total += db.getFileCollection().count({ 'vpath': vpathItem })
-      }
-    }
+    const filter = libraryFilter(req.user);
+    const row = d().prepare(
+      `SELECT COUNT(*) AS total FROM tracks t WHERE ${filter.clause}`
+    ).get(...filter.params);
 
     res.json({
-      totalFileCount: total,
+      totalFileCount: row.total,
       locked: dbQueue.isScanning()
     });
   });
+
+  // ── Metadata ────────────────────────────────────────────────────────────
 
   mstream.post('/api/v1/db/metadata', (req, res) => {
     res.json(pullMetaData(req.body.filepath, req.user));
@@ -103,140 +108,147 @@ export function setup(mstream) {
   mstream.post('/api/v1/db/metadata/batch', (req, res) => {
     const returnThis = {};
     req.body.forEach(f => {
-      console.log(f)
       returnThis[f] = pullMetaData(f, req.user);
     });
-
     res.json(returnThis);
   });
 
-  // legacy enpoint, moved to POST
-  mstream.get('/api/v1/db/artists', (req, res) => {
-    const artists = getArtists(req);
-    res.json(artists);
-  });
-
-  mstream.post('/api/v1/db/artists', (req, res) => {
-    const artists = getArtists(req);
-    res.json(artists);
-  });
+  // ── Artists ─────────────────────────────────────────────────────────────
 
   function getArtists(req) {
-    const artists = { "artists": [] };
-    if (!db.getFileCollection()) { return artists; }
+    const filter = libraryFilter(req.user);
+    const rows = d().prepare(`
+      SELECT DISTINCT a.name
+      FROM artists a
+      JOIN tracks t ON t.artist_id = a.id
+      WHERE ${filter.clause}
+      ORDER BY a.name COLLATE NOCASE
+    `).all(...filter.params);
 
-    const results = db.getFileCollection().find(renderOrClause(req.user.vpaths, req.body.ignoreVPaths));
-    const store = {};
-    for (const row of results) {
-      if (!store[row.artist] && !(row.artist === undefined || row.artist === null)) {
-        store[row.artist] = true;
-      }
-    }
-
-    artists.artists = Object.keys(store).sort((a, b) => {
-      return a.localeCompare(b);
-    });
-
-    return artists;
+    return { artists: rows.map(r => r.name) };
   }
+
+  mstream.get('/api/v1/db/artists', (req, res) => res.json(getArtists(req)));
+  mstream.post('/api/v1/db/artists', (req, res) => res.json(getArtists(req)));
+
+  // ── Artist Albums ───────────────────────────────────────────────────────
 
   mstream.post('/api/v1/db/artists-albums', (req, res) => {
-    const albums = { "albums": [] };
-    if (!db.getFileCollection()) { return res.json(albums); }
+    const filter = libraryFilter(req.user);
+    const rows = d().prepare(`
+      SELECT DISTINCT al.name, al.year, al.album_art_file
+      FROM albums al
+      JOIN artists a ON al.artist_id = a.id
+      JOIN tracks t ON t.album_id = al.id
+      WHERE a.name = ? AND ${filter.clause}
+      ORDER BY al.year DESC
+    `).all(String(req.body.artist), ...filter.params);
 
-    const results = db.getFileCollection().chain().find({
-      '$and': [
-        renderOrClause(req.user.vpaths, req.body.ignoreVPaths),
-        {'artist': { '$eq': String(req.body.artist) }}
-      ]
-    }).simplesort('year', true).data();
-
-    const store = {};
-    for (const row of results) {
-      if (row.album === null) {
-        if (!store[row.album]) {
-          albums.albums.push({
-            name: null,
-            year: null,
-            album_art_file: row.aaFile ? row.aaFile : null
-          });
-          store[row.album] = true;
-        }
-      } else if (!store[`${row.album}${row.year}`]) {
-        albums.albums.push({
-          name: row.album,
-          year: row.year,
-          album_art_file: row.aaFile ? row.aaFile : null
-        });
-        store[`${row.album}${row.year}`] = true;
-      }
-    }
-
-    res.json(albums);
+    res.json({ albums: rows.map(r => ({
+      name: r.name,
+      year: r.year,
+      album_art_file: r.album_art_file || null
+    }))});
   });
 
-  mstream.get('/api/v1/db/albums', (req, res) => {
-    const albums = getAlbums(req);
-    res.json(albums);
-  });
-
-  mstream.post('/api/v1/db/albums', (req, res) => {
-    const albums = getAlbums(req);
-    res.json(albums);
-  });
+  // ── Albums ──────────────────────────────────────────────────────────────
 
   function getAlbums(req) {
-    const albums = { "albums": [] };
-    if (!db.getFileCollection()) { return albums; }
+    const filter = libraryFilter(req.user);
+    const rows = d().prepare(`
+      SELECT DISTINCT al.name, al.year, al.album_art_file
+      FROM albums al
+      JOIN tracks t ON t.album_id = al.id
+      WHERE ${filter.clause}
+      ORDER BY al.name COLLATE NOCASE
+    `).all(...filter.params);
 
-    const results = db.getFileCollection().find(renderOrClause(req.user.vpaths, req.body.ignoreVPaths));
-    const store = {};
-    for (const row of results) {
-      if (store[`${row.album}${row.year}`] || (row.album === undefined || row.album === null)) {
-        continue;
-      }
-
-      albums.albums.push({ name: row.album, album_art_file: row.aaFile, year: row.year });
-      store[`${row.album}${row.year}`] = true;
-    }
-
-    albums.albums.sort((a, b) => {
-      return a.name.localeCompare(b.name);
-    });
-
-    return albums;
+    return { albums: rows.map(r => ({
+      name: r.name,
+      year: r.year,
+      album_art_file: r.album_art_file || null
+    }))};
   }
 
-  mstream.post('/api/v1/db/album-songs', (req, res) => {
-    if (!db.getFileCollection()) { throw new Error('DB Not Working'); }
+  mstream.get('/api/v1/db/albums', (req, res) => res.json(getAlbums(req)));
+  mstream.post('/api/v1/db/albums', (req, res) => res.json(getAlbums(req)));
 
-    const searchClause = [
-      renderOrClause(req.user.vpaths, req.body.ignoreVPaths),
-      {'album': { '$eq': req.body.album ? String(req.body.album) : null }}
-    ];
+  // ── Genres ──────────────────────────────────────────────────────────────
+
+  function getGenres(req) {
+    const filter = libraryFilter(req.user);
+    const rows = d().prepare(`
+      SELECT DISTINCT g.name, COUNT(DISTINCT t.id) AS track_count
+      FROM genres g
+      JOIN track_genres tg ON tg.genre_id = g.id
+      JOIN tracks t ON t.id = tg.track_id
+      WHERE ${filter.clause}
+      GROUP BY g.id
+      ORDER BY g.name COLLATE NOCASE
+    `).all(...filter.params);
+
+    return { genres: rows.map(r => ({ name: r.name, track_count: r.track_count })) };
+  }
+
+  mstream.get('/api/v1/db/genres', (req, res) => res.json(getGenres(req)));
+  mstream.post('/api/v1/db/genres', (req, res) => res.json(getGenres(req)));
+
+  // ── Genre Songs ─────────────────────────────────────────────────────────
+
+  mstream.post('/api/v1/db/genre-songs', (req, res) => {
+    const filter = libraryFilter(req.user);
+    const allParams = req.user?.id
+      ? [req.user.id, String(req.body.genre), ...filter.params]
+      : [String(req.body.genre), ...filter.params];
+
+    const rows = d().prepare(`
+      ${trackQuery(req.user?.id)}
+      JOIN track_genres tg ON tg.track_id = t.id
+      JOIN genres g ON g.id = tg.genre_id
+      WHERE g.name = ? AND ${filter.clause}
+      ORDER BY a.name COLLATE NOCASE, al.name COLLATE NOCASE, t.disc_number, t.track_number
+    `).all(...allParams);
+
+    res.json(rows.map(renderMetadataObj));
+  });
+
+  // ── Album Songs ─────────────────────────────────────────────────────────
+
+  mstream.post('/api/v1/db/album-songs', (req, res) => {
+    const filter = libraryFilter(req.user);
+    const conditions = [filter.clause];
+    const params = [...filter.params];
+
+    if (req.body.album) {
+      conditions.push('al.name = ?');
+      params.push(String(req.body.album));
+    } else {
+      conditions.push('t.album_id IS NULL');
+    }
 
     if (req.body.artist) {
-      searchClause.push({ 'artist': { '$eq': req.body.artist }});
+      conditions.push('a.name = ?');
+      params.push(String(req.body.artist));
     }
 
     if (req.body.year) {
-      searchClause.push({ 'year': { '$eq': Number(req.body.year) }});
+      conditions.push('t.year = ?');
+      params.push(Number(req.body.year));
     }
 
-    const leftFun = (leftData) => {
-      return leftData.hash + '-' + req.user.username;
-    };
+    // Add user ID for metadata join
+    const allParams = req.user?.id ? [req.user.id, ...params] : params;
 
-    const results = db.getFileCollection().chain().find({
-      '$and': searchClause
-    }).compoundsort(['disk','track','filepath']).eqJoin(db.getUserMetadataCollection().chain(), leftFun, rightFunDefault, mapFunDefault).data();
+    const rows = d().prepare(`
+      ${trackQuery(req.user?.id)}
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY t.disc_number, t.track_number, t.filepath
+    `).all(...allParams);
 
-    const songs = [];
-    for (const row of results) {
-      songs.push(renderMetadataObj(row));
-    }
-    res.json(songs);
+    res.json(rows.map(renderMetadataObj));
   });
+
+  // ── Search ──────────────────────────────────────────────────────────────
 
   mstream.post('/api/v1/db/search', (req, res) => {
     const schema = Joi.object({
@@ -249,107 +261,66 @@ export function setup(mstream) {
     });
     joiValidate(schema, req.body);
 
-    // Get user inputs
-    const artists = req.body.noArtists === true ? [] : searchByX(req, 'artist');
-    const albums = req.body.noAlbums === true ? [] : searchByX(req, 'album');
-    const files = req.body.noFiles === true ? [] : searchByX(req, 'filepath');
-    const title = req.body.noTitles === true ? [] : searchByX(req, 'title', 'filepath');
-    res.json({artists, albums, files, title });
+    const filter = libraryFilter(req.user);
+    const searchPattern = `%${req.body.search}%`;
+
+    const artists = req.body.noArtists ? [] : d().prepare(`
+      SELECT DISTINCT a.name
+      FROM artists a JOIN tracks t ON t.artist_id = a.id
+      WHERE a.name LIKE ? AND ${filter.clause}
+      ORDER BY a.name COLLATE NOCASE LIMIT 30
+    `).all(searchPattern, ...filter.params).map(r => ({ name: r.name }));
+
+    const albums = req.body.noAlbums ? [] : d().prepare(`
+      SELECT DISTINCT al.name
+      FROM albums al JOIN tracks t ON t.album_id = al.id
+      WHERE al.name LIKE ? AND ${filter.clause}
+      ORDER BY al.name COLLATE NOCASE LIMIT 30
+    `).all(searchPattern, ...filter.params).map(r => ({ name: r.name }));
+
+    const title = req.body.noTitles ? [] : d().prepare(`
+      SELECT t.title, a.name AS artist_name, l.name AS library_name, t.filepath
+      FROM tracks t
+      JOIN libraries l ON t.library_id = l.id
+      LEFT JOIN artists a ON t.artist_id = a.id
+      WHERE t.title LIKE ? AND ${filter.clause}
+      LIMIT 30
+    `).all(searchPattern, ...filter.params).map(r => {
+      const fp = path.join(r.library_name, r.filepath).replace(/\\/g, '/');
+      return { name: r.artist_name ? `${r.artist_name} - ${r.title}` : r.title, filepath: fp };
+    });
+
+    const files = req.body.noFiles ? [] : d().prepare(`
+      SELECT l.name AS library_name, t.filepath
+      FROM tracks t JOIN libraries l ON t.library_id = l.id
+      WHERE t.filepath LIKE ? AND ${filter.clause}
+      LIMIT 30
+    `).all(searchPattern, ...filter.params).map(r => {
+      const fp = path.join(r.library_name, r.filepath).replace(/\\/g, '/');
+      return { name: fp, filepath: fp };
+    });
+
+    res.json({ artists, albums, title, files });
   });
 
-  function searchByX(req, searchCol, resCol) {
-    if (!resCol) {
-      resCol = searchCol;
-    }
-
-    const returnThis = [];
-    if (!db.getFileCollection()) { return returnThis; }
-
-    const findThis = {
-      '$and': [
-        renderOrClause(req.user.vpaths, req.body.ignoreVPaths),
-        {[searchCol]: {'$regex': [escapeStringRegexp(String(req.body.search)), 'i']}}
-      ]
-    };
-    const results = db.getFileCollection().find(findThis);
-
-    const store = {};
-    for (const row of results) {
-      if (!store[row[resCol]]) {
-        let name = row[resCol];
-        let filepath = false;
-
-        if (searchCol === 'filepath') {
-          name = path.join(row.vpath, row[resCol]).replace(/\\/g, '/');
-          filepath = path.join(row.vpath, row[resCol]).replace(/\\/g, '/');
-        } else if (searchCol === 'title') {
-          name = `${row.artist} - ${row.title}`;
-          filepath = path.join(row.vpath, row[resCol]).replace(/\\/g, '/');
-        }
-
-        returnThis.push({
-          name: name,
-          album_art_file: row.aaFile ? row.aaFile : null,
-          filepath
-        });
-        store[row[resCol]] = true;
-      }
-    }
-
-    return returnThis;
-  }
-
-  mstream.get('/api/v1/db/rated', (req, res) => {
-    const songs = getRatedSongs(req);
-    res.json(songs);
-  });
-
-  mstream.post('/api/v1/db/rated', (req, res) => {
-    const songs = getRatedSongs(req);
-    res.json(songs);
-  });
+  // ── Rated Songs ─────────────────────────────────────────────────────────
 
   function getRatedSongs(req) {
-    if (!db.getFileCollection()) { throw new Error('DB Not Ready'); }
+    if (!req.user?.id) { return []; }
+    const filter = libraryFilter(req.user);
+    const rows = d().prepare(`
+      ${trackQuery(req.user.id)}
+      WHERE um.rating > 0 AND ${filter.clause}
+      ORDER BY um.rating DESC
+    `).all(req.user.id, ...filter.params);
 
-    const mapFun = (left, right) => {
-      return {
-        artist: right.artist,
-        album: right.album,
-        hash: right.hash,
-        track: right.track,
-        title: right.title,
-        year: right.year,
-        aaFile: right.aaFile,
-        filepath: right.filepath,
-        rating: left.rating,
-        "replaygain-track-db": right.replaygainTrackDb,
-        vpath: right.vpath
-      };
-    };
-
-    const leftFun = (leftData) => {
-      return leftData.hash + '-' + leftData.user;
-    };
-
-    const rightFun = (rightData) => {
-      return rightData.hash + '-' + req.user.username;
-    };
-
-    const results = db.getUserMetadataCollection().chain().eqJoin(db.getFileCollection().chain(), leftFun, rightFun, mapFun).find({
-      '$and': [
-        renderOrClause(req.user.vpaths, req.body.ignoreVPaths),
-        { 'rating': { '$gt': 0 } }
-      ]
-    }).simplesort('rating', true).data();
-
-    const songs = [];
-    for (const row of results) {
-      songs.push(renderMetadataObj(row));
-    }
-
-    return songs;
+    return rows.map(renderMetadataObj);
   }
+
+  mstream.get('/api/v1/db/rated', (req, res) => res.json(getRatedSongs(req)));
+  mstream.post('/api/v1/db/rated', (req, res) => res.json(getRatedSongs(req)));
+
+  // ── Rate Song ───────────────────────────────────────────────────────────
 
   mstream.post('/api/v1/db/rate-song', (req, res) => {
     const schema = Joi.object({
@@ -359,26 +330,24 @@ export function setup(mstream) {
     joiValidate(schema, req.body);
 
     const pathInfo = vpath.getVPathInfo(req.body.filepath);
-    if (!db.getUserMetadataCollection() || !db.getFileDbName()) { throw new Error('No DB'); }
+    const lib = db.getLibraryByName(pathInfo.vpath);
+    if (!lib) { throw new Error('Library not found'); }
 
-    const result = db.getFileCollection().findOne({ '$and':[{ 'filepath': pathInfo.relativePath}, { 'vpath': pathInfo.vpath }] });
-    if (!result) { throw new Error('File Not Found'); }
+    const track = d().prepare(
+      'SELECT file_hash FROM tracks WHERE filepath = ? AND library_id = ?'
+    ).get(pathInfo.relativePath, lib.id);
+    if (!track) { throw new Error('File Not Found'); }
 
-    const result2 = db.getUserMetadataCollection().findOne({ '$and':[{ 'hash': result.hash}, { 'user': req.user.username }] });
-    if (!result2) {
-      db.getUserMetadataCollection().insert({
-        user: req.user.username,
-        hash: result.hash,
-        rating: req.body.rating
-      });
-    } else {
-      result2.rating = req.body.rating;
-      db.getUserMetadataCollection().update(result2);
-    }
+    d().prepare(`
+      INSERT INTO user_metadata (user_id, track_hash, rating)
+      VALUES (?, ?, ?)
+      ON CONFLICT(user_id, track_hash) DO UPDATE SET rating = excluded.rating
+    `).run(req.user.id, track.file_hash, req.body.rating);
 
     res.json({});
-    db.saveUserDB();
   });
+
+  // ── Recent Added ────────────────────────────────────────────────────────
 
   mstream.post('/api/v1/db/recent/added', (req, res) => {
     const schema = Joi.object({
@@ -387,26 +356,20 @@ export function setup(mstream) {
     });
     joiValidate(schema, req.body);
 
-    if (!db.getFileCollection()) { throw new Error('DB Not Ready'); }
+    const filter = libraryFilter(req.user);
+    const allParams = req.user?.id ? [req.user.id, ...filter.params] : filter.params;
 
-    const leftFun = (leftData) => {
-      return leftData.hash + '-' + req.user.username;
-    };
+    const rows = d().prepare(`
+      ${trackQuery(req.user?.id)}
+      WHERE ${filter.clause}
+      ORDER BY t.created_at DESC
+      LIMIT ?
+    `).all(...allParams, req.body.limit);
 
-    const results = db.getFileCollection().chain().find({
-      '$and': [
-        renderOrClause(req.user.vpaths, req.body.ignoreVPaths),
-        { 'ts': { '$gt': 0 } }
-      ]
-    }).simplesort('ts', true).limit(req.body.limit).eqJoin(db.getUserMetadataCollection().chain(), leftFun, rightFunDefault, mapFunDefault).data();
-
-    const songs = [];
-    for (const row of results) {
-      songs.push(renderMetadataObj(row));
-    }
-
-    res.json(songs);
+    res.json(rows.map(renderMetadataObj));
   });
+
+  // ── Recently Played ─────────────────────────────────────────────────────
 
   mstream.post('/api/v1/db/stats/recently-played', (req, res) => {
     const schema = Joi.object({
@@ -415,48 +378,20 @@ export function setup(mstream) {
     });
     joiValidate(schema, req.body);
 
-    if (!db.getFileCollection()) { throw new Error('DB Not Ready'); }
+    if (!req.user?.id) { return res.json([]); }
+    const filter = libraryFilter(req.user);
 
-    const mapFun = (left, right) => {
-      return {
-        artist: right.artist,
-        album: right.album,
-        hash: right.hash,
-        track: right.track,
-        title: right.title,
-        year: right.year,
-        aaFile: right.aaFile,
-        filepath: right.filepath,
-        rating: left.rating,
-        lastPlayed: left.lp,
-        playCount: left.pc,
-        "replaygain-track-db": right.replaygainTrackDb,
-        vpath: right.vpath
-      };
-    };
+    const rows = d().prepare(`
+      ${trackQuery(req.user.id)}
+      WHERE um.last_played IS NOT NULL AND ${filter.clause}
+      ORDER BY um.last_played DESC
+      LIMIT ?
+    `).all(req.user.id, ...filter.params, req.body.limit);
 
-    const leftFun = (leftData) => {
-      return leftData.hash + '-' + leftData.user;
-    };
-
-    const rightFun = (rightData) => {
-      return rightData.hash + '-' + req.user.username;
-    };
-
-    const results = db.getUserMetadataCollection().chain().eqJoin(db.getFileCollection().chain(), leftFun, rightFun, mapFun).find({
-      '$and': [
-        renderOrClause(req.user.vpaths, req.body.ignoreVPaths),
-        { 'lastPlayed': { '$gt': 0 } }
-      ]
-    }).simplesort('lastPlayed', true).limit(req.body.limit).data();
-
-    const songs = [];
-    for (const row of results) {
-      songs.push(renderMetadataObj(row));
-    }
-
-    res.json(songs);
+    res.json(rows.map(renderMetadataObj));
   });
+
+  // ── Most Played ─────────────────────────────────────────────────────────
 
   mstream.post('/api/v1/db/stats/most-played', (req, res) => {
     const schema = Joi.object({
@@ -465,157 +400,72 @@ export function setup(mstream) {
     });
     joiValidate(schema, req.body);
 
-    if (!db.getFileCollection()) { throw new Error('DB Not Ready'); }
+    if (!req.user?.id) { return res.json([]); }
+    const filter = libraryFilter(req.user);
 
-    const mapFun = (left, right) => {
-      return {
-        artist: right.artist,
-        album: right.album,
-        hash: right.hash,
-        track: right.track,
-        title: right.title,
-        year: right.year,
-        aaFile: right.aaFile,
-        filepath: right.filepath,
-        rating: left.rating,
-        lastPlayed: left.lp,
-        playCount: left.pc,
-        "replaygain-track-db": right.replaygainTrackDb,
-        vpath: right.vpath
-      };
-    };
+    const rows = d().prepare(`
+      ${trackQuery(req.user.id)}
+      WHERE um.play_count > 0 AND ${filter.clause}
+      ORDER BY um.play_count DESC
+      LIMIT ?
+    `).all(req.user.id, ...filter.params, req.body.limit);
 
-    const leftFun = (leftData) => {
-      return leftData.hash + '-' + leftData.user;
-    };
-
-    const rightFun = (rightData) => {
-      return rightData.hash + '-' + req.user.username;
-    };
-
-    const results = db.getUserMetadataCollection().chain().eqJoin(db.getFileCollection().chain(), leftFun, rightFun, mapFun).find({
-      '$and': [
-        renderOrClause(req.user.vpaths, req.body.ignoreVPaths),
-        { 'playCount': { '$gt': 0 } }
-      ]
-    }).simplesort('playCount', true).limit(req.body.limit).data();
-
-    const songs = [];
-    for (const row of results) {
-      songs.push(renderMetadataObj(row));
-    }
-
-    res.json(songs);
+    res.json(rows.map(renderMetadataObj));
   });
+
+  // ── Random Songs (Auto DJ) ──────────────────────────────────────────────
 
   mstream.post('/api/v1/db/random-songs', (req, res) => {
-    if (!db.getFileDbName()) { throw new Error('No DB'); };
+    const filter = libraryFilter(req.user);
+    const conditions = [filter.clause];
+    const params = [...(req.user?.id ? [req.user.id] : []), ...filter.params];
 
-    // Ignore list
-    let ignoreList = [];
-    if (req.body.ignoreList && Array.isArray(req.body.ignoreList)) {
-      ignoreList = req.body.ignoreList;
+    if (req.body.minRating && Number(req.body.minRating) > 0) {
+      conditions.push('um.rating >= ?');
+      params.push(Number(req.body.minRating));
     }
 
-    let ignorePercentage = .5;
-    if (req.body.ignorePercentage && typeof req.body.ignorePercentage === 'number' && req.body.ignorePercentage < 1 && !req.body.ignorePercentage < 0) {
-      ignorePercentage = req.body.ignorePercentage;
-    }
+    const row = d().prepare(`
+      ${trackQuery(req.user?.id)}
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY RANDOM()
+      LIMIT 1
+    `).get(...params);
 
-    let orClause = { '$or': [] };
-    for (const vpathItem of req.user.vpaths) {
-      if (req.body.ignoreVPaths && typeof req.body.ignoreVPaths === 'object' && req.body.ignoreVPaths.includes(vpathItem)) {
-        continue;
-      }
-      orClause['$or'].push({ 'vpath': { '$eq': vpathItem } });
-    }
+    if (!row) { throw new WebError('No songs that match criteria', 400); }
 
-    const minRating = Number(req.body.minRating);
-    // Add Rating clause
-    if (minRating && typeof minRating === 'number' && minRating <= 10 && !minRating < 1) {
-      orClause = {'$and': [
-        orClause,
-        { 'rating': { '$gte': req.body.minRating } }
-      ]};
-    }
-
-    const leftFun = (leftData) => {
-      return leftData.hash + '-' + req.user.username;
-    };
-
-    const results = db.getFileCollection().chain().eqJoin(db.getUserMetadataCollection().chain(), leftFun, rightFunDefault, mapFunDefault).find(orClause).data();
-
-    const count = results.length;
-    if (count === 0) { throw new WebError('No songs that match criteria', 400); }
-    while (ignoreList.length > count * ignorePercentage) {
-      ignoreList.shift();
-    }
-
-    const returnThis = { songs: [], ignoreList: [] };
-    let randomNumber = Math.floor(Math.random() * count);
-    while (ignoreList.indexOf(randomNumber) > -1) {
-      randomNumber = Math.floor(Math.random() * count);
-    }
-
-    const randomSong = results[randomNumber];
-    returnThis.songs.push(renderMetadataObj(randomSong));
-    ignoreList.push(randomNumber);
-    returnThis.ignoreList = ignoreList;
-
-    res.json(returnThis);
+    res.json({
+      songs: [renderMetadataObj(row)],
+      ignoreList: req.body.ignoreList || []
+    });
   });
+
+  // ── Load Playlist (with metadata) ───────────────────────────────────────
 
   mstream.post('/api/v1/playlist/load', (req, res) => {
-    if (!db.getPlaylistCollection()){ throw new Error('No DB'); }
-    if (!db.getFileDbName()){ throw new Error('No DB'); }
-
     const playlist = String(req.body.playlistname);
+
+    const playlistRow = d().prepare(
+      'SELECT id FROM playlists WHERE name = ? AND user_id = ?'
+    ).get(playlist, req.user.id);
+
+    if (!playlistRow) { return res.json([]); }
+
+    const tracks = d().prepare(
+      'SELECT id, filepath, position FROM playlist_tracks WHERE playlist_id = ? ORDER BY position'
+    ).all(playlistRow.id);
+
     const returnThis = [];
-
-    const results = db.getPlaylistCollection().find({
-      '$and': [
-        { 'user': { '$eq': req.user.username }},
-        { 'name': { '$eq': playlist }},
-        { 'filepath': { '$ne': null }},
-      ]
-    });
-
-    const leftFun = (leftData) => {
-      return leftData.hash + '-' + req.user.username;
-    };
-
-    for (const row of results) {
-      // Look up metadata
-      let pathInfo;
-      try {
-        pathInfo = vpath.getVPathInfo(row.filepath, req.user);
-      } catch (_err) { continue; }
-
-      const result = db.getFileCollection().chain().find({ '$and': [{'filepath': pathInfo.relativePath}, { 'vpath': pathInfo.vpath }] }, true)
-        .eqJoin(db.getUserMetadataCollection().chain(), leftFun, rightFunDefault, mapFunDefault).data();
-
+    for (const pt of tracks) {
       let metadata = {};
-      if (result && result[0]) {
-        metadata = {
-          "artist": result[0].artist ? result[0].artist : null,
-          "hash": result[0].hash ? result[0].hash : null,
-          "album": result[0].album ? result[0].album : null,
-          "track": result[0].track ? result[0].track : null,
-          "title": result[0].title ? result[0].title : null,
-          "year": result[0].year ? result[0].year : null,
-          "album-art": result[0].aaFile ? result[0].aaFile : null,
-          "rating": result[0].rating ? result[0].rating : null,
-          "replaygain-track-db": result[0]['replaygain-track-db'] ? result[0]['replaygain-track-db'] : null
-        };
-      }
+      try {
+        const result = pullMetaData(pt.filepath, req.user);
+        if (result.metadata) { metadata = result.metadata; }
+      } catch (_e) {}
 
-      returnThis.push({ lokiId: row['$loki'], filepath: row.filepath, metadata: metadata });
+      returnThis.push({ id: pt.id, filepath: pt.filepath, metadata });
     }
 
     res.json(returnThis);
   });
-
-  // mstream.post('/api/v1/db/song-position', (req, res) => {
-
-  // });
 }

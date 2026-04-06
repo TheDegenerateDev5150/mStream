@@ -72,7 +72,12 @@ export function setup(mstream) {
   });
 
   mstream.get("/api/v1/admin/directories", (req, res) => {
-    res.json(config.program.folders);
+    const libraries = db.getAllLibraries();
+    const result = {};
+    for (const lib of libraries) {
+      result[lib.name] = { root: lib.root_path, type: lib.type };
+    }
+    res.json(result);
   });
 
   mstream.get("/api/v1/admin/db/params", (req, res) => {
@@ -89,16 +94,6 @@ export function setup(mstream) {
     res.json({});
   });
 
-  mstream.post("/api/v1/admin/db/params/save-interval", async (req, res) => {
-    const schema = Joi.object({
-      saveInterval: Joi.number().integer().min(0).required()
-    });
-    joiValidate(schema, req.body);
-
-    await admin.editSaveInterval(req.body.saveInterval);
-    res.json({});
-  });
-
   mstream.post("/api/v1/admin/db/params/skip-img", async (req, res) => {
     const schema = Joi.object({
       skipImg: Joi.boolean().required()
@@ -106,16 +101,6 @@ export function setup(mstream) {
     joiValidate(schema, req.body);
 
     await admin.editSkipImg(req.body.skipImg);
-    res.json({});
-  });
-
-  mstream.post("/api/v1/admin/db/params/pause", async (req, res) => {
-    const schema = Joi.object({
-      pause:  Joi.number().integer().min(0).required()
-    });
-    joiValidate(schema, req.body);
-
-    await admin.editPause(req.body.pause);
     res.json({});
   });
 
@@ -149,26 +134,63 @@ export function setup(mstream) {
     res.json({});
   });
 
-  mstream.post("/api/v1/admin/db/params/rust-parser", async (req, res) => {
+  mstream.post("/api/v1/admin/db/params/scan-batch-size", async (req, res) => {
     const schema = Joi.object({
-      rustParser: Joi.boolean().required()
+      scanBatchSize: Joi.number().integer().min(1).required()
     });
     joiValidate(schema, req.body);
 
-    await admin.editRustParser(req.body.rustParser);
+    await admin.editScanBatchSize(req.body.scanBatchSize);
+    res.json({});
+  });
+
+  mstream.post("/api/v1/admin/db/params/auto-album-art", async (req, res) => {
+    const schema = Joi.object({ autoAlbumArt: Joi.boolean().required() });
+    joiValidate(schema, req.body);
+    await admin.editAutoAlbumArt(req.body.autoAlbumArt);
+    res.json({});
+  });
+
+  mstream.post("/api/v1/admin/db/params/album-art-write-to-folder", async (req, res) => {
+    const schema = Joi.object({ albumArtWriteToFolder: Joi.boolean().required() });
+    joiValidate(schema, req.body);
+    await admin.editAlbumArtWriteToFolder(req.body.albumArtWriteToFolder);
+    res.json({});
+  });
+
+  mstream.post("/api/v1/admin/db/params/album-art-write-to-file", async (req, res) => {
+    const schema = Joi.object({ albumArtWriteToFile: Joi.boolean().required() });
+    joiValidate(schema, req.body);
+    await admin.editAlbumArtWriteToFile(req.body.albumArtWriteToFile);
+    res.json({});
+  });
+
+  mstream.post("/api/v1/admin/db/params/album-art-services", async (req, res) => {
+    const schema = Joi.object({
+      albumArtServices: Joi.array().items(
+        Joi.string().valid('musicbrainz', 'itunes', 'deezer')
+      ).required()
+    });
+    joiValidate(schema, req.body);
+    await admin.editAlbumArtServices(req.body.albumArtServices);
     res.json({});
   });
 
   mstream.get("/api/v1/admin/users", (req, res) => {
-    // Scrub passwords
-    const memClone = JSON.parse(JSON.stringify(config.program.users));
-    Object.keys(memClone).forEach(key => {
-      if(key === 'password' || key === 'salt') {
-        delete memClone[key];
-      }
-    });
-
-    res.json(memClone);
+    const users = db.getAllUsers();
+    const result = {};
+    for (const user of users) {
+      const libIds = db.getUserLibraryIds(user);
+      const libraries = db.getAllLibraries().filter(l => libIds.includes(l.id));
+      result[user.username] = {
+        admin: user.is_admin === 1,
+        vpaths: libraries.map(l => l.name),
+        allowMkdir: user.allow_mkdir === 1,
+        allowUpload: user.allow_upload === 1,
+        allowFileModify: user.allow_file_modify === 1
+      };
+    }
+    res.json(result);
   });
 
   mstream.put("/api/v1/admin/directory", async (req, res) => {
@@ -237,16 +259,9 @@ export function setup(mstream) {
   });
 
   mstream.get("/api/v1/admin/db/scan/stats", (req, res) => {
-    let total = 0;
-    if (db.getFileCollection()) {
-      for (const vpathItem of Object.keys(config.program.folders)) {
-        total += db.getFileCollection().count({ 'vpath': vpathItem })
-      }
-    }
-
-    res.json({
-      fileCount: total
-    });
+    const d = db.getDB();
+    const row = d ? d.prepare('SELECT COUNT(*) AS total FROM tracks').get() : { total: 0 };
+    res.json({ fileCount: row.total });
   });
 
   mstream.delete("/api/v1/admin/users", async (req, res) => {
@@ -298,11 +313,12 @@ export function setup(mstream) {
       username: Joi.string().required(),
       admin: Joi.boolean().required(),
       allowMkdir: Joi.boolean().required(),
-      allowUpload: Joi.boolean().required()
+      allowUpload: Joi.boolean().required(),
+      allowFileModify: Joi.boolean().optional().default(true)
     });
     joiValidate(schema, req.body);
 
-    await admin.editUserAccess(req.body.username, req.body.admin, req.body.allowMkdir, req.body.allowUpload);
+    await admin.editUserAccess(req.body.username, req.body.admin, req.body.allowMkdir, req.body.allowUpload, req.body.allowFileModify);
     res.json({});
   });
 
@@ -312,6 +328,7 @@ export function setup(mstream) {
       port: config.program.port,
       noUpload: config.program.noUpload,
       noMkdir: config.program.noMkdir,
+      noFileModify: config.program.noFileModify,
       writeLogs: config.program.writeLogs,
       secret: config.program.secret.slice(-4),
       ssl: config.program.ssl,
@@ -369,6 +386,16 @@ export function setup(mstream) {
     joiValidate(schema, req.body);
 
     await admin.editMkdir(req.body.noMkdir);
+    res.json({});
+  });
+
+  mstream.post("/api/v1/admin/config/nofilemodify", async (req, res) => {
+    const schema = Joi.object({
+      noFileModify: Joi.boolean().required()
+    });
+    joiValidate(schema, req.body);
+
+    await admin.editFileModify(req.body.noFileModify);
     res.json({});
   });
 
@@ -488,28 +515,26 @@ export function setup(mstream) {
   });
 
   mstream.get("/api/v1/admin/db/shared", (req, res) => {
-    res.json(db.getShareCollection().find());
+    const d = db.getDB();
+    res.json(d.prepare('SELECT * FROM shared_playlists').all());
   });
 
   mstream.delete("/api/v1/admin/db/shared", (req, res) => {
     const schema = Joi.object({ id: Joi.string().required() });
     joiValidate(schema, req.body);
 
-    db.getShareCollection().findAndRemove({ 'playlistId': { '$eq': req.body.id } });
-    db.saveShareDB();
+    db.getDB().prepare('DELETE FROM shared_playlists WHERE share_id = ?').run(req.body.id);
     res.json({});
   });
 
   mstream.delete("/api/v1/admin/db/shared/expired", (req, res) => {
-    db.getShareCollection().findAndRemove({ 'expires': { '$lt': Math.floor(Date.now() / 1000) } });
-    db.saveShareDB();
+    const now = Math.floor(Date.now() / 1000);
+    db.getDB().prepare('DELETE FROM shared_playlists WHERE expires IS NOT NULL AND expires < ?').run(now);
     res.json({});
   });
 
   mstream.delete("/api/v1/admin/db/shared/eternal", (req, res) => {
-    db.getShareCollection().findAndRemove({ 'expires': { '$eq': null } });
-    db.getShareCollection().findAndRemove({ 'expires': { '$exists': false } });
-    db.saveShareDB();
+    db.getDB().prepare('DELETE FROM shared_playlists WHERE expires IS NULL').run();
     res.json({});
   });
 

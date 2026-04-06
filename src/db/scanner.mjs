@@ -1,220 +1,176 @@
+// mStream File Scanner
+// Scans a directory for audio files and writes metadata directly to SQLite.
+// Spawned as a child process by task-queue.js.
+
 import { parseFile } from 'music-metadata';
+import { DatabaseSync } from 'node:sqlite';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import Joi from 'joi';
 import { Jimp } from 'jimp';
 import mime from 'mime-types';
-import axios from 'axios';
-import https from 'https';
 
-const ax = axios.create({
-  httpsAgent: new https.Agent({  
-    rejectUnauthorized: false
-  })
-});
+// ── Parse CLI input ─────────────────────────────────────────────────────────
 
 let loadJson;
 try {
   loadJson = JSON.parse(process.argv[process.argv.length - 1], 'utf8');
 } catch (_error) {
-  console.error(`Warning: failed to parse JSON input`);
+  console.error('Warning: failed to parse JSON input');
   process.exit(1);
 }
 
-// Validate input
 const schema = Joi.object({
-  vpath: Joi.string().required(),
+  dbPath: Joi.string().required(),
+  libraryId: Joi.number().integer().required(),
   directory: Joi.string().required(),
-  port: Joi.number().port().required(),
-  token: Joi.string().required(),
-  pause: Joi.number().required(),
   skipImg: Joi.boolean().required(),
   albumArtDirectory: Joi.string().required(),
   scanId: Joi.string().required(),
-  isHttps: Joi.boolean().required(),
   compressImage: Joi.boolean().required(),
   supportedFiles: Joi.object().pattern(
     Joi.string(), Joi.boolean()
-  ).required()
+  ).required(),
+  scanBatchSize: Joi.number().integer().min(1).default(100)
 });
 
 const { error: validationError } = schema.validate(loadJson);
 if (validationError) {
-  console.error(`Invalid JSON Input`);
+  console.error('Invalid JSON Input');
   console.log(validationError);
   process.exit(1);
 }
 
-async function insertEntries(song) {
-  const data = {
-    "title": song.title ? String(song.title) : null,
-    "artist": song.artist ? String(song.artist) : null,
-    "year": song.year ? song.year : null,
-    "album": song.album ? String(song.album) : null,
-    "filepath": song.filePath,
-    "format": song.format,
-    "track": song.track.no ? song.track.no : null,
-    "disk": song.disk.no ? song.disk.no : null,
-    "modified": song.modified,
-    "hash": song.hash,
-    "aaFile": song.aaFile ? song.aaFile : null,
-    "vpath": loadJson.vpath,
-    "ts": Math.floor(Date.now() / 1000),
-    "sID": loadJson.scanId,
-    "replaygainTrackDb": song.replaygain_track_gain ? song.replaygain_track_gain.dB : null
-  };
+// ── Open SQLite database ────────────────────────────────────────────────────
 
-  if (song.genre) { data.genre = song.genre };
+const db = new DatabaseSync(loadJson.dbPath);
+db.exec('PRAGMA journal_mode = WAL');
+db.exec('PRAGMA foreign_keys = ON');
 
-  await ax({
-    method: 'POST',
-    url: `http${loadJson.isHttps === true ? 's': ''}://localhost:${loadJson.port}/api/v1/scanner/add-file`,
-    headers: { 'accept': 'application/json', 'x-access-token': loadJson.token },
-    responseType: 'json',
-    data: data
-  });
+// ── Prepared statements ─────────────────────────────────────────────────────
+
+const stmts = {
+  getTrack: db.prepare(
+    'SELECT id, modified FROM tracks WHERE filepath = ? AND library_id = ?'
+  ),
+  updateScanId: db.prepare(
+    'UPDATE tracks SET scan_id = ? WHERE id = ?'
+  ),
+  findArtist: db.prepare(
+    'SELECT id FROM artists WHERE name = ?'
+  ),
+  insertArtist: db.prepare(
+    'INSERT INTO artists (name) VALUES (?)'
+  ),
+  findAlbum: db.prepare(
+    'SELECT id FROM albums WHERE name = ? AND artist_id IS ? AND year IS ?'
+  ),
+  insertAlbum: db.prepare(
+    'INSERT INTO albums (name, artist_id, year, album_art_file) VALUES (?, ?, ?, ?)'
+  ),
+  updateAlbumArt: db.prepare(
+    'UPDATE albums SET album_art_file = ? WHERE id = ? AND album_art_file IS NULL'
+  ),
+  insertTrack: db.prepare(
+    `INSERT OR REPLACE INTO tracks (filepath, library_id, title, artist_id, album_id, track_number,
+     disc_number, year, format, file_hash, album_art_file, genre, replaygain_track_db,
+     modified, scan_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ),
+  deleteOldTracks: db.prepare(
+    'DELETE FROM tracks WHERE library_id = ? AND scan_id != ?'
+  ),
+  findGenre: db.prepare(
+    'SELECT id FROM genres WHERE name = ?'
+  ),
+  insertGenre: db.prepare(
+    'INSERT INTO genres (name) VALUES (?)'
+  ),
+  insertTrackGenre: db.prepare(
+    'INSERT OR IGNORE INTO track_genres (track_id, genre_id) VALUES (?, ?)'
+  ),
+};
+
+// ── Artist / Album helpers ──────────────────────────────────────────────────
+
+function findOrCreateArtist(name) {
+  if (!name) { return null; }
+  const row = stmts.findArtist.get(name);
+  if (row) { return row.id; }
+  const result = stmts.insertArtist.run(name);
+  return Number(result.lastInsertRowid);
 }
 
-run();
-async function run() {
-  try {
-    await recursiveScan(loadJson.directory);
-
-    await ax({
-      method: 'POST',
-      url: `http${loadJson.isHttps === true ? 's': ''}://localhost:${loadJson.port}/api/v1/scanner/finish-scan`,
-      headers: { 'accept': 'application/json', 'x-access-token': loadJson.token },
-      responseType: 'json',
-      data: {
-        vpath: loadJson.vpath,
-        scanId: loadJson.scanId
-      }
-    });
-  }catch (err) {
-    console.error('Scan Failed');
-    console.error(err.stack)
-  }
-}
-
-async function recursiveScan(dir) {
-  let files;
-  try {
-    files = fs.readdirSync(dir);
-  } catch (_err) {
-    return;
-  }
-
-  for (const file of files) {
-    const filepath = path.join(dir, file);
-    let stat;
-    try {
-      stat = fs.statSync(filepath);
-    } catch (_error) {
-      // Bad file, ignore and continue
-      continue;
+function findOrCreateAlbum(name, artistId, year, albumArtFile) {
+  if (!name) { return null; }
+  const row = stmts.findAlbum.get(name, artistId, year);
+  if (row) {
+    // Update album art if we have it and the album doesn't
+    if (albumArtFile) {
+      stmts.updateAlbumArt.run(albumArtFile, row.id);
     }
+    return row.id;
+  }
+  const result = stmts.insertAlbum.run(name, artistId, year, albumArtFile || null);
+  return Number(result.lastInsertRowid);
+}
 
-    if (stat.isDirectory()) {
-      await recursiveScan(filepath);
-    } else if (stat.isFile()) {
-      try {
-        // Make sure this is in our list of allowed files
-        if (!loadJson.supportedFiles[getFileType(file).toLowerCase()]) {
-          continue;
-        }
-
-        const dbFileInfo = await ax({
-          method: 'POST',
-          url: `http${loadJson.isHttps === true ? 's': ''}://localhost:${loadJson.port}/api/v1/scanner/get-file`,
-          headers: { 'accept': 'application/json', 'x-access-token': loadJson.token },
-          responseType: 'json',
-          data: {
-            filepath: path.relative(loadJson.directory, filepath),
-            vpath: loadJson.vpath,
-            modTime: stat.mtime.getTime(),
-            scanId: loadJson.scanId
-          }
-        });
-
-        if (Object.entries(dbFileInfo.data).length === 0) {
-          const songInfo = await parseMyFile(filepath, stat.mtime.getTime());
-          await insertEntries(songInfo);
-        }
-      } catch (err) {
-        // console.log(err)
-        console.error(`Warning: failed to add file ${filepath} to database: ${err.message}`);
-      }
-
-      // pause
-      if (loadJson.pause) { await timeout(loadJson.pause); }
+function setTrackGenres(trackId, genreStr) {
+  if (!genreStr) { return; }
+  const genres = genreStr.split(/[,;\/]/).map(g => g.trim()).filter(g => g.length > 0);
+  for (const name of genres) {
+    let row = stmts.findGenre.get(name);
+    if (!row) {
+      const result = stmts.insertGenre.run(name);
+      row = { id: Number(result.lastInsertRowid) };
     }
+    stmts.insertTrackGenre.run(trackId, row.id);
   }
 }
 
-function timeout(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function parseMyFile(thisSong, modified) {
-  let songInfo;
-  try {
-    songInfo = (await parseFile(thisSong, { skipCovers: loadJson.skipImg })).common;
-  } catch (err) {
-    console.error(`Warning: metadata parse error on ${thisSong}: ${err.message}`);
-    songInfo = {track: { no: null, of: null }, disk: { no: null, of: null }};
-  }
-
-  songInfo.modified = modified;
-  songInfo.filePath = path.relative(loadJson.directory, thisSong);
-  songInfo.format = getFileType(thisSong);
-  songInfo.hash = await calculateHash(thisSong);
-  await getAlbumArt(songInfo);
-
-  return songInfo;
-}
+// ── File hashing ────────────────────────────────────────────────────────────
 
 function calculateHash(filepath) {
   return new Promise((resolve, reject) => {
     try {
       const hash = crypto.createHash('md5').setEncoding('hex');
       const fileStream = fs.createReadStream(filepath);
-
-      fileStream.on('error', (err) => {
-        reject(err);
-      });
-  
+      fileStream.on('error', (err) => reject(err));
       fileStream.on('end', () => {
         hash.end();
         fileStream.close();
         resolve(hash.read());
       });
-  
       fileStream.pipe(hash);
-    }catch(err) {
+    } catch (err) {
       reject(err);
     }
   });
 }
+
+// ── Album art ───────────────────────────────────────────────────────────────
+
+const mapOfDirectoryAlbumArt = {};
 
 async function getAlbumArt(songInfo) {
   if (loadJson.skipImg === true) { return; }
 
   let originalFileBuffer;
 
-  // picture is stored in song metadata
+  // Check embedded picture
   if (songInfo.picture && songInfo.picture[0]) {
-    // Generate unique name based off hash of album art and metadata
-    const picHashString = crypto.createHash('md5').update(songInfo.picture[0].data.toString('utf-8')).digest('hex');
+    const picHashString = crypto.createHash('md5')
+      .update(songInfo.picture[0].data.toString('utf-8'))
+      .digest('hex');
     songInfo.aaFile = picHashString + '.' + mime.extension(songInfo.picture[0].format);
-    // Check image-cache folder for filename and save if doesn't exist
+
     if (!fs.existsSync(path.join(loadJson.albumArtDirectory, songInfo.aaFile))) {
-      // Save file sync
       fs.writeFileSync(path.join(loadJson.albumArtDirectory, songInfo.aaFile), songInfo.picture[0].data);
       originalFileBuffer = songInfo.picture[0].data;
     }
   } else {
-    originalFileBuffer = await checkDirectoryForAlbumArt(songInfo);
+    originalFileBuffer = checkDirectoryForAlbumArt(songInfo);
   }
 
   if (originalFileBuffer) {
@@ -226,72 +182,50 @@ async function compressAlbumArt(buff, imgName) {
   if (loadJson.compressImage === false) { return; }
 
   const img = await Jimp.fromBuffer(buff);
-  await img.scaleToFit({w:256, h:256}).write(path.join(loadJson.albumArtDirectory, 'zl-' + imgName));
-  await img.scaleToFit({w:92, h:92}).write(path.join(loadJson.albumArtDirectory, 'zs-' + imgName));
+  await img.scaleToFit({ w: 256, h: 256 }).write(path.join(loadJson.albumArtDirectory, 'zl-' + imgName));
+  await img.scaleToFit({ w: 92, h: 92 }).write(path.join(loadJson.albumArtDirectory, 'zs-' + imgName));
 }
 
-const mapOfDirectoryAlbumArt = {};
 function checkDirectoryForAlbumArt(songInfo) {
   const directory = path.join(loadJson.directory, path.dirname(songInfo.filePath));
 
-  // album art has already been found — set aaFile and return nothing
-  // (returning the filename string here would be passed as a Buffer to compressAlbumArt)
   if (mapOfDirectoryAlbumArt[directory]) {
     songInfo.aaFile = mapOfDirectoryAlbumArt[directory];
     return;
   }
-
-  // directory was already scanned and nothing was found
   if (mapOfDirectoryAlbumArt[directory] === false) { return; }
 
-  const imageArray = [];
   let files;
-  try {
-    files = fs.readdirSync(directory);
-  } catch (_err) {
-    return;
-  }
+  try { files = fs.readdirSync(directory); } catch (_err) { return; }
 
+  const imageArray = [];
   for (const file of files) {
     const filepath = path.join(directory, file);
     let stat;
-    try {
-      stat = fs.statSync(filepath);
-    } catch (_error) {
-      // Bad file, ignore and continue
-      continue;
-    }
-
-    if (!stat.isFile()) {
-      continue;
-    }
-
-    if (["png", "jpg"].indexOf(getFileType(file)) === -1) {
-      continue;
-    }
-
+    try { stat = fs.statSync(filepath); } catch (_e) { continue; }
+    if (!stat.isFile()) { continue; }
+    if (!['png', 'jpg'].includes(getFileType(file))) { continue; }
     imageArray.push(file);
   }
 
   if (imageArray.length === 0) {
-    return mapOfDirectoryAlbumArt[directory] = false;
+    mapOfDirectoryAlbumArt[directory] = false;
+    return;
   }
 
   let imageBuffer;
   let picFormat;
   let newFileFlag = false;
 
-  // Search for a named file
   for (let i = 0; i < imageArray.length; i++) {
     const imgMod = imageArray[i].toLowerCase();
-    if (imgMod === 'folder.jpg' || imgMod === 'cover.jpg' || imgMod === 'album.jpg' || imgMod === 'folder.png' || imgMod === 'cover.png' || imgMod === 'album.png') {
+    if (['folder.jpg', 'cover.jpg', 'album.jpg', 'folder.png', 'cover.png', 'album.png'].includes(imgMod)) {
       imageBuffer = fs.readFileSync(path.join(directory, imageArray[i]));
       picFormat = getFileType(imageArray[i]);
       break;
     }
   }
-  
-  // default to first file if none are named
+
   if (!imageBuffer) {
     imageBuffer = fs.readFileSync(path.join(directory, imageArray[0]));
     picFormat = getFileType(imageArray[0]);
@@ -299,18 +233,150 @@ function checkDirectoryForAlbumArt(songInfo) {
 
   const picHashString = crypto.createHash('md5').update(imageBuffer.toString('utf8')).digest('hex');
   songInfo.aaFile = picHashString + '.' + picFormat;
-  // Check image-cache folder for filename and save if doesn't exist
+
   if (!fs.existsSync(path.join(loadJson.albumArtDirectory, songInfo.aaFile))) {
-    // Save file sync
     fs.writeFileSync(path.join(loadJson.albumArtDirectory, songInfo.aaFile), imageBuffer);
     newFileFlag = true;
   }
 
   mapOfDirectoryAlbumArt[directory] = songInfo.aaFile;
-
   if (newFileFlag === true) { return imageBuffer; }
 }
 
 function getFileType(filename) {
-  return filename.split(".").pop();
+  return filename.split('.').pop();
 }
+
+// ── Parse a single file ─────────────────────────────────────────────────────
+
+async function parseMyFile(absolutePath, modified) {
+  let songInfo;
+  try {
+    songInfo = (await parseFile(absolutePath, { skipCovers: loadJson.skipImg })).common;
+  } catch (err) {
+    console.error(`Warning: metadata parse error on ${absolutePath}: ${err.message}`);
+    songInfo = { track: { no: null, of: null }, disk: { no: null, of: null } };
+  }
+
+  songInfo.modified = modified;
+  songInfo.filePath = path.relative(loadJson.directory, absolutePath).replace(/\\/g, '/');
+  songInfo.format = getFileType(absolutePath);
+  songInfo.hash = await calculateHash(absolutePath);
+  await getAlbumArt(songInfo);
+
+  return songInfo;
+}
+
+// ── Insert a track into the database ────────────────────────────────────────
+
+function insertTrack(song) {
+  const artistId = findOrCreateArtist(song.artist ? String(song.artist) : null);
+  const albumId = findOrCreateAlbum(
+    song.album ? String(song.album) : null,
+    artistId,
+    song.year || null,
+    song.aaFile || null
+  );
+
+  const result = stmts.insertTrack.run(
+    song.filePath,
+    loadJson.libraryId,
+    song.title ? String(song.title) : null,
+    artistId,
+    albumId,
+    song.track?.no || null,
+    song.disk?.no || null,
+    song.year || null,
+    song.format,
+    song.hash,
+    song.aaFile || null,
+    song.genre || null,
+    song.replaygain_track_gain?.dB || null,
+    song.modified,
+    loadJson.scanId
+  );
+
+  setTrackGenres(Number(result.lastInsertRowid), song.genre);
+}
+
+// ── Recursive directory scan ────────────────────────────────────────────────
+
+let fileCount = 0;
+let batchCount = 0;
+const BATCH_SIZE = loadJson.scanBatchSize || 100;
+
+async function recursiveScan(dir) {
+  let files;
+  try { files = fs.readdirSync(dir); } catch (_err) { return; }
+
+  for (const file of files) {
+    const filepath = path.join(dir, file);
+    let stat;
+    try { stat = fs.statSync(filepath); } catch (_e) { continue; }
+
+    if (stat.isDirectory()) {
+      await recursiveScan(filepath);
+    } else if (stat.isFile()) {
+      try {
+        if (!loadJson.supportedFiles[getFileType(file).toLowerCase()]) {
+          continue;
+        }
+
+        const relativePath = path.relative(loadJson.directory, filepath).replace(/\\/g, '/');
+        const existing = stmts.getTrack.get(relativePath, loadJson.libraryId);
+
+        if (existing && existing.modified === stat.mtime.getTime()) {
+          // File unchanged — just update the scan ID
+          stmts.updateScanId.run(loadJson.scanId, existing.id);
+        } else {
+          // New or modified file — parse and insert
+          if (existing) {
+            // Delete old record (will be re-inserted with fresh metadata)
+            db.prepare('DELETE FROM tracks WHERE id = ?').run(existing.id);
+          }
+          const songInfo = await parseMyFile(filepath, stat.mtime.getTime());
+          insertTrack(songInfo);
+          fileCount++;
+          batchCount++;
+          if (batchCount >= BATCH_SIZE) {
+            db.exec('COMMIT; BEGIN');
+            batchCount = 0;
+          }
+        }
+      } catch (err) {
+        console.error(`Warning: failed to process ${filepath}: ${err.message}`);
+      }
+    }
+  }
+}
+
+// ── Main ────────────────────────────────────────────────────────────────────
+
+async function run() {
+  try {
+    console.log(`Scanning ${loadJson.directory}...`);
+
+    // Use explicit transactions for batch performance.
+    // Without this, SQLite does a disk fsync per INSERT (~50 files/sec).
+    // With transactions, it batches fsyncs (~5000+ files/sec).
+    db.exec('BEGIN');
+    await recursiveScan(loadJson.directory);
+    db.exec('COMMIT');
+
+    // Remove tracks that weren't seen in this scan (deleted files)
+    const deleted = stmts.deleteOldTracks.run(loadJson.libraryId, loadJson.scanId);
+    console.log(`Scan complete: ${fileCount} files processed, ${deleted.changes} stale entries removed`);
+
+    // Clean up orphaned artists, albums, and genres (no tracks reference them)
+    db.exec('DELETE FROM albums WHERE id NOT IN (SELECT DISTINCT album_id FROM tracks WHERE album_id IS NOT NULL)');
+    db.exec('DELETE FROM artists WHERE id NOT IN (SELECT DISTINCT artist_id FROM tracks WHERE artist_id IS NOT NULL) AND id NOT IN (SELECT DISTINCT artist_id FROM albums WHERE artist_id IS NOT NULL)');
+    db.exec('DELETE FROM genres WHERE id NOT IN (SELECT DISTINCT genre_id FROM track_genres)');
+  } catch (err) {
+    console.error('Scan failed');
+    console.error(err.stack);
+  } finally {
+    db.close();
+  }
+}
+
+run();

@@ -2,13 +2,13 @@ import commandExists from "command-exists";
 import { spawn } from "child_process";
 import winston from "winston";
 import Joi from 'joi';
-import ffbinaries from 'ffbinaries';
 import path from 'path';
 import * as config from '../state/config.js';
 import * as transcode from './transcode.js';
 import { joiValidate } from '../util/validation.js';
 import * as vpath from '../util/vpath.js';
 import * as db from '../db/manager.js';
+import { ffmpegBin } from '../util/ffmpeg-bootstrap.js';
 import { parseFile } from 'music-metadata';
 import { Jimp } from 'jimp';
 import mime from 'mime-types';
@@ -16,7 +16,6 @@ import crypto from 'crypto';
 import fs from 'fs/promises';
 
 const downloadTracker = new Map();
-const platform = ffbinaries.detectPlatform();
 
 const youtubeUrlSchema = Joi.string().uri({ scheme: ['http', 'https'] }).required().custom((value) => {
   const parsed = new URL(value);
@@ -103,7 +102,7 @@ export function setup(mstream) {
     value.url = sanitizeYoutubeUrl(value.url);
 
     // Pass in ffmpeg directory
-    const ffmpegPath = path.join(config.program.transcode.ffmpegDirectory, ffbinaries.getBinaryFilename("ffmpeg", platform));
+    const ffmpegPath = ffmpegBin();
 
     try {
       const exists = await commandExists('yt-dlp')
@@ -376,8 +375,23 @@ export function setup(mstream) {
           }
         }
 
-        db.getFileCollection().insert(data);
-        db.saveFilesDB();
+        // Insert into SQLite
+        const d = db.getDB();
+        const lib = db.getLibraryByName(data.vpath);
+        if (d && lib) {
+          const artistId = db.findOrCreateArtist(data.artist);
+          const albumId = db.findOrCreateAlbum(data.album, artistId, data.year);
+          d.prepare(
+            `INSERT OR REPLACE INTO tracks (filepath, library_id, title, artist_id, album_id, track_number,
+             disc_number, year, format, file_hash, album_art_file, genre, replaygain_track_db,
+             modified, scan_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ).run(
+            data.filepath, lib.id, data.title || null, artistId, albumId,
+            data.track, data.disk, data.year, data.format, data.hash,
+            data.aaFile, data.genre || null, data.replaygainTrackDb, data.modified, 'ytdl'
+          );
+        }
         winston.info(`yt-dlp: added ${relativePath} to database`);
 
         if (entry) {

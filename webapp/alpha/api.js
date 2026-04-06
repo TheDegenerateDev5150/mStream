@@ -91,6 +91,26 @@ const MSTREAMAPI = (() => {
     return req('POST', mstreamModule.currentServer.host + "api/v1/db/album-songs", postObject);
   }
 
+  mstreamModule.genres = (postObject) => {
+    return req('POST', mstreamModule.currentServer.host + 'api/v1/db/genres', postObject || {});
+  }
+
+  mstreamModule.genreSongs = (postObject) => {
+    return req('POST', mstreamModule.currentServer.host + 'api/v1/db/genre-songs', postObject);
+  }
+
+  mstreamModule.searchAlbumArt = (postObject) => {
+    return req('POST', mstreamModule.currentServer.host + 'api/v1/album-art/search', postObject);
+  }
+
+  mstreamModule.setAlbumArtFromUrl = (postObject) => {
+    return req('POST', mstreamModule.currentServer.host + 'api/v1/album-art/set-from-url', postObject);
+  }
+
+  mstreamModule.uploadAlbumArt = (postObject) => {
+    return req('POST', mstreamModule.currentServer.host + 'api/v1/album-art/upload', postObject);
+  }
+
   mstreamModule.dbStatus =  () => {
     return req('GET', mstreamModule.currentServer.host + "api/v1/db/status", false);
   }

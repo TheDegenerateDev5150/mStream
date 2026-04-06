@@ -24,9 +24,10 @@ import * as transode from './api/transcode.js';
 import * as dbManager from './db/manager.js';
 import * as syncthing from './state/syncthing.js';
 import * as federationApi from './api/federation.js';
-import * as scannerApi from './api/scanner.js';
+// scanner.js removed — parser now writes directly to SQLite
 import * as ytdlApi from './api/ytdl.js';
 import * as serverPlaybackApi from './api/server-playback.js';
+import * as albumArtApi from './api/album-art.js';
 import WebError from './util/web-error.js';
 import { sanitizeFilename } from './util/validation.js';
 
@@ -84,7 +85,7 @@ export async function serveIt(configFile) {
   });
 
   // Setup DB
-  dbManager.initLoki();
+  dbManager.initDB();
 
   // remove trailing slashes, needed for relative URLs on the webapp
   mstream.get('{*path}', (req, res, next) => {
@@ -108,7 +109,7 @@ export async function serveIt(configFile) {
     if (config.program.lockAdmin === true) {
       return res.send('<p>Admin Page Disabled</p>');
     }
-    if (Object.keys(config.program.users).length === 0) {
+    if (dbManager.getAllUsers().length === 0) {
       return next();
     }
 
@@ -128,7 +129,7 @@ export async function serveIt(configFile) {
   });
 
   mstream.get('/', (req, res, next) => {
-    if (Object.keys(config.program.users).length === 0) {
+    if (dbManager.getAllUsers().length === 0) {
       return next();
     }
 
@@ -141,7 +142,7 @@ export async function serveIt(configFile) {
   });
 
   mstream.get('/login', (req, res, next) => {
-    if (Object.keys(config.program.users).length === 0) {
+    if (dbManager.getAllUsers().length === 0) {
       return res.redirect(302, '..');
     }
 
@@ -166,7 +167,6 @@ export async function serveIt(configFile) {
   // Everything below this line requires authentication
   authApi.setup(mstream);
 
-  scannerApi.setup(mstream);
   adminApi.setup(mstream);
   dbApi.setup(mstream);
   playlistApi.setup(mstream);
@@ -179,6 +179,7 @@ export async function serveIt(configFile) {
   syncthing.setup();
   federationApi.setup(mstream);
   ytdlApi.setup(mstream);
+  albumArtApi.setup(mstream);
   serverPlaybackApi.setup(mstream);
 
   // Versioned APIs
@@ -206,12 +207,13 @@ export async function serveIt(configFile) {
   //   next();
   // });
 
-  Object.keys(config.program.folders).forEach(key => {
+  // Mount media directories from database libraries
+  for (const lib of dbManager.getAllLibraries()) {
     mstream.use(
-      '/media/' + key + '/',
-      express.static(config.program.folders[key].root)
+      '/media/' + lib.name + '/',
+      express.static(lib.root_path)
     );
-  });
+  }
 
   // error handling
   mstream.use((error, req, res, _next) => {
