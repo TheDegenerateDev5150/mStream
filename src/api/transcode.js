@@ -6,9 +6,9 @@ import * as config from '../state/config.js';
 import { ensureFfmpeg, ffmpegBin, startAutoUpdate, stopAutoUpdate } from '../util/ffmpeg-bootstrap.js';
 
 const codecMap = {
-  'mp3':  { codec: 'libmp3lame', contentType: 'audio/mpeg' },
-  'opus': { codec: 'libopus',    contentType: 'audio/ogg' },
-  'aac':  { codec: 'aac',        contentType: 'audio/aac' }
+  'mp3':  { codec: 'libmp3lame', format: 'mp3',  contentType: 'audio/mpeg' },
+  'opus': { codec: 'libopus',    format: 'ogg',  contentType: 'audio/ogg' },
+  'aac':  { codec: 'aac',        format: 'adts', contentType: 'audio/aac' }
 };
 
 const algoSet = new Set(['buffer', 'stream']);
@@ -60,11 +60,12 @@ export async function downloadedFFmpeg() {
 // Spawn ffmpeg and return a readable stream of the transcoded audio.
 // Command: ffmpeg -i <input> -vn -f <format> -acodec <codec> -ab <bitrate> pipe:1
 function spawnTranscode(inputPath, codec, bitrate) {
+  const entry = codecMap[codec];
   const args = [
     '-i', inputPath,
     '-vn',                          // no video
-    '-f', codec,                    // output format
-    '-acodec', codecMap[codec].codec, // audio codec
+    '-f', entry.format,             // output container format
+    '-acodec', entry.codec,         // audio codec
     '-ab', bitrate,                 // audio bitrate
     'pipe:1'                        // output to stdout
   ];
@@ -110,7 +111,9 @@ export function setup(mstream) {
     const algo = algoSet.has(req.query.algo) ? req.query.algo : config.program.transcode.algorithm;
     const bitrate = bitrateSet.has(req.query.bitrate) ? req.query.bitrate : config.program.transcode.defaultBitrate;
 
-    const pathInfo = vpath.getVPathInfo(req.params.filepath, req.user);
+    // Express 5 {*filepath} returns an array of segments — join back to a path string
+    const filepath = Array.isArray(req.params.filepath) ? req.params.filepath.join('/') : req.params.filepath;
+    const pathInfo = vpath.getVPathInfo(filepath, req.user);
 
     if (req.method === 'GET') {
       // Check cache
