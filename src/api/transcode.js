@@ -1,8 +1,9 @@
 import { spawn } from 'child_process';
-import { PassThrough, Readable } from 'stream';
+import { Readable } from 'stream';
 import winston from 'winston';
 import * as vpath from '../util/vpath.js';
 import * as config from '../state/config.js';
+import * as db from '../db/manager.js';
 import { ensureFfmpeg, ffmpegBin, startAutoUpdate, stopAutoUpdate } from '../util/ffmpeg-bootstrap.js';
 
 const codecMap = {
@@ -11,10 +12,9 @@ const codecMap = {
   'aac':  { codec: 'aac',        format: 'adts', contentType: 'audio/aac' }
 };
 
-const algoSet = new Set(['buffer', 'stream']);
-const bitrateSet = new Set(['64k', '128k', '192k', '96k']);
+const bitrateSet = new Set(['64k', '96k', '128k', '192k']);
 
-export function getTransAlgos() { return Array.from(algoSet); }
+export function getTransAlgos() { return ['buffer', 'stream']; } // kept for config schema compat
 export function getTransBitrates() { return Array.from(bitrateSet); }
 export function getTransCodecs() { return Object.keys(codecMap); }
 
@@ -57,8 +57,32 @@ export async function downloadedFFmpeg() {
   await init();
 }
 
-// Spawn ffmpeg and return a readable stream of the transcoded audio.
-// Command: ffmpeg -i <input> -vn -f <format> -acodec <codec> -ab <bitrate> pipe:1
+// ── Transcode cache ─────────────────────────────────────────────────────────
+// Two-phase: strong reference for (song length + 2 min), then moved to weak.
+// Only one copy in memory at a time. GC can reclaim weak entries under pressure.
+
+const strongRefs = new Map();
+const weakRefs = {};
+
+function cacheGet(key) {
+  const strong = strongRefs.get(key);
+  if (strong) return strong;
+  const weak = weakRefs[key]?.deref();
+  if (!weak) delete weakRefs[key];
+  return weak || null;
+}
+
+function cacheSet(key, entry, durationSec) {
+  strongRefs.set(key, entry);
+  const holdMs = (durationSec * 1000) + 120000; // song length + 2 minutes
+  setTimeout(() => {
+    strongRefs.delete(key);
+    weakRefs[key] = new WeakRef(entry);
+  }, holdMs);
+}
+
+// ── Spawn ffmpeg ────────────────────────────────────────────────────────────
+
 function spawnTranscode(inputPath, codec, bitrate) {
   const entry = codecMap[codec];
   const args = [
@@ -74,22 +98,16 @@ function spawnTranscode(inputPath, codec, bitrate) {
     stdio: ['ignore', 'pipe', 'pipe']
   });
 
-  proc.stderr.on('data', () => {}); // suppress ffmpeg stderr output
+  proc.stderr.on('data', () => {}); // suppress ffmpeg stderr
 
   proc.on('error', err => {
     winston.error('Transcoding spawn error', { stack: err });
   });
 
-  proc.on('close', code => {
-    if (code !== 0 && code !== null) {
-      winston.error(`FFmpeg exited with code ${code} for ${inputPath}`);
-    }
-  });
-
-  return proc.stdout;
+  return proc;
 }
 
-const transCache = {};
+// ── Route ───────────────────────────────────────────────────────────────────
 
 export function setup(mstream) {
   if (config.program.transcode.enabled === true) {
@@ -98,72 +116,89 @@ export function setup(mstream) {
     });
   }
 
-  mstream.all("/transcode/{*filepath}", (req, res) => {
+  mstream.get("/transcode/{*filepath}", (req, res) => {
     if (!config.program.transcode || config.program.transcode.enabled !== true) {
       return res.status(500).json({ error: 'transcoding disabled' });
     }
-
     if (lockInit !== true) {
       return res.status(500).json({ error: 'transcoding disabled' });
     }
 
     const codec = codecMap[req.query.codec] ? req.query.codec : config.program.transcode.defaultCodec;
-    const algo = algoSet.has(req.query.algo) ? req.query.algo : config.program.transcode.algorithm;
     const bitrate = bitrateSet.has(req.query.bitrate) ? req.query.bitrate : config.program.transcode.defaultBitrate;
 
-    // Express 5 {*filepath} returns an array of segments — join back to a path string
-    const filepath = Array.isArray(req.params.filepath) ? req.params.filepath.join('/') : req.params.filepath;
+    // Express 5 {*filepath} returns an array — join back to a path string
+    const filepath = Array.isArray(req.params.filepath)
+      ? req.params.filepath.join('/')
+      : req.params.filepath;
     const pathInfo = vpath.getVPathInfo(filepath, req.user);
 
-    if (req.method === 'GET') {
-      // Check cache
-      const cacheKey = `${pathInfo.fullPath}|${bitrate}|${codec}`;
-      if (transCache[cacheKey]) {
-        const t = transCache[cacheKey].deref();
-        if (t !== undefined) {
-          res.header({
-            'Accept-Ranges': 'bytes',
-            'Content-Type': codecMap[codec].contentType,
-            'Content-Length': t.contentLength
-          });
-          Readable.from(t.bufs).pipe(res);
-          return;
-        }
-      }
+    const cacheKey = `${pathInfo.fullPath}|${bitrate}|${codec}`;
 
-      if (algo === 'stream') {
-        res.header({ 'Content-Type': codecMap[codec].contentType });
-        return spawnTranscode(pathInfo.fullPath, codec, bitrate).pipe(res);
-      }
-
-      // Buffer mode: collect output, cache, then send
-      const stream = spawnTranscode(pathInfo.fullPath, codec, bitrate);
-      const bufs = [];
-      let contentLength = 0;
-
-      stream.on('data', chunk => {
-        bufs.push(chunk);
-        contentLength += chunk.length;
+    // ── Cache hit ────────────────────────────────────────────
+    const cached = cacheGet(cacheKey);
+    if (cached) {
+      res.header({
+        'Accept-Ranges': 'bytes',
+        'Content-Type': codecMap[codec].contentType,
+        'Content-Length': cached.contentLength
       });
-
-      stream.on('end', () => {
-        res.header({
-          'Accept-Ranges': 'bytes',
-          'Content-Type': codecMap[codec].contentType,
-          'Content-Length': contentLength
-        });
-        transCache[cacheKey] = new WeakRef({ contentLength, bufs });
-        Readable.from(bufs).pipe(res);
-      });
-
-      stream.on('error', err => {
-        winston.error('Transcoding stream error', { stack: err });
-        if (!res.headersSent) {
-          res.status(500).json({ error: 'transcoding failed' });
-        }
-      });
-    } else {
-      res.sendStatus(405);
+      Readable.from(cached.bufs).pipe(res);
+      return;
     }
+
+    // ── Look up duration for Content-Length estimate ──────────
+    const lib = db.getLibraryByName(pathInfo.vpath);
+    let duration = 0;
+    if (lib) {
+      const track = db.getDB()?.prepare(
+        'SELECT duration FROM tracks WHERE filepath = ? AND library_id = ?'
+      ).get(pathInfo.relativePath, lib.id);
+      duration = track?.duration || 0;
+    }
+
+    const bitrateNum = parseInt(bitrate) * 1000; // '96k' → 96000
+    const estimatedBytes = duration > 0
+      ? Math.ceil(duration * bitrateNum / 8 * 1.05) // 5% container overhead
+      : 0;
+
+    // ── Set headers ──────────────────────────────────────────
+    const headers = { 'Content-Type': codecMap[codec].contentType };
+    if (estimatedBytes > 0) {
+      headers['Content-Length'] = estimatedBytes;
+      headers['Accept-Ranges'] = 'bytes';
+    }
+    res.header(headers);
+
+    // ── Stream + collect for cache ───────────────────────────
+    const proc = spawnTranscode(pathInfo.fullPath, codec, bitrate);
+    const bufs = [];
+    let contentLength = 0;
+
+    proc.stdout.on('data', chunk => {
+      bufs.push(chunk);
+      contentLength += chunk.length;
+    });
+
+    // Stream to client immediately
+    proc.stdout.pipe(res);
+
+    proc.on('close', code => {
+      if (code !== 0 && code !== null) {
+        winston.error(`FFmpeg exited with code ${code} for ${pathInfo.fullPath}`);
+        return;
+      }
+      // Cache the result — strong for song length + 2 min, then weak
+      if (contentLength > 0) {
+        cacheSet(cacheKey, { contentLength, bufs }, duration);
+      }
+    });
+
+    // Kill ffmpeg if client disconnects mid-stream
+    res.on('close', () => {
+      if (!proc.killed) {
+        proc.kill('SIGTERM');
+      }
+    });
   });
 }

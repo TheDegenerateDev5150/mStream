@@ -3,7 +3,7 @@
 // Per-user tokens stored in users.listenbrainz_token DB column.
 
 import * as db from '../db/manager.js';
-import * as vpath from '../util/vpath.js';
+import { getVPathInfo } from '../util/vpath.js';
 
 const LB_API = 'https://api.listenbrainz.org';
 
@@ -26,10 +26,10 @@ async function lbFetch(path, token, body) {
 }
 
 function getTrackByFilepath(filepath, user) {
-  const parts = filepath.split('/');
-  const vpathName = parts[0];
-  const relPath = parts.slice(1).join('/');
-  const lib = db.getLibraryByName(vpathName);
+  let info;
+  try { info = getVPathInfo(filepath, user); } catch (_) { return null; }
+
+  const lib = db.getLibraryByName(info.vpath);
   if (!lib) return null;
 
   return d().prepare(`
@@ -39,7 +39,7 @@ function getTrackByFilepath(filepath, user) {
     LEFT JOIN artists a ON t.artist_id = a.id
     LEFT JOIN albums al ON t.album_id = al.id
     WHERE t.filepath = ? AND t.library_id = ?
-  `).get(relPath, lib.id);
+  `).get(info.relativePath, lib.id);
 }
 
 function buildListenPayload(track, listenType, listenedAt) {

@@ -953,6 +953,15 @@ svg {
   justify-content: center;
 }
 
+#directory_bar > svg path:not([fill="none"]) {
+  fill: #fff;
+  transition: fill .15s;
+}
+
+#directory_bar > svg:hover path:not([fill="none"]) {
+  fill: #999;
+}
+
 #directoryName{
   padding-bottom: 3px;
   padding-left: 5px;

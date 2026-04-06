@@ -5,6 +5,7 @@
 import crypto from 'crypto';
 import * as db from '../db/manager.js';
 import { libraryFilter } from './db.js';
+import { getVPathInfo } from '../util/vpath.js';
 
 const d = () => db.getDB();
 
@@ -70,17 +71,17 @@ function getPeriodRange(period, offset) {
   return { start: start.toISOString(), end: end.toISOString(), label };
 }
 
-// Parse "vpath/rel/path.mp3" into library_id
-function getLibraryId(filepath) {
+// Parse "vpath/rel/path.mp3" with access validation
+function parseFilepath(filepath, user) {
   if (!filepath) return null;
-  const vpathName = filepath.split('/')[0];
-  const lib = db.getLibraryByName(vpathName);
-  return lib?.id || null;
-}
-
-function getRelPath(filepath) {
-  if (!filepath) return filepath;
-  return filepath.split('/').slice(1).join('/');
+  try {
+    const info = getVPathInfo(filepath, user);
+    const lib = db.getLibraryByName(info.vpath);
+    if (!lib) return null;
+    return { libId: lib.id, relPath: info.relativePath };
+  } catch (_) {
+    return null;
+  }
 }
 
 export function setup(mstream) {
@@ -93,13 +94,12 @@ export function setup(mstream) {
     if (!req.user?.id) return res.json({ eventId: null });
     const { filePath, sessionId, source } = req.body;
     const eventId = genEventId();
-    const libId = getLibraryId(filePath);
-    const relPath = getRelPath(filePath);
+    const parsed = parseFilepath(filePath, req.user);
 
     // Look up track duration if possible
     let durationMs = null;
-    if (libId && relPath) {
-      const track = d().prepare('SELECT duration FROM tracks WHERE filepath = ? AND library_id = ?').get(relPath, libId);
+    if (parsed) {
+      const track = d().prepare('SELECT duration FROM tracks WHERE filepath = ? AND library_id = ?').get(parsed.relPath, parsed.libId);
       if (track?.duration) durationMs = Math.round(track.duration * 1000);
     }
 
@@ -107,7 +107,7 @@ export function setup(mstream) {
     d().prepare(`
       INSERT INTO play_events (event_id, user_id, filepath, library_id, session_id, source, track_duration_ms)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(eventId, req.user.id, relPath || filePath || '', libId, sessionId || null, source || null, durationMs);
+    `).run(eventId, req.user.id, parsed?.relPath || '', parsed?.libId || null, sessionId || null, source || null, durationMs);
 
     res.json({ eventId });
   });

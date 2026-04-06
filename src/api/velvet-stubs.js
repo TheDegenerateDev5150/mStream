@@ -5,6 +5,7 @@
 import * as db from '../db/manager.js';
 import * as config from '../state/config.js';
 import { renderMetadataObj, libraryFilter, trackQuery } from './db.js';
+import { getVPathInfo } from '../util/vpath.js';
 
 const d = () => db.getDB();
 
@@ -162,16 +163,14 @@ export function setup(mstream) {
     const filePath = req.body.filePath;
     if (!filePath || !req.user?.id) return res.json({ ok: true });
 
-    // Parse vpath/filepath from the full path
-    const parts = filePath.split('/');
-    const vpathName = parts[0];
-    const relPath = parts.slice(1).join('/');
-    const lib = db.getLibraryByName(vpathName);
+    let pathInfo;
+    try { pathInfo = getVPathInfo(filePath, req.user); } catch (_) { return res.json({ ok: true }); }
+    const lib = db.getLibraryByName(pathInfo.vpath);
     if (!lib) return res.json({ ok: true });
 
     const track = d().prepare(
       'SELECT file_hash FROM tracks WHERE filepath = ? AND library_id = ?'
-    ).get(relPath, lib.id);
+    ).get(pathInfo.relativePath, lib.id);
     if (!track) return res.json({ ok: true });
 
     d().prepare(`
@@ -202,10 +201,9 @@ export function setup(mstream) {
     const fp = req.query.fp;
     if (!fp) return res.status(404).json({ error: 'missing filepath' });
 
-    const parts = fp.split('/');
-    const vpathName = parts[0];
-    const relPath = parts.slice(1).join('/');
-    const lib = db.getLibraryByName(vpathName);
+    let pathInfo;
+    try { pathInfo = getVPathInfo(fp, req.user); } catch (_) { return res.status(403).json({ error: 'access denied' }); }
+    const lib = db.getLibraryByName(pathInfo.vpath);
     if (!lib) return res.status(404).json({ error: 'not found' });
 
     const row = d().prepare(`
@@ -213,7 +211,7 @@ export function setup(mstream) {
       FROM tracks t
       LEFT JOIN albums al ON t.album_id = al.id
       WHERE t.filepath = ? AND t.library_id = ?
-    `).get(relPath, lib.id);
+    `).get(pathInfo.relativePath, lib.id);
 
     const artFile = row?.album_art_file || row?.album_album_art_file;
     if (!artFile) return res.status(404).json({ error: 'no art' });

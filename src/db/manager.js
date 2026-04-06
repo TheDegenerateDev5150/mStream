@@ -1,4 +1,5 @@
 import path from 'path';
+import fs from 'fs';
 import { DatabaseSync } from 'node:sqlite';
 import winston from 'winston';
 import * as config from '../state/config.js';
@@ -79,12 +80,25 @@ function runMigrations() {
 
   winston.info(`Database schema v${currentVersion} → v${SCHEMA_VERSION}`);
 
+  let needsRescan = false;
   for (const migration of MIGRATIONS) {
     if (migration.version > currentVersion) {
       winston.info(`Applying migration v${migration.version}...`);
       db.exec(migration.sql);
       setSchemaVersion(migration.version);
+      if (migration.rescanRequired) {
+        needsRescan = true;
+      }
     }
+  }
+
+  // Write marker file if any migration requires a force rescan
+  if (needsRescan) {
+    const markerPath = path.join(config.program.storage.dbDirectory, '.rescan-pending');
+    try {
+      fs.writeFileSync(markerPath, '');
+      winston.info('Migration requires force rescan — will run on next boot scan');
+    } catch (_) {}
   }
 }
 

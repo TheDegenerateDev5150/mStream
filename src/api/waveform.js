@@ -10,6 +10,7 @@ import crypto from 'node:crypto';
 import * as db from '../db/manager.js';
 import { ffmpegBin } from '../util/ffmpeg-bootstrap.js';
 import { getDirname } from '../util/esm-helpers.js';
+import { getVPathInfo } from '../util/vpath.js';
 
 const __dirname = getDirname(import.meta.url);
 const CACHE_DIR = path.join(__dirname, '../../waveform-cache');
@@ -117,26 +118,13 @@ export function setup(mstream) {
       return res.status(400).json({ error: 'filepath required' });
     }
 
-    // Parse vpath/filepath
-    const parts = filepath.split('/');
-    const vpathName = parts[0];
-    const relPath = parts.slice(1).join('/');
-    const lib = db.getLibraryByName(vpathName);
-    if (!lib) {
-      return res.status(404).json({ error: 'library not found' });
-    }
-
-    // Verify user has access to this library
-    const userLibIds = db.getUserLibraryIds(req.user);
-    if (!userLibIds.includes(lib.id)) {
+    // Parse and validate library access via getVPathInfo
+    let pathInfo;
+    try { pathInfo = getVPathInfo(filepath, req.user); } catch (_) {
       return res.status(403).json({ error: 'access denied' });
     }
 
-    const absolutePath = path.resolve(lib.root_path, relPath);
-    // Prevent path traversal — resolved path must be within library root
-    if (!absolutePath.startsWith(path.resolve(lib.root_path))) {
-      return res.status(403).json({ error: 'invalid path' });
-    }
+    const absolutePath = pathInfo.fullPath;
     if (!fs.existsSync(absolutePath)) {
       return res.status(404).json({ error: 'file not found' });
     }

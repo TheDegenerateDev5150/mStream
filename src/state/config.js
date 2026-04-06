@@ -35,7 +35,7 @@ const dbOptions = Joi.object({
 });
 
 const transcodeOptions = Joi.object({
-  algorithm: Joi.string().valid(...getTransAlgos()).default('stream'),
+  algorithm: Joi.string().valid(...getTransAlgos()).optional(), // deprecated — kept for config compat
   enabled: Joi.boolean().default(false),
   ffmpegDirectory: Joi.string().default(path.join(__dirname, '../../bin/ffmpeg')),
   defaultCodec: Joi.string().valid(...getTransCodecs()).default('opus'),

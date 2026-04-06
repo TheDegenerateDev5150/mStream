@@ -30,7 +30,12 @@ export function setup(mstream) {
     res.attachment(`${path.basename(req.body.path)}.zip`);
     archive.pipe(res);
     for (const song of songs) {
-      const songPath = path.join(playlistParentDir, song);
+      const songPath = path.resolve(playlistParentDir, song);
+      // Verify resolved path stays within the library root
+      if (!songPath.startsWith(path.resolve(pathInfo.basePath) + path.sep) && songPath !== path.resolve(pathInfo.basePath)) {
+        winston.warn(`M3U entry escaped library root: ${song}`);
+        continue;
+      }
       archive.file(songPath, { name: path.basename(song) });
     }
 
@@ -60,7 +65,7 @@ export function setup(mstream) {
 
     archive.pipe(res);
 
-    archive.directory(pathInfo.basePath, false);
+    archive.directory(pathInfo.fullPath, false);
     archive.finalize();
   }
 

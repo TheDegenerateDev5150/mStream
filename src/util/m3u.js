@@ -13,5 +13,14 @@ export async function readPlaylistSongs(filePath) {
     items = fileContents.split(/\r?\n/).filter(Boolean);
   }
 
-  return items.map(item => { return item.replace(/\\/g, "/"); });
+  return items
+    .map(item => item.replace(/\\/g, "/"))
+    .filter(item => {
+      // Reject absolute paths and path traversal attempts
+      if (!item) return false;
+      if (item.startsWith('/') || item.startsWith('\\')) return false;
+      if (/^[a-zA-Z]:/.test(item)) return false; // Windows absolute (C:\...)
+      if (item.includes('..')) return false;
+      return true;
+    });
 }

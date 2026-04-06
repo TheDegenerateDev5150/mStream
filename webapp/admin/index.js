@@ -1204,6 +1204,7 @@ const dbView = Vue.component('db-view', {
               <div class="card-content">
                 <span class="card-title">Scan Queue & Stats</span>
                 <a v-on:click="scanDB" class="waves-effect waves-light btn">Start A Scan</a>
+                <a v-on:click="forceRescan" class="waves-effect waves-light btn orange">Force Rescan</a>
                 <a v-on:click="pullStats" class="waves-effect waves-light btn">Pull Stats</a>
                 <div v-if="isPullingStats === true">
                   <svg class="spinner" width="65px" height="65px" viewBox="0 0 66 66" xmlns="http://www.w3.org/2000/svg"><circle class="spinner-path" fill="none" stroke-width="6" stroke-linecap="round" cx="33" cy="33" r="30"></circle></svg>
@@ -1394,6 +1395,47 @@ const dbView = Vue.component('db-view', {
           timeout: 3500
         });
       }
+    },
+    forceRescan: function() {
+      iziToast.question({
+        timeout: 20000,
+        close: false,
+        overlayClose: true,
+        overlay: true,
+        displayMode: 'once',
+        id: 'question',
+        zindex: 99999,
+        layout: 2,
+        maxWidth: 600,
+        title: '<b>Force Rescan All Libraries?</b>',
+        message: 'This will re-parse every file in your library, even if unchanged. Takes longer than a normal scan but ensures all metadata fields are up to date.',
+        position: 'center',
+        buttons: [
+          ['<button><b>Force Rescan</b></button>', async (instance, toast) => {
+            instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
+            try {
+              await API.axios({
+                method: 'POST',
+                url: `${API.url()}/api/v1/admin/db/scan/force-rescan`
+              });
+              iziToast.success({
+                title: 'Force Rescan Started',
+                position: 'topCenter',
+                timeout: 3500
+              });
+            } catch (err) {
+              iziToast.error({
+                title: 'Failed to Start Rescan',
+                position: 'topCenter',
+                timeout: 3500
+              });
+            }
+          }, true],
+          ['<button>Cancel</button>', (instance, toast) => {
+            instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
+          }],
+        ]
+      });
     },
     recompressImages: function() {
       iziToast.question({
@@ -1825,12 +1867,6 @@ const transcodeView = Vue.component('transcode-view', {
                       [<a v-on:click="changeBitrate()">edit</a>]
                     </td>
                   </tr>
-                  <tr>
-                  <td><b>Default Algorithm:</b> {{params.algorithm}}</td>
-                  <td>
-                    [<a v-on:click="changeAlgorithm()">edit</a>]
-                  </td>
-                </tr>
                 </tbody>
               </table>
             </div>
@@ -1892,10 +1928,6 @@ const transcodeView = Vue.component('transcode-view', {
     },
     changeBitrate: function() {
       modVM.currentViewModal = 'edit-transcode-bitrate-modal';
-      M.Modal.getInstance(document.getElementById('admin-modal')).open();
-    },
-    changeAlgorithm: function() {
-      modVM.currentViewModal = 'edit-transcode-algorithm-modal';
       M.Modal.getInstance(document.getElementById('admin-modal')).open();
     },
     downloadFFMpeg: async function() {
@@ -3293,75 +3325,6 @@ const editTranscodeCodecModal = Vue.component('edit-transcode-codec-modal', {
   }
 });
 
-const editTranscodeDefaultAlgorithm = Vue.component('edit-transcode-algorithm-modal', {
-  data() {
-    return {
-      params: ADMINDATA.transcodeParams,
-      submitPending: false,
-      editValue: ADMINDATA.transcodeParams.algorithm,
-      selectInstance: null
-    };
-  },
-  template: `
-    <form @submit.prevent="updateParam">
-      <div class="modal-content">
-        <h4>Set Default Algorithm</h4>
-        <select v-model="editValue" id="transcode-algorithm-dropdown">
-          <option value="buffer">Buffer</option>
-          <option value="stream">Stream</option>
-        </select>
-        <blockquote>
-          <b>Buffer</b> takes longer to load and uses more memory, but it works on everything. <b>Stream</b> starts instantaneously, but it might not work on every device
-        </blockquote>
-      </div>
-      <div class="modal-footer">
-        <a href="#!" class="modal-close waves-effect waves-green btn-flat">Go Back</a>
-        <button class="btn green waves-effect waves-light" type="submit" :disabled="submitPending === true">
-          {{submitPending === false ? 'Update' : 'Updating...'}}
-        </button>
-      </div>
-    </form>`,
-  mounted: function () {
-    this.selectInstance = M.FormSelect.init(document.querySelectorAll("#transcode-algorithm-dropdown"));
-  },
-  beforeDestroy: function() {
-    this.selectInstance[0].destroy();
-  },
-  methods: {
-    updateParam: async function() {
-      try {
-        this.submitPending = true;
-
-        await API.axios({
-          method: 'POST',
-          url: `${API.url()}/api/v1/admin/transcode/default-algorithm`,
-          data: { algorithm: this.editValue }
-        });
-
-        // update fronted data
-        Vue.set(ADMINDATA.transcodeParams, 'algorithm', this.editValue);
-  
-        // close & reset the modal
-        M.Modal.getInstance(document.getElementById('admin-modal')).close();
-
-        iziToast.success({
-          title: 'Updated Successfully',
-          position: 'topCenter',
-          timeout: 3500
-        });
-      } catch(err) {
-        iziToast.error({
-          title: 'Update Failed',
-          position: 'topCenter',
-          timeout: 3500
-        });
-      }finally {
-        this.submitPending = false;
-      }
-    }
-  }
-});
-
 const editTranscodeDefaultBitrate = Vue.component('edit-transcode-bitrate-modal', {
   data() {
     return {
@@ -3667,7 +3630,6 @@ const modVM = new Vue({
     'edit-boot-scan-delay-modal': editBootScanView,
     'edit-select-codec-modal': editTranscodeCodecModal,
     'edit-transcode-bitrate-modal': editTranscodeDefaultBitrate,
-    'edit-transcode-algorithm-modal': editTranscodeDefaultAlgorithm,
     'edit-max-scan-modal': editMaxScanModal,
     'edit-ssl-modal': editSslModal,
     'lastfm-modal': lastFMModal,

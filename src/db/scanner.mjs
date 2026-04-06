@@ -33,7 +33,8 @@ const schema = Joi.object({
   supportedFiles: Joi.object().pattern(
     Joi.string(), Joi.boolean()
   ).required(),
-  scanBatchSize: Joi.number().integer().min(1).default(100)
+  scanBatchSize: Joi.number().integer().min(1).default(100),
+  forceRescan: Joi.boolean().default(false)
 });
 
 const { error: validationError } = schema.validate(loadJson);
@@ -75,9 +76,9 @@ const stmts = {
   ),
   insertTrack: db.prepare(
     `INSERT OR REPLACE INTO tracks (filepath, library_id, title, artist_id, album_id, track_number,
-     disc_number, year, format, file_hash, album_art_file, genre, replaygain_track_db,
+     disc_number, year, duration, format, file_hash, album_art_file, genre, replaygain_track_db,
      modified, scan_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ),
   deleteOldTracks: db.prepare(
     'DELETE FROM tracks WHERE library_id = ? AND scan_id != ?'
@@ -253,10 +254,12 @@ function getFileType(filename) {
 async function parseMyFile(absolutePath, modified) {
   let songInfo;
   try {
-    songInfo = (await parseFile(absolutePath, { skipCovers: loadJson.skipImg })).common;
+    const parsed = await parseFile(absolutePath, { skipCovers: loadJson.skipImg });
+    songInfo = parsed.common;
+    songInfo.duration = parsed.format?.duration || null;
   } catch (err) {
     console.error(`Warning: metadata parse error on ${absolutePath}: ${err.message}`);
-    songInfo = { track: { no: null, of: null }, disk: { no: null, of: null } };
+    songInfo = { track: { no: null, of: null }, disk: { no: null, of: null }, duration: null };
   }
 
   songInfo.modified = modified;
@@ -288,6 +291,7 @@ function insertTrack(song) {
     song.track?.no || null,
     song.disk?.no || null,
     song.year || null,
+    song.duration || null,
     song.format,
     song.hash,
     song.aaFile || null,
@@ -362,7 +366,7 @@ async function recursiveScan(dir) {
         const relativePath = path.relative(loadJson.directory, filepath).replace(/\\/g, '/');
         const existing = stmts.getTrack.get(relativePath, loadJson.libraryId);
 
-        if (existing && existing.modified === stat.mtime.getTime()) {
+        if (existing && existing.modified === stat.mtime.getTime() && !loadJson.forceRescan) {
           // File unchanged — just update the scan ID
           stmts.updateScanId.run(loadJson.scanId, existing.id);
         } else {

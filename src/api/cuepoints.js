@@ -3,32 +3,29 @@
 // The frontend expects: { cuepoints: [{ no, title, t }, ...] }
 
 import * as db from '../db/manager.js';
+import { getVPathInfo } from '../util/vpath.js';
 
 const d = () => db.getDB();
 
-// Parse "vpath/relative/path.mp3" into { vpathName, relPath, lib }
-function parsePath(fp) {
+// Parse filepath and validate library access. Returns null if invalid.
+function parsePath(fp, user) {
   if (!fp) return null;
-  const parts = fp.split('/');
-  const vpathName = parts[0];
-  const relPath = parts.slice(1).join('/');
-  const lib = db.getLibraryByName(vpathName);
-  if (!lib) return null;
-  return { vpathName, relPath, lib };
+  try {
+    const info = getVPathInfo(fp, user);
+    const lib = db.getLibraryByName(info.vpath);
+    if (!lib) return null;
+    return { relPath: info.relativePath, lib };
+  } catch (_) {
+    return null;
+  }
 }
 
 export function setup(mstream) {
 
   // ── Get cue points for a file ──────────────────────────────
   mstream.get('/api/v1/db/cuepoints', (req, res) => {
-    const parsed = parsePath(req.query.fp);
+    const parsed = parsePath(req.query.fp, req.user);
     if (!parsed) return res.json({ cuepoints: [] });
-
-    // Verify user has access to this library
-    const userLibIds = db.getUserLibraryIds(req.user);
-    if (!userLibIds.includes(parsed.lib.id)) {
-      return res.json({ cuepoints: [] });
-    }
 
     const rows = d().prepare(`
       SELECT id, position, label, color
@@ -58,8 +55,8 @@ export function setup(mstream) {
       return res.status(400).json({ error: 'filepath and position required' });
     }
 
-    const parsed = parsePath(filepath);
-    if (!parsed) return res.status(404).json({ error: 'library not found' });
+    const parsed = parsePath(filepath, req.user);
+    if (!parsed) return res.status(403).json({ error: 'access denied' });
 
     const result = d().prepare(`
       INSERT INTO cue_points (filepath, library_id, user_id, position, label, color)

@@ -224,6 +224,9 @@ export const SCHEMA_V8 = `
   );
 `;
 
+// rescanRequired: true — marks migrations that change the tracks table schema
+// and need a force rescan to populate new fields. When applied, a marker file
+// is written so the next boot triggers rescanAll() instead of scanAll().
 export const MIGRATIONS = [
   { version: 1, sql: SCHEMA_V1 },
   { version: 2, sql: SCHEMA_V2 },

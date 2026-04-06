@@ -42,11 +42,7 @@ export function setup(mstream) {
     // Get vPath Info
     const pathInfo = vpath.getVPathInfo(value.directory, req.user);
 
-    // Do not allow browsing outside the directory
-    if (pathInfo.fullPath.substring(0, pathInfo.basePath.length) !== pathInfo.basePath) {
-      winston.warn(`user '${req.user.username}' attempted to access a directory they don't have access to: ${pathInfo.fullPath}`)
-      throw new Error('Access to directory not allowed');
-    }
+    // Bounds check is handled by getVPathInfo — it throws if fullPath escapes basePath
 
     // get directory contents
     const folderContents = await fileExplorer.getDirectoryContents(pathInfo.fullPath, config.program.supportedAudioFiles, value.sort, value.pullMetadata, value.directory, req.user);
@@ -97,11 +93,7 @@ export function setup(mstream) {
     // Get vPath Info
     const pathInfo = vpath.getVPathInfo(req.body.directory, req.user);
 
-    // Do not allow browsing outside the directory
-    if (pathInfo.fullPath.substring(0, pathInfo.basePath.length) !== pathInfo.basePath) {
-      winston.warn(`user '${req.user.username}' attempted to access a directory they don't have access to: ${pathInfo.fullPath}`)
-      throw new Error('Access to directory not allowed');
-    }
+    // Bounds check is handled by getVPathInfo
 
     res.json(await recursiveFileScan(pathInfo.fullPath, [], pathInfo.relativePath, pathInfo.vpath));
   });
@@ -117,11 +109,7 @@ export function setup(mstream) {
 
     const pathInfo = vpath.getVPathInfo(value.directory, req.user);
 
-    // Do not allow creating directories outside the vpath
-    if (pathInfo.fullPath.substring(0, pathInfo.basePath.length) !== pathInfo.basePath) {
-      winston.warn(`user '${req.user.username}' attempted to create a directory outside their vpath: ${pathInfo.fullPath}`);
-      throw new WebError('Access to directory not allowed', 403);
-    }
+    // Bounds check is handled by getVPathInfo
 
     await fs.mkdir(pathInfo.fullPath, { recursive: true });
     res.json({});
@@ -137,8 +125,20 @@ export function setup(mstream) {
 
     const bb = busboy({ headers: req.headers });
     bb.on('file', (fieldname, file, info) => {
-      const { filename } = info;
-      const saveTo = path.join(pathInfo.fullPath, filename);
+      // Sanitize filename — strip path separators and traversal sequences
+      const rawName = info.filename || 'upload';
+      const safeName = path.basename(rawName.replace(/\\/g, '/'));
+      if (!safeName || safeName === '.' || safeName === '..') {
+        file.resume(); // drain the stream
+        return;
+      }
+      const saveTo = path.join(pathInfo.fullPath, safeName);
+      // Final check — resolved path must stay within the upload directory
+      if (!saveTo.startsWith(pathInfo.fullPath)) {
+        winston.warn(`Upload filename escaped directory: ${rawName}`);
+        file.resume();
+        return;
+      }
       winston.info(`Uploading from ${req.user.username} to: ${saveTo}`);
       file.pipe(fsOld.createWriteStream(saveTo));
     });
@@ -152,14 +152,22 @@ export function setup(mstream) {
 
     const playlistParentDir = path.dirname(req.body.path);
     const songs = await m3u.readPlaylistSongs(pathInfo.fullPath);
+    const vpathRoot = path.resolve(pathInfo.basePath);
+    const playlistDir = path.dirname(pathInfo.fullPath);
     res.json({
-      files: songs.map((song) => {
-        return {
-          type: fileExplorer.getFileType(song),
-          name: path.basename(song),
-          path: path.join(playlistParentDir, song).replace(/\\/g, '/')
-        };
-      })
+      files: songs
+        .filter(song => {
+          // Defense-in-depth: verify resolved path stays within library root
+          const resolved = path.resolve(playlistDir, song);
+          return resolved.startsWith(vpathRoot + path.sep) || resolved === vpathRoot;
+        })
+        .map((song) => {
+          return {
+            type: fileExplorer.getFileType(song),
+            name: path.basename(song),
+            path: path.join(playlistParentDir, song).replace(/\\/g, '/')
+          };
+        })
     });
   });
 }
