@@ -20,6 +20,8 @@ struct ScanConfig {
     db_path: String,
     #[serde(rename = "libraryId")]
     library_id: i64,
+    #[serde(default)]
+    vpath: String,
     directory: String,
     #[serde(rename = "skipImg")]
     skip_img: bool,
@@ -33,6 +35,8 @@ struct ScanConfig {
     supported_files: HashMap<String, bool>,
     #[serde(rename = "scanBatchSize", default = "default_batch_size")]
     scan_batch_size: u64,
+    #[serde(rename = "forceRescan", default)]
+    force_rescan: bool,
 }
 
 fn default_batch_size() -> u64 { 100 }
@@ -80,9 +84,25 @@ fn run_scan(config: &ScanConfig) -> Result<(), Box<dyn std::error::Error>> {
         .filter(|e| e.file_type().is_file())
         .collect();
 
-    let mut file_count = 0u64;
+    // Count expected audio files for progress reporting
+    let expected_files: u64 = entries.iter()
+        .filter(|e| {
+            let ext = file_ext(e.path()).to_lowercase();
+            config.supported_files.get(&ext).copied().unwrap_or(false)
+        })
+        .count() as u64;
+
+    // Insert initial progress row
+    let _ = conn.execute(
+        "INSERT OR REPLACE INTO scan_progress (scan_id, library_id, vpath, scanned, expected) VALUES (?1, ?2, ?3, 0, ?4)",
+        rusqlite::params![config.scan_id, config.library_id, config.vpath, expected_files],
+    );
+
+    let mut file_count = 0u64;      // new/modified files parsed
+    let mut total_processed = 0u64; // all files touched (including unchanged — for progress)
     let mut batch_count = 0u64;
     let batch_size = config.scan_batch_size;
+    let progress_interval = 25u64;
 
     // Use explicit transactions for batch performance.
     // Without this, SQLite does a disk fsync per INSERT (~50 files/sec).
@@ -99,19 +119,36 @@ fn run_scan(config: &ScanConfig) -> Result<(), Box<dyn std::error::Error>> {
             Ok(true) => {
                 file_count += 1;
                 batch_count += 1;
-                if batch_count >= batch_size {
-                    conn.execute_batch("COMMIT; BEGIN")?;
-                    batch_count = 0;
-                }
             }
             Ok(false) => {} // skipped (unchanged)
             Err(e) => {
                 eprintln!("Warning: failed to process {}: {}", entry.path().display(), e);
             }
         }
+
+        // Track all files (including unchanged) for progress
+        total_processed += 1;
+
+        // Periodically commit and report progress so the API can see
+        // updates between batches. Also serves as the batch commit.
+        if batch_count >= batch_size || total_processed % progress_interval == 0 {
+            let rel = entry.path().strip_prefix(&config.directory)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
+            conn.execute_batch("COMMIT")?;
+            let _ = conn.execute(
+                "UPDATE scan_progress SET scanned = ?1, current_file = ?2 WHERE scan_id = ?3",
+                rusqlite::params![total_processed, rel, config.scan_id],
+            );
+            conn.execute_batch("BEGIN")?;
+            batch_count = 0;
+        }
     }
 
     conn.execute_batch("COMMIT")?;
+
+    // Remove progress row — scan is done
+    let _ = conn.execute("DELETE FROM scan_progress WHERE scan_id = ?1", rusqlite::params![config.scan_id]);
 
     // Remove tracks not seen in this scan (deleted files)
     let deleted = conn.execute(
@@ -159,7 +196,7 @@ fn process_one(
     }).ok();
 
     if let Some((id, existing_mod)) = existing {
-        if existing_mod == mod_time {
+        if existing_mod == mod_time && !config.force_rescan {
             // Unchanged — just update scan_id
             conn.execute("UPDATE tracks SET scan_id = ? WHERE id = ?",
                 rusqlite::params![config.scan_id, id])?;
@@ -179,9 +216,16 @@ fn process_one(
     let mut genre = None;
     let mut rg_track_db: Option<f64> = None;
     let mut aa_file: Option<String> = None;
+    let mut duration_sec: Option<f64> = None;
 
     match Probe::open(filepath).and_then(|p| p.read()) {
         Ok(tagged_file) => {
+            // Get duration from audio properties
+            let dur = tagged_file.properties().duration();
+            if !dur.is_zero() {
+                duration_sec = Some(dur.as_secs_f64());
+            }
+
             let tag = tagged_file.primary_tag().or_else(|| tagged_file.first_tag());
             if let Some(tag) = tag {
                 title = tag.title().map(|s| s.to_string());
@@ -234,12 +278,12 @@ fn process_one(
     // Insert track
     conn.execute(
         "INSERT OR REPLACE INTO tracks (filepath, library_id, title, artist_id, album_id, track_number,
-         disc_number, year, format, file_hash, album_art_file, genre, replaygain_track_db,
+         disc_number, year, duration, format, file_hash, album_art_file, genre, replaygain_track_db,
          modified, scan_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rusqlite::params![
             rel_path, config.library_id, title, artist_id, album_id,
-            track_num, disc_num, year, ext, hash,
+            track_num, disc_num, year, duration_sec, ext, hash,
             aa_file, genre, rg_track_db, mod_time, config.scan_id
         ],
     )?;

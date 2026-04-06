@@ -258,6 +258,11 @@ export function setup(mstream) {
     res.json({});
   });
 
+  mstream.post("/api/v1/admin/db/scan/force-rescan", (req, res) => {
+    dbQueue.rescanAll();
+    res.json({});
+  });
+
   mstream.get("/api/v1/admin/db/scan/stats", (req, res) => {
     const d = db.getDB();
     const row = d ? d.prepare('SELECT COUNT(*) AS total FROM tracks').get() : { total: 0 };
@@ -335,7 +340,8 @@ export function setup(mstream) {
       storage: config.program.storage,
       maxRequestSize: config.program.maxRequestSize,
       autoBootServerAudio: config.program.autoBootServerAudio,
-      rustPlayerPort: config.program.rustPlayerPort
+      rustPlayerPort: config.program.rustPlayerPort,
+      ui: config.program.ui || 'default'
     });
   });
 
@@ -346,6 +352,16 @@ export function setup(mstream) {
     joiValidate(schema, req.body);
 
     await admin.editMaxRequestSize(req.body.maxRequestSize);
+    res.json({});
+  });
+
+  mstream.post("/api/v1/admin/config/ui", async (req, res) => {
+    const schema = Joi.object({
+      ui: Joi.string().valid('default', 'velvet').required()
+    });
+    joiValidate(schema, req.body);
+
+    await admin.editUI(req.body.ui);
     res.json({});
   });
 
@@ -484,15 +500,7 @@ export function setup(mstream) {
     res.json({});
   });
 
-  mstream.post("/api/v1/admin/transcode/default-algorithm", async (req, res) => {
-    const schema = Joi.object({
-      algorithm: Joi.string().valid(...getTransAlgos()).required()
-    });
-    joiValidate(schema, req.body);
-
-    await admin.editDefaultAlgorithm(req.body.algorithm);
-    res.json({});
-  });
+  // default-algorithm endpoint removed — streaming is now the only mode
 
   mstream.post("/api/v1/admin/transcode/download", async (req, res) => {
     await transcode.downloadedFFmpeg();

@@ -1,7 +1,7 @@
 import Joi from 'joi';
 import * as config from '../state/config.js';
 import * as db from '../db/manager.js';
-import { joiValidate } from '../util/validation.js';
+import { joiValidate, resolveId } from '../util/validation.js';
 
 export function setup(mstream) {
   const d = () => db.getDB();
@@ -28,6 +28,8 @@ export function setup(mstream) {
       noMkdir: config.program.noMkdir || req.user.allow_mkdir === false || req.user.allow_mkdir === 0,
       noUpload: config.program.noUpload || req.user.allow_upload === false || req.user.allow_upload === 0,
       noFileModify: config.program.noFileModify || req.user.allow_file_modify === false || req.user.allow_file_modify === 0,
+      // VELVET ONLY: redundant with noUpload — update Velvet UI to use noUpload instead, then remove this
+      allowYoutubeDownload: !(config.program.noUpload || req.user.allow_upload === false || req.user.allow_upload === 0),
       supportedAudioFiles: config.program.supportedAudioFiles,
       vpathMetaData: {}
     };
@@ -92,21 +94,20 @@ export function setup(mstream) {
   // ── Remove song from playlist ───────────────────────────────────────────
 
   mstream.post('/api/v1/playlist/remove-song', (req, res) => {
-    const schema = Joi.object({ lokiid: Joi.number().integer().required() });
-    joiValidate(schema, req.body);
+    const trackId = resolveId(req.body);
 
-    // lokiid maps to playlist_tracks.id now
+    // id maps to playlist_tracks.id
     const track = d().prepare(`
       SELECT pt.id, p.user_id FROM playlist_tracks pt
       JOIN playlists p ON pt.playlist_id = p.id
       WHERE pt.id = ?
-    `).get(req.body.lokiid);
+    `).get(trackId);
 
     if (!track || track.user_id !== req.user.id) {
       throw new Error('Access denied or track not found');
     }
 
-    d().prepare('DELETE FROM playlist_tracks WHERE id = ?').run(req.body.lokiid);
+    d().prepare('DELETE FROM playlist_tracks WHERE id = ?').run(trackId);
     res.json({});
   });
 
@@ -165,6 +166,30 @@ export function setup(mstream) {
         insert.run(playlist.id, req.body.songs[i], i);
       }
     }
+
+    res.json({});
+  });
+
+  // ── Rename playlist ─────────────────────────────────────────────────────
+
+  mstream.post('/api/v1/playlist/rename', (req, res) => {
+    const schema = Joi.object({
+      oldName: Joi.string().required(),
+      newName: Joi.string().required()
+    });
+    joiValidate(schema, req.body);
+
+    const existing = d().prepare(
+      'SELECT id FROM playlists WHERE name = ? AND user_id = ?'
+    ).get(req.body.newName, req.user.id);
+
+    if (existing) {
+      return res.status(400).json({ error: 'A playlist with that name already exists' });
+    }
+
+    d().prepare(
+      'UPDATE playlists SET name = ? WHERE name = ? AND user_id = ?'
+    ).run(req.body.newName, req.body.oldName, req.user.id);
 
     res.json({});
   });

@@ -1,7 +1,7 @@
 // SQLite schema definitions and migration system for mStream.
 // Uses PRAGMA user_version for tracking which migrations have been applied.
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 8;
 
 export const SCHEMA_V1 = `
   -- Users
@@ -151,8 +151,89 @@ export const SCHEMA_V3 = `
   ALTER TABLE users ADD COLUMN allow_file_modify INTEGER NOT NULL DEFAULT 1;
 `;
 
+export const SCHEMA_V4 = `
+  ALTER TABLE users ADD COLUMN listenbrainz_token TEXT;
+
+  CREATE TABLE IF NOT EXISTS smart_playlists (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    filters_json TEXT NOT NULL DEFAULT '{}',
+    sort TEXT NOT NULL DEFAULT 'artist',
+    limit_n INTEGER NOT NULL DEFAULT 50,
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(name, user_id)
+  );
+`;
+
+export const SCHEMA_V5 = `
+  CREATE TABLE IF NOT EXISTS user_settings (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    value TEXT,
+    PRIMARY KEY (user_id, key)
+  );
+`;
+
+export const SCHEMA_V6 = `
+  CREATE TABLE IF NOT EXISTS cue_points (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    filepath TEXT NOT NULL,
+    library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    position REAL NOT NULL,
+    label TEXT,
+    color TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_cue_points_file ON cue_points(filepath, library_id);
+`;
+
+export const SCHEMA_V7 = `
+  CREATE TABLE IF NOT EXISTS play_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    filepath TEXT NOT NULL,
+    library_id INTEGER REFERENCES libraries(id) ON DELETE SET NULL,
+    session_id TEXT,
+    source TEXT,
+    outcome TEXT,
+    played_ms INTEGER DEFAULT 0,
+    track_duration_ms INTEGER,
+    started_at TEXT DEFAULT (datetime('now')),
+    ended_at TEXT,
+    pause_count INTEGER DEFAULT 0
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_play_events_user ON play_events(user_id);
+  CREATE INDEX IF NOT EXISTS idx_play_events_started ON play_events(started_at);
+  CREATE INDEX IF NOT EXISTS idx_play_events_session ON play_events(session_id);
+`;
+
+export const SCHEMA_V8 = `
+  CREATE TABLE IF NOT EXISTS scan_progress (
+    scan_id TEXT PRIMARY KEY,
+    library_id INTEGER,
+    vpath TEXT,
+    scanned INTEGER DEFAULT 0,
+    expected INTEGER,
+    current_file TEXT,
+    started_at TEXT DEFAULT (datetime('now'))
+  );
+`;
+
+// rescanRequired: true — marks migrations that change the tracks table schema
+// and need a force rescan to populate new fields. When applied, a marker file
+// is written so the next boot triggers rescanAll() instead of scanAll().
 export const MIGRATIONS = [
   { version: 1, sql: SCHEMA_V1 },
   { version: 2, sql: SCHEMA_V2 },
   { version: 3, sql: SCHEMA_V3 },
+  { version: 4, sql: SCHEMA_V4 },
+  { version: 5, sql: SCHEMA_V5 },
+  { version: 6, sql: SCHEMA_V6 },
+  { version: 7, sql: SCHEMA_V7 },
+  { version: 8, sql: SCHEMA_V8 },
 ];
