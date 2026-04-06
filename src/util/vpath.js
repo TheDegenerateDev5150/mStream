@@ -25,10 +25,20 @@ export function getVPathInfo(url, user) {
 
   const baseDir = library.root_path;
   const relPath = path.relative(vpathName, url).replace(/\\/g, '/');
+  const fullPath = path.join(baseDir, relPath);
+
+  // Final safety check — resolved path must stay within the library root.
+  // path.normalize above should prevent this, but defense-in-depth.
+  const resolvedFull = path.resolve(fullPath);
+  const resolvedBase = path.resolve(baseDir);
+  if (resolvedFull !== resolvedBase && !resolvedFull.startsWith(resolvedBase + path.sep)) {
+    throw new Error('Path escapes library root');
+  }
+
   return {
     vpath: vpathName,
     basePath: baseDir,
     relativePath: relPath,
-    fullPath: path.join(baseDir, relPath)
+    fullPath: fullPath
   };
 }

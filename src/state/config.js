@@ -35,7 +35,7 @@ const dbOptions = Joi.object({
 });
 
 const transcodeOptions = Joi.object({
-  algorithm: Joi.string().valid(...getTransAlgos()).default('stream'),
+  algorithm: Joi.string().valid(...getTransAlgos()).optional(), // deprecated — kept for config compat
   enabled: Joi.boolean().default(false),
   ffmpegDirectory: Joi.string().default(path.join(__dirname, '../../bin/ffmpeg')),
   defaultCodec: Joi.string().valid(...getTransCodecs()).default('opus'),
@@ -56,6 +56,13 @@ const lastFMOptions = Joi.object({
   apiSecret: Joi.string().default('a9df934fc504174d4cb68853d9feb143')
 });
 
+const discogsOptions = Joi.object({
+  enabled: Joi.boolean().default(false),
+  allowArtUpdate: Joi.boolean().default(false),
+  apiKey: Joi.string().allow('').default(''),
+  apiSecret: Joi.string().allow('').default(''),
+});
+
 const federationOptions = Joi.object({
   enabled: Joi.boolean().default(false),
   folder: Joi.string().optional(),
@@ -73,6 +80,7 @@ const schema = Joi.object({
     "opus": true, "m3u": false
   }),
   lastFM: lastFMOptions.default(lastFMOptions.validate({}).value),
+  discogs: discogsOptions.default(discogsOptions.validate({}).value),
   scanOptions: scanOptions.default(scanOptions.validate({}).value),
   noUpload: Joi.boolean().default(false),
   noMkdir: Joi.boolean().default(false),
@@ -80,6 +88,7 @@ const schema = Joi.object({
   writeLogs: Joi.boolean().default(false),
   lockAdmin: Joi.boolean().default(false),
   storage: storageJoi.default(storageJoi.validate({}).value),
+  ui: Joi.string().valid('default', 'velvet').default('default'),
   webAppDirectory: Joi.string().default(path.join(__dirname, '../../webapp')),
   rpn: rpnOptions.default(rpnOptions.validate({}).value),
   transcode: transcodeOptions.default(transcodeOptions.validate({}).value),

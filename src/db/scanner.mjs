@@ -24,6 +24,7 @@ try {
 const schema = Joi.object({
   dbPath: Joi.string().required(),
   libraryId: Joi.number().integer().required(),
+  vpath: Joi.string().allow('').optional(),
   directory: Joi.string().required(),
   skipImg: Joi.boolean().required(),
   albumArtDirectory: Joi.string().required(),
@@ -32,7 +33,8 @@ const schema = Joi.object({
   supportedFiles: Joi.object().pattern(
     Joi.string(), Joi.boolean()
   ).required(),
-  scanBatchSize: Joi.number().integer().min(1).default(100)
+  scanBatchSize: Joi.number().integer().min(1).default(100),
+  forceRescan: Joi.boolean().default(false)
 });
 
 const { error: validationError } = schema.validate(loadJson);
@@ -74,9 +76,9 @@ const stmts = {
   ),
   insertTrack: db.prepare(
     `INSERT OR REPLACE INTO tracks (filepath, library_id, title, artist_id, album_id, track_number,
-     disc_number, year, format, file_hash, album_art_file, genre, replaygain_track_db,
+     disc_number, year, duration, format, file_hash, album_art_file, genre, replaygain_track_db,
      modified, scan_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ),
   deleteOldTracks: db.prepare(
     'DELETE FROM tracks WHERE library_id = ? AND scan_id != ?'
@@ -252,10 +254,12 @@ function getFileType(filename) {
 async function parseMyFile(absolutePath, modified) {
   let songInfo;
   try {
-    songInfo = (await parseFile(absolutePath, { skipCovers: loadJson.skipImg })).common;
+    const parsed = await parseFile(absolutePath, { skipCovers: loadJson.skipImg });
+    songInfo = parsed.common;
+    songInfo.duration = parsed.format?.duration || null;
   } catch (err) {
     console.error(`Warning: metadata parse error on ${absolutePath}: ${err.message}`);
-    songInfo = { track: { no: null, of: null }, disk: { no: null, of: null } };
+    songInfo = { track: { no: null, of: null }, disk: { no: null, of: null }, duration: null };
   }
 
   songInfo.modified = modified;
@@ -287,6 +291,7 @@ function insertTrack(song) {
     song.track?.no || null,
     song.disk?.no || null,
     song.year || null,
+    song.duration || null,
     song.format,
     song.hash,
     song.aaFile || null,
@@ -301,9 +306,45 @@ function insertTrack(song) {
 
 // ── Recursive directory scan ────────────────────────────────────────────────
 
-let fileCount = 0;
+let fileCount = 0;      // new/modified files parsed
+let totalProcessed = 0; // all files touched (including unchanged — for progress)
 let batchCount = 0;
 const BATCH_SIZE = loadJson.scanBatchSize || 100;
+const PROGRESS_INTERVAL = 25;
+
+// ── Fast file counter (no metadata parsing) ────────────────────────────────
+
+function countSupportedFiles(dir) {
+  let count = 0;
+  let files;
+  try { files = fs.readdirSync(dir); } catch (_) { return 0; }
+  for (const file of files) {
+    try {
+      const fp = path.join(dir, file);
+      const stat = fs.statSync(fp);
+      if (stat.isDirectory()) {
+        count += countSupportedFiles(fp);
+      } else if (stat.isFile() && loadJson.supportedFiles[getFileType(file).toLowerCase()]) {
+        count++;
+      }
+    } catch (_) {}
+  }
+  return count;
+}
+
+// ── Scan progress tracking ─────────────────────────────────────────────────
+
+const progressStmts = {
+  insert: db.prepare(
+    'INSERT OR REPLACE INTO scan_progress (scan_id, library_id, vpath, scanned, expected) VALUES (?, ?, ?, 0, ?)'
+  ),
+  update: db.prepare(
+    'UPDATE scan_progress SET scanned = ?, current_file = ? WHERE scan_id = ?'
+  ),
+  remove: db.prepare(
+    'DELETE FROM scan_progress WHERE scan_id = ?'
+  ),
+};
 
 async function recursiveScan(dir) {
   let files;
@@ -325,7 +366,7 @@ async function recursiveScan(dir) {
         const relativePath = path.relative(loadJson.directory, filepath).replace(/\\/g, '/');
         const existing = stmts.getTrack.get(relativePath, loadJson.libraryId);
 
-        if (existing && existing.modified === stat.mtime.getTime()) {
+        if (existing && existing.modified === stat.mtime.getTime() && !loadJson.forceRescan) {
           // File unchanged — just update the scan ID
           stmts.updateScanId.run(loadJson.scanId, existing.id);
         } else {
@@ -338,10 +379,19 @@ async function recursiveScan(dir) {
           insertTrack(songInfo);
           fileCount++;
           batchCount++;
-          if (batchCount >= BATCH_SIZE) {
-            db.exec('COMMIT; BEGIN');
-            batchCount = 0;
-          }
+        }
+
+        // Track all files (including unchanged) for progress
+        totalProcessed++;
+
+        // Periodically commit and report progress so the API can
+        // see updates between batches. This also serves as the batch
+        // commit for insert performance.
+        if (batchCount >= BATCH_SIZE || totalProcessed % PROGRESS_INTERVAL === 0) {
+          db.exec('COMMIT');
+          try { progressStmts.update.run(totalProcessed, relativePath, loadJson.scanId); } catch (_) {}
+          db.exec('BEGIN');
+          batchCount = 0;
         }
       } catch (err) {
         console.error(`Warning: failed to process ${filepath}: ${err.message}`);
@@ -355,6 +405,12 @@ async function recursiveScan(dir) {
 async function run() {
   try {
     console.log(`Scanning ${loadJson.directory}...`);
+
+    // Fast pre-count of audio files for progress reporting
+    const expectedFiles = countSupportedFiles(loadJson.directory);
+    try {
+      progressStmts.insert.run(loadJson.scanId, loadJson.libraryId, loadJson.vpath || '', expectedFiles || null);
+    } catch (_) {}
 
     // Use explicit transactions for batch performance.
     // Without this, SQLite does a disk fsync per INSERT (~50 files/sec).
@@ -374,7 +430,11 @@ async function run() {
   } catch (err) {
     console.error('Scan failed');
     console.error(err.stack);
+    // Rollback any open transaction to release the write lock
+    try { db.exec('ROLLBACK'); } catch (_) {}
   } finally {
+    // Always clean up progress row, even on error
+    try { progressStmts.remove.run(loadJson.scanId); } catch (_) {}
     db.close();
   }
 }

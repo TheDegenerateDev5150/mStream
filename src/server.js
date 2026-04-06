@@ -28,6 +28,7 @@ import * as federationApi from './api/federation.js';
 import * as ytdlApi from './api/ytdl.js';
 import * as serverPlaybackApi from './api/server-playback.js';
 import * as albumArtApi from './api/album-art.js';
+// Velvet UI modules — dynamically imported only when ui='velvet' is active
 import WebError from './util/web-error.js';
 import { sanitizeFilename } from './util/validation.js';
 
@@ -133,6 +134,12 @@ export async function serveIt(configFile) {
       return next();
     }
 
+    // VELVET ONLY: skip login redirect — Velvet has a built-in login screen
+    // TODO: standardize login flow so both UIs handle auth the same way
+    if (config.program.ui === 'velvet') {
+      return next();
+    }
+
     try {
       jwt.verify(req.cookies['x-access-token'], config.program.secret);
       next();
@@ -142,6 +149,11 @@ export async function serveIt(configFile) {
   });
 
   mstream.get('/login', (req, res, next) => {
+    // VELVET ONLY: redirect /login to / since Velvet handles login inline
+    if (config.program.ui === 'velvet') {
+      return res.redirect(302, '/');
+    }
+
     if (dbManager.getAllUsers().length === 0) {
       return res.redirect(302, '..');
     }
@@ -158,7 +170,11 @@ export async function serveIt(configFile) {
   serverPlaybackApi.setupBeforeAuth(mstream);
 
   // Give access to public folder
-  mstream.use('/', express.static(config.program.webAppDirectory));
+  // VELVET ONLY: serve webapp/velvet/ instead of webapp/ when ui='velvet'
+  const webappDir = config.program.ui === 'velvet'
+    ? path.join(config.program.webAppDirectory, 'velvet')
+    : config.program.webAppDirectory;
+  mstream.use('/', express.static(webappDir));
 
   // Public APIs
   remoteApi.setupBeforeAuth(mstream, server);
@@ -181,6 +197,32 @@ export async function serveIt(configFile) {
   ytdlApi.setup(mstream);
   albumArtApi.setup(mstream);
   serverPlaybackApi.setup(mstream);
+
+  // VELVET ONLY: additional API modules loaded only when ui='velvet'
+  // These provide features specific to the Velvet UI (ListenBrainz, smart playlists,
+  // waveform, stats tracking, user settings, Discogs, cue points).
+  // TODO: evaluate which of these should be promoted to core /v1 APIs
+  if (config.program.ui === 'velvet') {
+    const [listenbrainzApi, smartPlaylistsApi, waveformApi, wrappedApi,
+           userSettingsApi, discogsApi, cuepointsApi, velvetStubs] = await Promise.all([
+      import('./api/listenbrainz.js'),
+      import('./api/smart-playlists.js'),
+      import('./api/waveform.js'),
+      import('./api/wrapped.js'),
+      import('./api/user-settings.js'),
+      import('./api/discogs.js'),
+      import('./api/cuepoints.js'),
+      import('./api/velvet-stubs.js'),
+    ]);
+    listenbrainzApi.setup(mstream);
+    smartPlaylistsApi.setup(mstream);
+    waveformApi.setup(mstream);
+    wrappedApi.setup(mstream);
+    userSettingsApi.setup(mstream);
+    discogsApi.setup(mstream);
+    cuepointsApi.setup(mstream);
+    velvetStubs.setup(mstream);
+  }
 
   // Versioned APIs
   mstream.get('/api/', (req, res) => res.json({ "server": packageJson.version, "apiVersions": ["1"] }));

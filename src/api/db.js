@@ -3,12 +3,12 @@ import path from 'path';
 import * as vpath from '../util/vpath.js';
 import * as dbQueue from '../db/task-queue.js';
 import * as db from '../db/manager.js';
-import { joiValidate } from '../util/validation.js';
+import { joiValidate, dualId } from '../util/validation.js';
 import WebError from '../util/web-error.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-function renderMetadataObj(row) {
+export function renderMetadataObj(row) {
   const lib = db.getLibraryByName(row.library_name || '');
   const fullPath = lib
     ? path.join(lib.name, row.filepath).replace(/\\/g, '/')
@@ -34,7 +34,7 @@ function renderMetadataObj(row) {
 }
 
 // Build library filter clause for user access
-function libraryFilter(user) {
+export function libraryFilter(user) {
   const libIds = db.getUserLibraryIds(user);
   if (libIds.length === 0) { return { clause: '1=0', params: [] }; }
   return {
@@ -44,7 +44,7 @@ function libraryFilter(user) {
 }
 
 // Base query: tracks joined with artists, albums, library, and optionally user_metadata
-function trackQuery(userId) {
+export function trackQuery(userId) {
   return `
     SELECT t.*, a.name AS artist_name, al.name AS album_name,
            l.name AS library_name,
@@ -463,7 +463,7 @@ export function setup(mstream) {
         if (result.metadata) { metadata = result.metadata; }
       } catch (_e) {}
 
-      returnThis.push({ id: pt.id, filepath: pt.filepath, metadata });
+      returnThis.push({ ...dualId(pt.id), filepath: pt.filepath, metadata });
     }
 
     res.json(returnThis);
