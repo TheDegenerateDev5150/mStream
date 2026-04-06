@@ -26,7 +26,14 @@
       "Bash(xargs -I{} rm C:UserspaulDocumentscodemStream.claudeworktreesreverent-nightingale/image-cache/{})",
       "Bash(ls C:UserspaulDocumentscodemStream.claudeworktreesreverent-nightingale/*.js)",
       "Bash(node cli-boot-wrapper.js --help)",
-      "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id $_ -Force }\")"
+      "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id $_ -Force }\")",
+      "Bash(ls -lh /c/Users/paul/Documents/code/mStream/rust-parser/target/release/*.exe)",
+      "Bash(ls -lh /c/Users/paul/Documents/code/mStream/rust-server-audio/target/release/*.exe)",
+      "Bash(python3:*)",
+      "Bash(xxd)",
+      "Bash(npm install:*)",
+      "Bash(npx electron-builder:*)",
+      "Bash(git:*)"
     ]
   }
 }

@@ -39,11 +39,17 @@
       "!docs/*",
       "!dist/*",
       "!image-cache/*",
+      "!waveform-cache/*",
       "!save/*",
       "!bin/*",
       "!.git/*",
+      "!.git*",
       "!.vscode/*",
-      "!package-lock.json"
+      "!.claude/*",
+      "!rust-parser/*",
+      "!rust-server-audio/*",
+      "!package-lock.json",
+      "!TODO.md"
     ],
     "mac": {
       "files": [
@@ -73,7 +79,7 @@
     },
     "linux": {
       "files": [
-        "bin/syncthng/syncthing-linux",
+        "bin/syncthing/syncthing-linux",
         "bin/rust-parser/rust-parser-linux-*",
         "bin/rust-server-audio/rust-server-audio-linux-*"
       ],

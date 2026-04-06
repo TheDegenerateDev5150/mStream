@@ -262,6 +262,8 @@ function loadFileExplorer() {
 }
 
 async function senddir(root) {
+  if (isElectron() && !MSTREAMAPI.currentServer.host) { return; }
+
   // Construct the directory string
   const directoryString = root === true ? '~' : getFileExplorerPath();
   document.getElementById('filelist').innerHTML = getLoadingSvg();
@@ -504,7 +506,14 @@ async function init() {
       MSTREAMPLAYER.transcodeOptions.defaultAlgo = response.transcode.defaultAlgorithm;      
     }
   }catch (err) {
-    // window.location.href = 'login';
+    if (isElectron()) {
+      MSTREAMAPI.currentServer.host = '';
+      MSTREAMAPI.currentServer.token = '';
+      localStorage.removeItem('current-server');
+      document.getElementById('filelist').innerHTML = '';
+      openEditModal();
+      return;
+    }
   }
 
   // load user settings
@@ -1016,6 +1025,7 @@ async function uploadCustomAlbumArt() {
 function openEditModal() {
   document.getElementById('server_address').value = MSTREAMAPI.currentServer.host;
   document.getElementById('server_username').value = MSTREAMAPI.currentServer.username;
+  document.getElementById('server_password').value = '';
   myModal.open('#editServer');
 }
 
@@ -2387,22 +2397,9 @@ async function updateServer() {
 }
 
 function isElectron() {
-  // Renderer process
-  if (typeof window !== 'undefined' && typeof window.process === 'object' && window.process.type === 'renderer') {
-      return true;
-  }
-
-  // Main process
-  if (typeof process !== 'undefined' && typeof process.versions === 'object' && !!process.versions.electron) {
-      return true;
-  }
-
-  // Detect the user agent when the `nodeIntegration` option is set to true
-  if (typeof navigator === 'object' && typeof navigator.userAgent === 'string' && navigator.userAgent.indexOf('Electron') >= 0) {
-      return true;
-  }
-
-  return false;
+  return typeof navigator === 'object'
+    && typeof navigator.userAgent === 'string'
+    && navigator.userAgent.indexOf('Electron') >= 0;
 }
 
 function initElectron() {

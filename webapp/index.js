@@ -5,7 +5,11 @@ function createWindow () {
     autoHideMenuBar: true,
     backgroundColor: '#1e2228',
     width: 1200,
-    height: 800
+    height: 800,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false
+    }
   })
   win.loadFile('./index.html')
 }

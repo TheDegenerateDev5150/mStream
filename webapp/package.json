@@ -1,6 +1,6 @@
 {
   "name": "mstream-desktop-app",
-  "version": "5.9.4",
+  "version": "6.0.0",
   "description": "mStream Desktop Player",
   "main": "index.js",
   "scripts": {
@@ -8,7 +8,7 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "engines": {
-    "node": ">=10.0.0"
+    "node": ">=22.5.0"
   },
   "repository": {
     "type": "git",
@@ -23,7 +23,6 @@
   "build": {
     "appId": "io.mstream.desktop",
     "productName": "mStream Desktop",
-    "electronVersion": "16.0.2",
     "files": [
       "**/*",
       "!admin/*",
@@ -55,9 +54,15 @@
           ]
         }
       ]
+    },
+    "publish": {
+      "provider": "github",
+      "repo": "mStream",
+      "owner": "IrosTheBeggar"
     }
   },
   "devDependencies": {
-    "electron-builder": "22.14.5"
+    "electron": "^37.0.0",
+    "electron-builder": "^26.7.0"
   }
 }

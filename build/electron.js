@@ -84,6 +84,12 @@ function bootServer() {
     program.storage.syncConfigDirectory =  path.join(app.getPath('userData'), 'sync');
   }
 
+  // Set ffmpeg directory for transcode
+  if (!program.transcode) { program.transcode = {}; }
+  if (program.transcode.ffmpegDirectory === undefined) {
+    program.transcode.ffmpegDirectory = path.join(app.getPath('userData'), 'ffmpeg');
+  }
+
   // Save modified config
   fs.writeFileSync(configFile, JSON.stringify(program, null, 2), 'utf8');
 
@@ -134,7 +140,7 @@ function bootServer() {
     }
   ];
 
-  appIcon = new Tray(process.platform === 'darwin' ? path.join(__dirname, 'tray-icon.png') : path.join(__dirname, 'tray-icon-osx.png'));
+  appIcon = new Tray(path.join(__dirname, process.platform === 'darwin' ? 'tray-icon-osx.png' : 'tray-icon.png'));
   appIcon.setContextMenu(Menu.buildFromTemplate(trayTemplate)); // Call this again if you modify the tray menu
 
   getLoginAtBoot();
@@ -173,11 +179,11 @@ function toggleBootOnStart() {
 autoUpdater.on('update-available', async (_info) => {
   if (updateAlertFlag === true) {
     updateAlertFlag = false;
-    const selected = await dialog.showMessageBox({
+    const { response } = await dialog.showMessageBox({
       buttons: ["Update Now!", "Later"],
       message: "An update is available!"
     });
-    if (selected === 0) {
+    if (response === 0) {
       autoUpdater.quitAndInstall();
     }
   }
