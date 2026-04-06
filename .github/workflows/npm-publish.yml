@@ -9,6 +9,7 @@ on:
 
 jobs:
   publish-npm:
+    if: "!contains(github.event.release.tag_name, 'DESKTOP_PLAYER')"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

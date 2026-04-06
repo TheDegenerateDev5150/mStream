@@ -7,6 +7,7 @@ on:
 
 jobs:
   deploy-demo:
+    if: "!contains(github.event.release.tag_name, 'DESKTOP_PLAYER')"
     runs-on: ubuntu-latest
     steps:
     - name: pull changes
