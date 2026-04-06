@@ -9,6 +9,14 @@ import { isActiveJukeboxToken } from '../api/remote.js';
 import WebError from '../util/web-error.js';
 
 export function setup(mstream) {
+  // When admin API is locked, force all server-level write permissions off.
+  // This prevents any write operations even in public mode (no users).
+  if (config.program.lockAdmin === true) {
+    config.program.noUpload = true;
+    config.program.noMkdir = true;
+    config.program.noFileModify = true;
+  }
+
   mstream.post('/api/v1/auth/login', async (req, res) => {
     try {
       const schema = Joi.object({
@@ -47,11 +55,15 @@ export function setup(mstream) {
     // Handle No Users (public access mode)
     if (allUsers.length === 0) {
       const allLibs = db.getAllLibraries();
+      const adminLocked = config.program.lockAdmin === true;
       req.user = {
         vpaths: allLibs.map(l => l.name),
         username: 'mstream-user',
-        admin: true,
-        id: null
+        admin: !adminLocked,
+        id: null,
+        allowUpload: adminLocked ? false : true,
+        allowMkdir: adminLocked ? false : true,
+        allow_file_modify: adminLocked ? 0 : 1
       };
       return next();
     }
