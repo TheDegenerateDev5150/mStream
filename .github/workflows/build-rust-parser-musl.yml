@@ -36,7 +36,11 @@ jobs:
             -v "$PWD:/work" -w /work/rust-parser \
             alpine:3.21 sh -c '
               set -e
-              apk add --no-cache rust cargo gcc musl-dev
+              # Use rustup instead of apk add rust/cargo so we always get latest stable
+              # (Alpine packages lag behind and break on lockfile v4 / edition2024)
+              apk add --no-cache rustup gcc musl-dev
+              rustup-init -y --default-toolchain stable --profile minimal --no-modify-path
+              . $HOME/.cargo/env
               cargo build --release
               strip target/release/rust-parser
             '
