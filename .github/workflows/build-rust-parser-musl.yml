@@ -36,10 +36,12 @@ jobs:
             -v "$PWD:/work" -w /work/rust-parser \
             alpine:3.21 sh -c '
               set -e
-              # Use rustup instead of apk add rust/cargo so we always get latest stable
-              # (Alpine packages lag behind and break on lockfile v4 / edition2024)
-              apk add --no-cache rustup gcc musl-dev
-              rustup-init -y --default-toolchain stable --profile minimal --no-modify-path
+              # Use the rustup install script (not the apk rustup package) because
+              # the apk package is not available for armv7, and we need a newer
+              # Rust than what Alpine packages anyway (lockfile v4 / edition2024).
+              apk add --no-cache curl ca-certificates gcc musl-dev
+              curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs \
+                | sh -s -- -y --default-toolchain stable --profile minimal --no-modify-path
               . $HOME/.cargo/env
               cargo build --release
               strip target/release/rust-parser
