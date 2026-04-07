@@ -4,7 +4,9 @@ on:
   workflow_dispatch:
   push:
     branches: [master]
-    paths: ['rust-parser/**']
+    paths:
+      - 'rust-parser/**'
+      - '.github/workflows/build-rust-parser-musl.yml'
 
 jobs:
   build:
