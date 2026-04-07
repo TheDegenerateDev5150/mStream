@@ -18,4 +18,4 @@ Where `platform` and `arch` match Node.js `process.platform` and `process.arch`.
 
 The loader at `src/db/task-queue.js` detects musl libc at runtime via `process.report.getReport().header.glibcVersionRuntime` (undefined on musl) and selects the matching binary automatically.
 
-To rebuild all binaries, cross-compile from the `rust-parser/` source directory or build natively on each target platform with `cargo build --release`. The musl binaries are produced by `.github/workflows/build-rust-parser-musl.yml`, which builds inside an Alpine container (via QEMU for non-x64 architectures).
+To rebuild all binaries, cross-compile from the `rust-parser/` source directory or build natively on each target platform with `cargo build --release`. The musl binaries are produced by `.github/workflows/build-rust-parser-musl.yml`, which uses [`cross-rs/cross`](https://github.com/cross-rs/cross) to cross-compile statically-linked musl binaries that run on Alpine Linux and other musl distros.

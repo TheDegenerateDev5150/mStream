@@ -1,4 +1,8 @@
-name: Build Rust Parser Binaries (musl/Alpine)
+name: Build Rust Parser Binaries (musl)
+
+# Produces statically-linked musl binaries that run on Alpine Linux,
+# Void Linux, distroless musl images, and any other musl-libc distro.
+# Uses cross-rs/cross for all targets — same pattern as build-rust-parser.yml.
 
 on:
   workflow_dispatch:
@@ -16,41 +20,41 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: linux/amd64
+          - target: x86_64-unknown-linux-musl
             binary_name: rust-parser-linux-x64-musl
-          - platform: linux/arm64
+
+          - target: aarch64-unknown-linux-musl
             binary_name: rust-parser-linux-arm64-musl
-          - platform: linux/arm/v7
+
+          - target: armv7-unknown-linux-musleabihf
             binary_name: rust-parser-linux-arm-musl
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
-      - name: Build inside Alpine container
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust-parser
+          key: ${{ matrix.target }}
+
+      - name: Install cross
         run: |
-          set -e
-          docker run --rm --platform ${{ matrix.platform }} \
-            -v "$PWD:/work" -w /work/rust-parser \
-            alpine:3.21 sh -c '
-              set -e
-              # Use the rustup install script (not the apk rustup package) because
-              # the apk package is not available for armv7, and we need a newer
-              # Rust than what Alpine packages anyway (lockfile v4 / edition2024).
-              apk add --no-cache curl ca-certificates gcc musl-dev
-              curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs \
-                | sh -s -- -y --default-toolchain stable --profile minimal --no-modify-path
-              . $HOME/.cargo/env
-              cargo build --release
-              strip target/release/rust-parser
-            '
+          curl -fsSL https://github.com/cross-rs/cross/releases/latest/download/cross-x86_64-unknown-linux-gnu.tar.gz \
+            | tar xz -C "$HOME/.cargo/bin"
+
+      - name: Build
+        run: cross build --release --target ${{ matrix.target }} --manifest-path rust-parser/Cargo.toml
 
       - name: Stage binary
         run: |
           mkdir -p staging
-          cp rust-parser/target/release/rust-parser "staging/${{ matrix.binary_name }}"
+          cp "rust-parser/target/${{ matrix.target }}/release/rust-parser" "staging/${{ matrix.binary_name }}"
           chmod +x "staging/${{ matrix.binary_name }}"
 
       - name: Upload binary
