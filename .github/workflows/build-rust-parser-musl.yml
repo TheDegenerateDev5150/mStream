@@ -34,7 +34,7 @@ jobs:
           set -e
           docker run --rm --platform ${{ matrix.platform }} \
             -v "$PWD:/work" -w /work/rust-parser \
-            alpine:3.19 sh -c '
+            alpine:3.21 sh -c '
               set -e
               apk add --no-cache rust cargo gcc musl-dev
               cargo build --release
