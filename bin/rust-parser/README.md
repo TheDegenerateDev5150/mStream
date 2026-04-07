@@ -1,16 +1,21 @@
 Pre-built rust-parser binaries go here.
 
-Binary naming convention: `rust-parser-{platform}-{arch}[.exe]`
+Binary naming convention: `rust-parser-{platform}-{arch}[-musl][.exe]`
 
-Where `platform` and `arch` match Node.js `process.platform` and `process.arch`:
+Where `platform` and `arch` match Node.js `process.platform` and `process.arch`. The optional `-musl` suffix indicates a binary linked against musl libc (Alpine, Void Linux, distroless musl images, etc.) instead of glibc.
 
 | File | Platform |
 | --- | --- |
 | `rust-parser-win32-x64.exe` | Windows x64 |
 | `rust-parser-darwin-x64` | macOS Intel |
 | `rust-parser-darwin-arm64` | macOS Apple Silicon |
-| `rust-parser-linux-x64` | Linux x64 |
-| `rust-parser-linux-arm64` | Linux ARM64 |
-| `rust-parser-linux-arm` | Linux ARMv7 |
+| `rust-parser-linux-x64` | Linux x64 (glibc) |
+| `rust-parser-linux-arm64` | Linux ARM64 (glibc) |
+| `rust-parser-linux-arm` | Linux ARMv7 (glibc) |
+| `rust-parser-linux-x64-musl` | Linux x64 (musl / Alpine) |
+| `rust-parser-linux-arm64-musl` | Linux ARM64 (musl / Alpine) |
+| `rust-parser-linux-arm-musl` | Linux ARMv7 (musl / Alpine) |
 
-To rebuild all binaries, cross-compile from the `rust-parser/` source directory or build natively on each target platform with `cargo build --release`.
+The loader at `src/db/task-queue.js` detects musl libc at runtime via `process.report.getReport().header.glibcVersionRuntime` (undefined on musl) and selects the matching binary automatically.
+
+To rebuild all binaries, cross-compile from the `rust-parser/` source directory or build natively on each target platform with `cargo build --release`. The musl binaries are produced by `.github/workflows/build-rust-parser-musl.yml`, which builds inside an Alpine container (via QEMU for non-x64 architectures).

@@ -1,0 +1,81 @@
+name: Build Rust Parser Binaries (musl/Alpine)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths: ['rust-parser/**']
+
+jobs:
+  build:
+    name: Build ${{ matrix.binary_name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            binary_name: rust-parser-linux-x64-musl
+          - platform: linux/arm64
+            binary_name: rust-parser-linux-arm64-musl
+          - platform: linux/arm/v7
+            binary_name: rust-parser-linux-arm-musl
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build inside Alpine container
+        run: |
+          set -e
+          docker run --rm --platform ${{ matrix.platform }} \
+            -v "$PWD:/work" -w /work/rust-parser \
+            alpine:3.19 sh -c '
+              set -e
+              apk add --no-cache rust cargo gcc musl-dev
+              cargo build --release
+              strip target/release/rust-parser
+            '
+
+      - name: Stage binary
+        run: |
+          mkdir -p staging
+          cp rust-parser/target/release/rust-parser "staging/${{ matrix.binary_name }}"
+          chmod +x "staging/${{ matrix.binary_name }}"
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.binary_name }}
+          path: staging/${{ matrix.binary_name }}
+          retention-days: 1
+
+  commit-binaries:
+    name: Commit binaries
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: bin/rust-parser
+          merge-multiple: true
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add bin/rust-parser/rust-parser-*-musl*
+          if git diff --cached --quiet; then
+            echo "No binary changes to commit"
+          else
+            git commit -m "ci: update pre-built rust-parser musl binaries"
+            git pull --rebase origin ${{ github.ref_name }}
+            git push
+          fi

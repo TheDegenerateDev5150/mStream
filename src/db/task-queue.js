@@ -18,8 +18,11 @@ let scanIntervalTimer = null;
 // ── Rust parser binary detection ────────────────────────────────────────────
 
 const ext = process.platform === 'win32' ? '.exe' : '';
+// Detect musl libc (Alpine, Void, distroless musl, etc.) — glibcVersionRuntime is undefined on musl
+const isMusl = process.platform === 'linux' && !process.report?.getReport()?.header?.glibcVersionRuntime;
+const libcSuffix = isMusl ? '-musl' : '';
 const rustParserDir = path.join(__dirname, '../../rust-parser');
-const prebuiltBin = path.join(__dirname, `../../bin/rust-parser/rust-parser-${process.platform}-${process.arch}${ext}`);
+const prebuiltBin = path.join(__dirname, `../../bin/rust-parser/rust-parser-${process.platform}-${process.arch}${libcSuffix}${ext}`);
 const localBuildBin = path.join(rustParserDir, `target/release/rust-parser${ext}`);
 let rustParserBin = null;
 let rustBinaryReady = false;
