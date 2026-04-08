@@ -27,6 +27,10 @@
   "nav.mobileApps": "移动应用",
   "nav.jukeboxMode": "点唱机模式",
   "nav.searchDB": "搜索数据库",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "modal.close": "关闭",
   "modal.sharePlaylist": "分享播放列表",
   "modal.playbackSpeed": "播放速度",
@@ -37,13 +41,25 @@
   "modal.createFolder": "创建文件夹",
   "modal.metadata": "元数据",
   "modal.changeAlbumArt": "更换专辑封面",
+<<<<<<< HEAD
   "share.expirationLabel": "过期时间（天）",
   "share.button": "分享！",
   "share.placeholder": "您的链接将显示在这里",
+=======
+
+  "share.expirationLabel": "过期时间（天）",
+  "share.button": "分享！",
+  "share.placeholder": "您的链接将显示在这里",
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "playlist.namePlaceholder": "输入播放列表名称",
   "playlist.saveButton": "保存播放列表",
   "playlist.createButton": "创建播放列表",
   "playlist.addToPlaylist": "添加到播放列表：",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "livePlaylist.description1": "实时播放列表模式会将您当前的队列同步到服务器。目前仅支持网页版，移动端即将推出。",
   "livePlaylist.description2": "在两台设备上同时使用实时播放列表可能会导致一些异常行为",
   "livePlaylist.autoStart": "自动启动实时播放列表",
@@ -52,10 +68,18 @@
   "livePlaylist.useExisting": "使用现有播放列表",
   "livePlaylist.selectPlaylist": "选择播放列表",
   "livePlaylist.enableButton": "启用实时播放列表",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "server.addressPlaceholder": "地址",
   "server.usernamePlaceholder": "用户名",
   "server.passwordPlaceholder": "密码",
   "server.saveButton": "保存服务器",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "upload.tabFiles": "上传文件",
   "upload.tabYoutube": "Youtube 下载",
   "upload.location": "位置：",
@@ -72,9 +96,17 @@
   "upload.metaYear": "年份：",
   "upload.loadingMetadata": "正在加载元数据...",
   "upload.downloadButton": "下载",
+<<<<<<< HEAD
   "folder.location": "位置：",
   "folder.namePlaceholder": "文件夹名称",
   "folder.createButton": "创建文件夹",
+=======
+
+  "folder.location": "位置：",
+  "folder.namePlaceholder": "文件夹名称",
+  "folder.createButton": "创建文件夹",
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "metadata.title": "标题：",
   "metadata.album": "专辑：",
   "metadata.artist": "艺术家：",
@@ -86,24 +118,39 @@
   "metadata.filePath": "文件路径：",
   "metadata.albumArt": "专辑封面：",
   "metadata.changeAlbumArt": "更换专辑封面",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "albumArt.loadingAlbumArt": "正在加载专辑封面...",
   "albumArt.uploadCustom": "上传自定义图片",
   "albumArt.uploadHint": "JPEG、PNG 或 WebP。最大 10MB。",
   "albumArt.saveCover": "将 cover.jpg 保存到专辑文件夹",
   "albumArt.embedInFile": "将专辑封面嵌入音频文件",
   "albumArt.uploadButton": "上传并应用",
+<<<<<<< HEAD
   "fileExplorer.searchPlaceholder": "搜索列表",
   "fileExplorer.downloading": "下载中...",
+=======
+
+  "fileExplorer.searchPlaceholder": "搜索列表",
+  "fileExplorer.downloading": "下载中...",
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "toast.filesExplorerOnly": "文件只能添加到文件浏览器中",
   "toast.cannotUploadHere": "无法在此处上传文件",
   "toast.filesUploaded": "文件已上传",
   "toast.uploadPartial": "{{total}} 个文件中有 {{success}} 个上传成功",
   "toast.uploadFailed": "上传失败",
   "toast.albumQueued": "专辑已加入队列",
+<<<<<<< HEAD
   "toast.albumQueuedMessage": {
     "one": "已添加 {{count}} 首歌曲",
     "other": "已添加 {{count}} 首歌曲"
   },
+=======
+  "toast.albumQueuedMessage": { "one": "已添加 {{count}} 首歌曲", "other": "已添加 {{count}} 首歌曲" },
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "toast.folderCreated": "文件夹已创建",
   "toast.folderCreateFailed": "创建文件夹失败",
   "toast.youtubeUrlRequired": "URL 必须是 YouTube 链接",
@@ -121,6 +168,7 @@
   "toast.noPlaylistToSave": "没有可保存的播放列表！",
   "toast.playlistSaved": "播放列表已保存",
   "toast.autoDJRequiresDir": "Auto DJ 需要一个目录",
+<<<<<<< HEAD
   "error.callFailed": "调用失败",
   "error.serverCallFailed": "服务器调用失败",
   "status.scanInProgress": "扫描进行中",
@@ -128,22 +176,39 @@
     "one": "数据库中有 {{count}} 个文件",
     "other": "数据库中有 {{count}} 个文件"
   },
+=======
+
+  "error.callFailed": "调用失败",
+  "error.serverCallFailed": "服务器调用失败",
+
+  "status.scanInProgress": "扫描进行中",
+  "status.filesInDB": { "one": "数据库中有 {{count}} 个文件", "other": "数据库中有 {{count}} 个文件" },
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "status.noArtistOrAlbumInfo": "没有可用于搜索的艺术家或专辑信息",
   "status.searching": "搜索中...",
   "status.noAlbumArtFound": "未找到专辑封面",
   "status.searchFailed": "搜索失败：{{error}}",
   "status.albumArtResults": "找到 {{count}} 个结果。点击选择：",
   "status.downloadingAudio": "正在下载音频...",
+<<<<<<< HEAD
   "status.downloadingFiles": {
     "one": "正在下载 {{count}} 个文件...",
     "other": "正在下载 {{count}} 个文件..."
   },
+=======
+  "status.downloadingFiles": { "one": "正在下载 {{count}} 个文件...", "other": "正在下载 {{count}} 个文件..." },
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "label.artist": "艺术家：",
   "label.album": "专辑：",
   "label.playlist": "播放列表：",
   "label.genre": "流派：",
   "label.disabled": "已禁用",
   "label.newPlaylist": "新建播放列表",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "panel.fileExplorer": "文件浏览器",
   "panel.playlists": "播放列表",
   "panel.artists": "艺术家",
@@ -161,6 +226,10 @@
   "panel.searchDB": "搜索数据库",
   "panel.config": "配置",
   "panel.layout": "布局",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "transcode.disabled": "此服务器已禁用转码功能",
   "autoDJ.description": "Auto DJ 会随机生成播放列表。点击底部的「DJ」按钮即可启用",
   "autoDJ.minRating": "最低评分",
@@ -173,10 +242,15 @@
   "jukebox.serverAudio": "服务器音频",
   "jukebox.serverAudioDescription": "通过服务器的扬声器播放音乐，而不是通过浏览器",
   "jukebox.openServerAudio": "打开服务器音频播放器",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "layout.audioBookControls": "有声书控制",
   "layout.playerOnBottom": "播放器置于底部",
   "layout.metadataInQueue": "队列中显示元数据",
   "layout.compressAlbumArt": "压缩专辑封面",
+<<<<<<< HEAD
   "layout.hideTopBar": "隐藏顶部栏",
   "error.genericError": "发生错误。请刷新页面并重试",
   "label.getLastSongs": {
@@ -186,6 +260,16 @@
   "label.welcomeToMStream": "欢迎使用 mStream！",
   "label.preset": "预设：",
   "label.viewDownloads": "查看下载",
+=======
+
+  "error.genericError": "发生错误。请刷新页面并重试",
+
+  "label.getLastSongs": { "one": "首歌曲", "other": "首歌曲" },
+  "label.welcomeToMStream": "欢迎使用 mStream！",
+  "label.preset": "预设：",
+  "label.viewDownloads": "查看下载",
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "tooltip.goBack": "返回",
   "tooltip.search": "搜索",
   "tooltip.createFolder": "创建文件夹",
@@ -198,13 +282,23 @@
   "tooltip.downloadPlaylist": "下载播放列表",
   "tooltip.sharePlaylist": "分享播放列表",
   "tooltip.clearPlaylist": "清空播放列表",
+<<<<<<< HEAD
   "settings.language": "语言",
+=======
+
+  "settings.language": "语言",
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "login.title": "登录",
   "login.username": "用户名",
   "login.password": "密码",
   "login.submit": "登录",
   "login.success": "登录成功！",
   "login.failed": "登录失败",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.nav.config": "配置",
   "admin.nav.directories": "目录",
   "admin.nav.users": "用户",
@@ -219,9 +313,15 @@
   "admin.nav.navigation": "导航",
   "admin.nav.player": "播放器",
   "admin.nav.logout": "退出登录",
+<<<<<<< HEAD
   "admin.folders.title": "添加文件夹",
   "admin.folders.selectDirectory": "选择目录",
   "admin.folders.selectDirectoryHint": "点击以选择目录",
+=======
+
+  "admin.folders.title": "添加文件夹",
+  "admin.folders.selectDirectory": "选择目录",
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.folders.vPathLabel": "服务器路径别名 (vPath)",
   "admin.folders.vPathHint": "不允许使用特殊字符或空格",
   "admin.folders.giveAccessToAll": "授权所有用户访问",
@@ -241,6 +341,10 @@
   "admin.folders.goBack": "返回",
   "admin.folders.rebooting": "服务器正在重启。请等待 30 秒让服务器恢复上线",
   "admin.folders.removeFailed": "移除文件夹失败",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.users.title": "添加用户",
   "admin.users.usernameLabel": "用户名",
   "admin.users.passwordLabel": "密码",
@@ -270,6 +374,10 @@
   "admin.users.changeFolders": "修改文件夹",
   "admin.users.changeAccess": "权限",
   "admin.users.delete": "删除",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.settings.security": "安全",
   "admin.settings.fileUploading": "文件上传：",
   "admin.settings.enabled": "已启用",
@@ -291,6 +399,10 @@
   "admin.settings.editSSL": "编辑 SSL",
   "admin.settings.removeSSL": "移除 SSL",
   "admin.settings.updated": "更新成功",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.settings.switchFrontend": "切换到 {{label}} 前端界面？",
   "admin.settings.switchRestart": "服务器将重启以应用更改。",
   "admin.settings.switchingTo": "正在切换到 {{label}}...",
@@ -304,6 +416,10 @@
   "admin.settings.generateButton": "生成密钥",
   "admin.settings.failed": "失败",
   "admin.settings.cancel": "取消",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.settings.disableUploading": "禁用文件上传？",
   "admin.settings.enableUploading": "启用文件上传？",
   "admin.settings.disableFolders": "禁用创建文件夹？",
@@ -316,6 +432,10 @@
   "admin.settings.disableAutoBoot": "禁用自动启动服务器音频？",
   "admin.settings.enableAutoBoot": "启用自动启动服务器音频？",
   "admin.settings.autoBootHint": "启用后，mStream 将在启动时自动运行 Rust 音频播放器",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.db.scanSettings": "数据库扫描设置",
   "admin.db.scanInterval": "扫描间隔：",
   "admin.db.bootScanDelay": "启动扫描延迟：",
@@ -361,20 +481,30 @@
   "admin.db.compressionInProgress": "图片压缩进行中",
   "admin.db.toggleSkipImg": "跳过图片",
   "admin.db.toggleCompressImages": "压缩图片",
+<<<<<<< HEAD
   "admin.transcode.settings": "设置",
   "admin.transcode.poweredBy": "技术支持",
+=======
+
+  "admin.transcode.settings": "设置",
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.transcode.disableTitle": "禁用转码？",
   "admin.transcode.enableTitle": "启用转码？",
   "admin.transcode.downloadFFmpeg": "启用此功能将下载 FFmpeg",
   "admin.transcode.ffmpegDownloaded": "FFmpeg 已下载",
   "admin.transcode.ffmpegFailed": "下载 FFmpeg 失败",
   "admin.transcode.comingSoon": "即将推出",
+<<<<<<< HEAD
   "admin.federation.title": "mStream 联合",
   "admin.federation.poweredBy": "技术支持",
   "admin.federation.tabFederation": "联盟",
   "admin.federation.tabSyncthing": "Syncthing",
   "admin.federation.deviceId": "设备 ID：",
   "admin.federation.disableAction": "禁用联盟",
+=======
+
+  "admin.federation.title": "mStream 联合",
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.federation.enableButton": "启用联合",
   "admin.federation.disableTitle": "禁用联合？",
   "admin.federation.enableTitle": "启用联合？",
@@ -383,11 +513,16 @@
   "admin.federation.tokenLabel": "联合令牌",
   "admin.federation.tokenPlaceholder": "在此粘贴您的令牌",
   "admin.federation.serverURL": "服务器 URL",
+<<<<<<< HEAD
   "admin.federation.selectFolders": "选择并命名要联盟的文件夹：",
   "admin.federation.acceptInviteButton": "接受邀请",
   "admin.federation.working": "处理中 ...",
   "admin.federation.pasteTokenHint": "将令牌粘贴到文本框中以继续",
   "admin.federation.acceptFailed": "接受邀请失败",
+=======
+  "admin.federation.acceptFailed": "接受邀请失败",
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.logs.title": "日志记录",
   "admin.logs.writeLogs": "写入日志：",
   "admin.logs.logsDirectory": "日志目录：",
@@ -395,16 +530,26 @@
   "admin.logs.downloadFailed": "下载失败",
   "admin.logs.disableTitle": "禁用将日志写入磁盘？",
   "admin.logs.enableTitle": "启用将日志写入磁盘？",
+<<<<<<< HEAD
   "admin.lock.title": "锁定管理面板",
   "admin.lock.description": "这将阻止任何人通过管理面板进行配置更改。",
   "admin.lock.undoInstructions": "如果要撤销此操作，您需要：",
   "admin.lock.undoStep1": "打开配置文件",
   "admin.lock.undoStep2": "将 'lockAdmin' 的值更改为 'false'",
   "admin.lock.undoStep3": "重启 mStream",
+=======
+
+  "admin.lock.title": "锁定管理面板",
+  "admin.lock.description": "这将阻止任何人通过管理面板进行配置更改。",
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.lock.disableButton": "禁用管理面板",
   "admin.lock.disableTitle": "禁用管理面板？",
   "admin.lock.disable": "禁用",
   "admin.lock.disableFailed": "禁用管理面板失败",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.fileExplorer.title": "文件浏览器",
   "admin.fileExplorer.back": "返回",
   "admin.fileExplorer.home": "主页",
@@ -412,6 +557,10 @@
   "admin.fileExplorer.selectCurrent": "选择当前目录",
   "admin.fileExplorer.contentsFailed": "获取目录内容失败",
   "admin.fileExplorer.cannotSelect": "无法选择目录",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.modal.passwordReset": "重置密码",
   "admin.modal.user": "用户：",
   "admin.modal.newPassword": "新密码",

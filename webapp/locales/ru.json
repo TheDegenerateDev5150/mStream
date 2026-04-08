@@ -27,6 +27,10 @@
   "nav.mobileApps": "Мобильные приложения",
   "nav.jukeboxMode": "Режим музыкального автомата",
   "nav.searchDB": "Поиск по базе данных",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "modal.close": "Закрыть",
   "modal.sharePlaylist": "Поделиться плейлистом",
   "modal.playbackSpeed": "Скорость воспроизведения",
@@ -37,13 +41,25 @@
   "modal.createFolder": "Создать папку",
   "modal.metadata": "Метаданные",
   "modal.changeAlbumArt": "Изменить обложку альбома",
+<<<<<<< HEAD
   "share.expirationLabel": "Срок действия (в днях)",
   "share.button": "Поделиться!",
   "share.placeholder": "Ваш URL будет размещён здесь",
+=======
+
+  "share.expirationLabel": "Срок действия (в днях)",
+  "share.button": "Поделиться!",
+  "share.placeholder": "Ваш URL будет размещён здесь",
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "playlist.namePlaceholder": "Введите название плейлиста",
   "playlist.saveButton": "Сохранить плейлист",
   "playlist.createButton": "Создать плейлист",
   "playlist.addToPlaylist": "Добавить в плейлист:",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "livePlaylist.description1": "Режим живого плейлиста синхронизирует текущую очередь с сервером. Пока это работает только в веб-приложении. Скоро будет доступно на мобильных устройствах.",
   "livePlaylist.description2": "Использование живого плейлиста на двух устройствах одновременно может привести к непредсказуемому поведению",
   "livePlaylist.autoStart": "Запускать живой плейлист автоматически",
@@ -52,10 +68,18 @@
   "livePlaylist.useExisting": "Использовать существующий плейлист",
   "livePlaylist.selectPlaylist": "Выберите плейлист",
   "livePlaylist.enableButton": "Включить живой плейлист",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "server.addressPlaceholder": "Адрес",
   "server.usernamePlaceholder": "Имя пользователя",
   "server.passwordPlaceholder": "Пароль",
   "server.saveButton": "Сохранить сервер",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "upload.tabFiles": "Загрузить файлы",
   "upload.tabYoutube": "Загрузка с YouTube",
   "upload.location": "Расположение:",
@@ -72,9 +96,17 @@
   "upload.metaYear": "Год:",
   "upload.loadingMetadata": "Загрузка метаданных...",
   "upload.downloadButton": "Скачать",
+<<<<<<< HEAD
   "folder.location": "Расположение:",
   "folder.namePlaceholder": "Имя папки",
   "folder.createButton": "Создать папку",
+=======
+
+  "folder.location": "Расположение:",
+  "folder.namePlaceholder": "Имя папки",
+  "folder.createButton": "Создать папку",
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "metadata.title": "Название:",
   "metadata.album": "Альбом:",
   "metadata.artist": "Исполнитель:",
@@ -86,24 +118,39 @@
   "metadata.filePath": "Путь к файлу:",
   "metadata.albumArt": "Обложка альбома:",
   "metadata.changeAlbumArt": "Изменить обложку альбома",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "albumArt.loadingAlbumArt": "Загрузка обложки альбома...",
   "albumArt.uploadCustom": "Загрузить своё изображение",
   "albumArt.uploadHint": "JPEG, PNG или WebP. Максимум 10 МБ.",
   "albumArt.saveCover": "Сохранить cover.jpg в папку альбома",
   "albumArt.embedInFile": "Встроить обложку в аудиофайл",
   "albumArt.uploadButton": "Загрузить и применить",
+<<<<<<< HEAD
   "fileExplorer.searchPlaceholder": "Поиск по списку",
   "fileExplorer.downloading": "Скачивание...",
+=======
+
+  "fileExplorer.searchPlaceholder": "Поиск по списку",
+  "fileExplorer.downloading": "Скачивание...",
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "toast.filesExplorerOnly": "Файлы можно добавлять только в файловый менеджер",
   "toast.cannotUploadHere": "Невозможно загрузить файл сюда",
   "toast.filesUploaded": "Файлы загружены",
   "toast.uploadPartial": "{{success}} из {{total}} были успешно загружены",
   "toast.uploadFailed": "Загрузка не удалась",
   "toast.albumQueued": "Альбом добавлен в очередь",
+<<<<<<< HEAD
   "toast.albumQueuedMessage": {
     "one": "{{count}} песня добавлена",
     "other": "{{count}} песен добавлено"
   },
+=======
+  "toast.albumQueuedMessage": { "one": "{{count}} песня добавлена", "other": "{{count}} песен добавлено" },
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "toast.folderCreated": "Папка создана",
   "toast.folderCreateFailed": "Не удалось создать папку",
   "toast.youtubeUrlRequired": "URL должен быть ссылкой на YouTube",
@@ -121,6 +168,7 @@
   "toast.noPlaylistToSave": "Нет плейлиста для сохранения!",
   "toast.playlistSaved": "Плейлист сохранён",
   "toast.autoDJRequiresDir": "Для авто DJ необходимо указать директорию",
+<<<<<<< HEAD
   "error.callFailed": "Вызов не удался",
   "error.serverCallFailed": "Вызов сервера не удался",
   "status.scanInProgress": "Сканирование выполняется",
@@ -128,22 +176,39 @@
     "one": "{{count}} файл в базе данных",
     "other": "{{count}} файлов в базе данных"
   },
+=======
+
+  "error.callFailed": "Вызов не удался",
+  "error.serverCallFailed": "Вызов сервера не удался",
+
+  "status.scanInProgress": "Сканирование выполняется",
+  "status.filesInDB": { "one": "{{count}} файл в базе данных", "other": "{{count}} файлов в базе данных" },
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "status.noArtistOrAlbumInfo": "Нет информации об исполнителе или альбоме для поиска",
   "status.searching": "Поиск...",
   "status.noAlbumArtFound": "Обложка альбома не найдена",
   "status.searchFailed": "Ошибка поиска: {{error}}",
   "status.albumArtResults": "Найдено результатов: {{count}}. Нажмите, чтобы выбрать:",
   "status.downloadingAudio": "Скачивание аудио...",
+<<<<<<< HEAD
   "status.downloadingFiles": {
     "one": "Скачивание {{count}} файла...",
     "other": "Скачивание {{count}} файлов..."
   },
+=======
+  "status.downloadingFiles": { "one": "Скачивание {{count}} файла...", "other": "Скачивание {{count}} файлов..." },
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "label.artist": "Исполнитель:",
   "label.album": "Альбом:",
   "label.playlist": "Плейлист:",
   "label.genre": "Жанр:",
   "label.disabled": "Отключено",
   "label.newPlaylist": "Новый плейлист",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "panel.fileExplorer": "Файловый менеджер",
   "panel.playlists": "Плейлисты",
   "panel.artists": "Исполнители",
@@ -161,6 +226,10 @@
   "panel.searchDB": "Поиск по базе данных",
   "panel.config": "Настройки",
   "panel.layout": "Оформление",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "transcode.disabled": "Транскодирование отключено на этом сервере",
   "autoDJ.description": "Авто DJ случайным образом формирует плейлист. Нажмите кнопку «DJ» внизу, чтобы включить",
   "autoDJ.minRating": "Минимальная оценка",
@@ -173,10 +242,15 @@
   "jukebox.serverAudio": "Серверное аудио",
   "jukebox.serverAudioDescription": "Воспроизводить музыку через динамики сервера вместо браузера",
   "jukebox.openServerAudio": "Открыть серверный аудиоплеер",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "layout.audioBookControls": "Управление аудиокнигами",
   "layout.playerOnBottom": "Плеер внизу",
   "layout.metadataInQueue": "Метаданные в очереди",
   "layout.compressAlbumArt": "Сжимать обложки альбомов",
+<<<<<<< HEAD
   "layout.hideTopBar": "Скрыть верхнюю панель",
   "error.genericError": "Произошла ошибка. Обновите страницу и попробуйте снова",
   "label.getLastSongs": {
@@ -186,6 +260,17 @@
   "label.welcomeToMStream": "Добро пожаловать в mStream!",
   "label.preset": "Предустановка:",
   "label.viewDownloads": "посмотреть загрузки",
+=======
+
+  "error.genericError": "Произошла ошибка. Обновите страницу и попробуйте снова",
+  "error.serverCallFailed": "Вызов сервера не удался",
+
+  "label.getLastSongs": { "one": "песня", "other": "песен" },
+  "label.welcomeToMStream": "Добро пожаловать в mStream!",
+  "label.preset": "Предустановка:",
+  "label.viewDownloads": "посмотреть загрузки",
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "tooltip.goBack": "Назад",
   "tooltip.search": "Поиск",
   "tooltip.createFolder": "Создать папку",
@@ -198,13 +283,23 @@
   "tooltip.downloadPlaylist": "Скачать плейлист",
   "tooltip.sharePlaylist": "Поделиться плейлистом",
   "tooltip.clearPlaylist": "Очистить плейлист",
+<<<<<<< HEAD
   "settings.language": "Язык",
+=======
+
+  "settings.language": "Язык",
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "login.title": "Вход",
   "login.username": "Имя пользователя",
   "login.password": "Пароль",
   "login.submit": "Войти",
   "login.success": "Вход выполнен!",
   "login.failed": "Вход не удался",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.nav.config": "Настройки",
   "admin.nav.directories": "Директории",
   "admin.nav.users": "Пользователи",
@@ -219,9 +314,15 @@
   "admin.nav.navigation": "Навигация",
   "admin.nav.player": "Плеер",
   "admin.nav.logout": "Выйти",
+<<<<<<< HEAD
   "admin.folders.title": "Добавить папку",
   "admin.folders.selectDirectory": "Выбрать директорию",
   "admin.folders.selectDirectoryHint": "Нажмите, чтобы выбрать каталог",
+=======
+
+  "admin.folders.title": "Добавить папку",
+  "admin.folders.selectDirectory": "Выбрать директорию",
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.folders.vPathLabel": "Псевдоним серверного пути (vPath)",
   "admin.folders.vPathHint": "Без специальных символов и пробелов",
   "admin.folders.giveAccessToAll": "Предоставить доступ всем пользователям",
@@ -241,6 +342,10 @@
   "admin.folders.goBack": "Назад",
   "admin.folders.rebooting": "Сервер перезагружается. Подождите 30 секунд, пока сервер снова станет доступен",
   "admin.folders.removeFailed": "Не удалось удалить папку",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.users.title": "Добавить пользователя",
   "admin.users.usernameLabel": "Имя пользователя",
   "admin.users.passwordLabel": "Пароль",
@@ -270,6 +375,10 @@
   "admin.users.changeFolders": "изменить папки",
   "admin.users.changeAccess": "доступ",
   "admin.users.delete": "удалить",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.settings.security": "Безопасность",
   "admin.settings.fileUploading": "Загрузка файлов:",
   "admin.settings.enabled": "Включено",
@@ -291,6 +400,10 @@
   "admin.settings.editSSL": "Редактировать SSL",
   "admin.settings.removeSSL": "Удалить SSL",
   "admin.settings.updated": "Успешно обновлено",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.settings.switchFrontend": "Переключиться на интерфейс {{label}}?",
   "admin.settings.switchRestart": "Сервер перезагрузится для применения изменений.",
   "admin.settings.switchingTo": "Переключение на {{label}}...",
@@ -304,6 +417,10 @@
   "admin.settings.generateButton": "Сгенерировать ключ",
   "admin.settings.failed": "Ошибка",
   "admin.settings.cancel": "Отмена",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.settings.disableUploading": "Отключить загрузку файлов?",
   "admin.settings.enableUploading": "Включить загрузку файлов?",
   "admin.settings.disableFolders": "Отключить создание папок?",
@@ -316,6 +433,10 @@
   "admin.settings.disableAutoBoot": "Отключить автозапуск серверного аудио?",
   "admin.settings.enableAutoBoot": "Включить автозапуск серверного аудио?",
   "admin.settings.autoBootHint": "При включении mStream будет автоматически запускать Rust-аудиоплеер при старте",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.db.scanSettings": "Настройки сканирования БД",
   "admin.db.scanInterval": "Интервал сканирования:",
   "admin.db.bootScanDelay": "Задержка сканирования при запуске:",
@@ -361,20 +482,30 @@
   "admin.db.compressionInProgress": "Сжатие изображений выполняется",
   "admin.db.toggleSkipImg": "Пропуск изображений",
   "admin.db.toggleCompressImages": "Сжатие изображений",
+<<<<<<< HEAD
   "admin.transcode.settings": "Настройки",
   "admin.transcode.poweredBy": "На базе",
+=======
+
+  "admin.transcode.settings": "Настройки",
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.transcode.disableTitle": "Отключить транскодирование?",
   "admin.transcode.enableTitle": "Включить транскодирование?",
   "admin.transcode.downloadFFmpeg": "При включении будет загружен FFmpeg",
   "admin.transcode.ffmpegDownloaded": "FFmpeg загружен",
   "admin.transcode.ffmpegFailed": "Не удалось загрузить FFmpeg",
   "admin.transcode.comingSoon": "Скоро",
+<<<<<<< HEAD
   "admin.federation.title": "Федерация mStream",
   "admin.federation.poweredBy": "На базе",
   "admin.federation.tabFederation": "Федерация",
   "admin.federation.tabSyncthing": "Syncthing",
   "admin.federation.deviceId": "Идентификатор устройства:",
   "admin.federation.disableAction": "Отключить федерацию",
+=======
+
+  "admin.federation.title": "Федерация mStream",
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.federation.enableButton": "Включить федерацию",
   "admin.federation.disableTitle": "Отключить федерацию?",
   "admin.federation.enableTitle": "Включить федерацию?",
@@ -383,11 +514,16 @@
   "admin.federation.tokenLabel": "Токен федерации",
   "admin.federation.tokenPlaceholder": "Вставьте ваш токен сюда",
   "admin.federation.serverURL": "URL сервера",
+<<<<<<< HEAD
   "admin.federation.selectFolders": "Выберите и назовите папки, которые вы хотите федерировать:",
   "admin.federation.acceptInviteButton": "Принять приглашение",
   "admin.federation.working": "Обработка ...",
   "admin.federation.pasteTokenHint": "Вставьте ваш токен в текстовое поле, чтобы продолжить",
   "admin.federation.acceptFailed": "Не удалось принять приглашение",
+=======
+  "admin.federation.acceptFailed": "Не удалось принять приглашение",
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.logs.title": "Журналирование",
   "admin.logs.writeLogs": "Запись журналов:",
   "admin.logs.logsDirectory": "Директория журналов:",
@@ -395,16 +531,26 @@
   "admin.logs.downloadFailed": "Не удалось скачать",
   "admin.logs.disableTitle": "Отключить запись журналов на диск?",
   "admin.logs.enableTitle": "Включить запись журналов на диск?",
+<<<<<<< HEAD
   "admin.lock.title": "Заблокировать панель администратора",
   "admin.lock.description": "Это запретит всем вносить изменения в настройки через панель администратора.",
   "admin.lock.undoInstructions": "Чтобы отменить это, вам потребуется:",
   "admin.lock.undoStep1": "Открыть файл конфигурации",
   "admin.lock.undoStep2": "Изменить значение 'lockAdmin' на 'false'",
   "admin.lock.undoStep3": "Перезапустить mStream",
+=======
+
+  "admin.lock.title": "Заблокировать панель администратора",
+  "admin.lock.description": "Это запретит всем вносить изменения в настройки через панель администратора.",
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.lock.disableButton": "Отключить панель администратора",
   "admin.lock.disableTitle": "Отключить панель администратора?",
   "admin.lock.disable": "Отключить",
   "admin.lock.disableFailed": "Не удалось отключить панель администратора",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.fileExplorer.title": "Файловый менеджер",
   "admin.fileExplorer.back": "назад",
   "admin.fileExplorer.home": "домой",
@@ -412,6 +558,10 @@
   "admin.fileExplorer.selectCurrent": "Выбрать текущую директорию",
   "admin.fileExplorer.contentsFailed": "Не удалось получить содержимое директории",
   "admin.fileExplorer.cannotSelect": "Невозможно выбрать директорию",
+<<<<<<< HEAD
+=======
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.modal.passwordReset": "Сброс пароля",
   "admin.modal.user": "Пользователь:",
   "admin.modal.newPassword": "Новый пароль",

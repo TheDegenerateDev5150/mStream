@@ -4,6 +4,7 @@ const I18N = (() => {
   let fallback = {};
   const DEFAULT_LANG = 'en';
 
+<<<<<<< HEAD
   // Listeners notified whenever a new language finishes loading.
   const changeListeners = new Set();
 
@@ -13,6 +14,10 @@ const I18N = (() => {
   function resolve(obj, key) {
     if (obj == null) { return undefined; }
     if (obj[key] !== undefined) { return obj[key]; }
+=======
+  // Walk a dot-separated key path: "toast.uploadFailed" → obj.toast.uploadFailed
+  function resolve(obj, key) {
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
     return key.split('.').reduce((o, k) => (o && o[k] !== undefined) ? o[k] : undefined, obj);
   }
 
@@ -87,6 +92,7 @@ const I18N = (() => {
 
     localStorage.setItem('mstream-lang', lang);
     mod.translatePage();
+<<<<<<< HEAD
     changeListeners.forEach(fn => { try { fn(lang); } catch (_) { /* noop */ } });
   };
 
@@ -103,6 +109,10 @@ const I18N = (() => {
     const unsub = mod.onChange(() => { unsub(); resolve(); });
   });
 
+=======
+  };
+
+>>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   // Scan the DOM for data-i18n attributes and translate matching elements.
   // Use data-i18n-attr to translate an attribute (e.g. placeholder) instead of textContent.
   mod.translatePage = () => {
