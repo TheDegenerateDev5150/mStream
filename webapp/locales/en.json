@@ -27,7 +27,6 @@
   "nav.mobileApps": "Mobile Apps",
   "nav.jukeboxMode": "Jukebox Mode",
   "nav.searchDB": "Search DB",
-
   "modal.close": "Close",
   "modal.sharePlaylist": "Share Playlist",
   "modal.playbackSpeed": "Playback Speed",
@@ -38,16 +37,13 @@
   "modal.createFolder": "Create Folder",
   "modal.metadata": "Metadata",
   "modal.changeAlbumArt": "Change Album Art",
-
   "share.expirationLabel": "Expiration Time (in days)",
   "share.button": "Share It!",
   "share.placeholder": "Your URL will be put here",
-
   "playlist.namePlaceholder": "Enter your playlist name",
   "playlist.saveButton": "Save Playlist",
   "playlist.createButton": "Create Playlist",
   "playlist.addToPlaylist": "Add To Playlist:",
-
   "livePlaylist.description1": "Live playlist mode keeps your current queue synced to the server.  For now this only works on the web app. It will be available on mobile soon.",
   "livePlaylist.description2": "Using live playlist on two devices at the same time might result in some odd behavior",
   "livePlaylist.autoStart": "Start Live Playlist Automatically",
@@ -56,12 +52,10 @@
   "livePlaylist.useExisting": "Use an existing playlist",
   "livePlaylist.selectPlaylist": "Select Playlist",
   "livePlaylist.enableButton": "Enable Live Playlist",
-
   "server.addressPlaceholder": "Address",
   "server.usernamePlaceholder": "Username",
   "server.passwordPlaceholder": "Password",
   "server.saveButton": "Save Server",
-
   "upload.tabFiles": "Upload Files",
   "upload.tabYoutube": "Youtube DL",
   "upload.location": "Location:",
@@ -78,11 +72,9 @@
   "upload.metaYear": "Year:",
   "upload.loadingMetadata": "Loading metadata...",
   "upload.downloadButton": "Download",
-
   "folder.location": "Location:",
   "folder.namePlaceholder": "Folder name",
   "folder.createButton": "Create Folder",
-
   "metadata.title": "Title:",
   "metadata.album": "Album:",
   "metadata.artist": "Artist:",
@@ -94,24 +86,24 @@
   "metadata.filePath": "File Path:",
   "metadata.albumArt": "Album Art:",
   "metadata.changeAlbumArt": "Change Album Art",
-
   "albumArt.loadingAlbumArt": "Loading album art...",
   "albumArt.uploadCustom": "Upload Custom Image",
   "albumArt.uploadHint": "JPEG, PNG, or WebP. Max 10MB.",
   "albumArt.saveCover": "Save cover.jpg to album folder",
   "albumArt.embedInFile": "Embed album art in audio file",
   "albumArt.uploadButton": "Upload & Apply",
-
   "fileExplorer.searchPlaceholder": "Search List",
   "fileExplorer.downloading": "Downloading...",
-
   "toast.filesExplorerOnly": "Files can only be added to the file explorer",
   "toast.cannotUploadHere": "Cannot Upload File Here",
   "toast.filesUploaded": "Files Uploaded",
   "toast.uploadPartial": "{{success}} out of {{total}} were uploaded successfully",
   "toast.uploadFailed": "Upload Failed",
   "toast.albumQueued": "Album Queued",
-  "toast.albumQueuedMessage": { "one": "{{count}} song added", "other": "{{count}} songs added" },
+  "toast.albumQueuedMessage": {
+    "one": "{{count}} song added",
+    "other": "{{count}} songs added"
+  },
   "toast.folderCreated": "Folder Created",
   "toast.folderCreateFailed": "Failed to create folder",
   "toast.youtubeUrlRequired": "URL must be a YouTube link",
@@ -129,27 +121,29 @@
   "toast.noPlaylistToSave": "No playlist to save!",
   "toast.playlistSaved": "Playlist Saved",
   "toast.autoDJRequiresDir": "Auto DJ requires a directory",
-
   "error.callFailed": "Call Failed",
   "error.serverCallFailed": "Server call failed",
-
   "status.scanInProgress": "Scan In Progress",
-  "status.filesInDB": { "one": "{{count}} file in DB", "other": "{{count}} files in DB" },
+  "status.filesInDB": {
+    "one": "{{count}} file in DB",
+    "other": "{{count}} files in DB"
+  },
   "status.noArtistOrAlbumInfo": "No artist or album info available for search",
   "status.searching": "Searching...",
   "status.noAlbumArtFound": "No album art found",
   "status.searchFailed": "Search failed: {{error}}",
   "status.albumArtResults": "Found {{count}} results. Click to select:",
   "status.downloadingAudio": "Downloading audio...",
-  "status.downloadingFiles": { "one": "Downloading {{count}} file...", "other": "Downloading {{count}} files..." },
-
+  "status.downloadingFiles": {
+    "one": "Downloading {{count}} file...",
+    "other": "Downloading {{count}} files..."
+  },
   "label.artist": "Artist:",
   "label.album": "Album:",
   "label.playlist": "Playlist:",
   "label.genre": "Genre:",
   "label.disabled": "Disabled",
   "label.newPlaylist": "New Playlist",
-
   "panel.fileExplorer": "File Explorer",
   "panel.playlists": "Playlists",
   "panel.artists": "Artists",
@@ -167,7 +161,6 @@
   "panel.searchDB": "Search DB",
   "panel.config": "Config",
   "panel.layout": "Layout",
-
   "transcode.disabled": "Transcoding is disabled on this server",
   "autoDJ.description": "Auto DJ randomly generates a playlist.  Click the 'DJ' button on the bottom enable it",
   "autoDJ.minRating": "Minimum Rating",
@@ -180,20 +173,19 @@
   "jukebox.serverAudio": "Server Audio",
   "jukebox.serverAudioDescription": "Play music through the server's speakers instead of the browser",
   "jukebox.openServerAudio": "Open Server Audio Player",
-
   "layout.audioBookControls": "Audio Book Controls",
   "layout.playerOnBottom": "Player On Bottom",
   "layout.metadataInQueue": "Metadata in Queue",
   "layout.compressAlbumArt": "Compress Album Art",
-
+  "layout.hideTopBar": "Hide Top Bar",
   "error.genericError": "An error occurred.  Please refresh the page and try again",
-  "error.serverCallFailed": "Server call failed",
-
-  "label.getLastSongs": { "one": "song", "other": "songs" },
+  "label.getLastSongs": {
+    "one": "song",
+    "other": "songs"
+  },
   "label.welcomeToMStream": "Welcome To mStream!",
   "label.preset": "Preset:",
   "label.viewDownloads": "view downloads",
-
   "tooltip.goBack": "Go Back",
   "tooltip.search": "Search",
   "tooltip.createFolder": "Create Folder",
@@ -206,16 +198,13 @@
   "tooltip.downloadPlaylist": "Download Playlist",
   "tooltip.sharePlaylist": "Share Playlist",
   "tooltip.clearPlaylist": "Clear Playlist",
-
   "settings.language": "Language",
-
   "login.title": "Login",
   "login.username": "Username",
   "login.password": "Password",
   "login.submit": "Login",
   "login.success": "Login Success!",
   "login.failed": "Login Failed",
-
   "admin.nav.config": "Config",
   "admin.nav.directories": "Directories",
   "admin.nav.users": "Users",
@@ -230,9 +219,9 @@
   "admin.nav.navigation": "Navigation",
   "admin.nav.player": "Player",
   "admin.nav.logout": "Logout",
-
   "admin.folders.title": "Add Folder",
   "admin.folders.selectDirectory": "Select Directory",
+  "admin.folders.selectDirectoryHint": "Click to choose directory",
   "admin.folders.vPathLabel": "Server Path Alias (vPath)",
   "admin.folders.vPathHint": "No special characters or spaces",
   "admin.folders.giveAccessToAll": "Give Access To All Users",
@@ -252,7 +241,6 @@
   "admin.folders.goBack": "Go Back",
   "admin.folders.rebooting": "Server Rebooting. Please wait 30s for the server to come back online",
   "admin.folders.removeFailed": "Failed to remove folder",
-
   "admin.users.title": "Add User",
   "admin.users.usernameLabel": "Username",
   "admin.users.passwordLabel": "Password",
@@ -282,7 +270,6 @@
   "admin.users.changeFolders": "change folders",
   "admin.users.changeAccess": "access",
   "admin.users.delete": "del",
-
   "admin.settings.security": "Security",
   "admin.settings.fileUploading": "File Uploading:",
   "admin.settings.enabled": "Enabled",
@@ -304,7 +291,6 @@
   "admin.settings.editSSL": "Edit SSL",
   "admin.settings.removeSSL": "Remove SSL",
   "admin.settings.updated": "Updated Successfully",
-
   "admin.settings.switchFrontend": "Switch to {{label}} frontend?",
   "admin.settings.switchRestart": "The server will restart to apply the change.",
   "admin.settings.switchingTo": "Switching to {{label}}...",
@@ -318,7 +304,6 @@
   "admin.settings.generateButton": "Generate Key",
   "admin.settings.failed": "Failed",
   "admin.settings.cancel": "Cancel",
-
   "admin.settings.disableUploading": "Disable File Uploading?",
   "admin.settings.enableUploading": "Enable File Uploading?",
   "admin.settings.disableFolders": "Disable Create Folder?",
@@ -331,7 +316,6 @@
   "admin.settings.disableAutoBoot": "Disable Auto-Boot Server Audio?",
   "admin.settings.enableAutoBoot": "Enable Auto-Boot Server Audio?",
   "admin.settings.autoBootHint": "When enabled, mStream will automatically start the Rust audio player on boot",
-
   "admin.db.scanSettings": "DB Scan Settings",
   "admin.db.scanInterval": "Scan Interval:",
   "admin.db.bootScanDelay": "Boot Scan Delay:",
@@ -377,16 +361,20 @@
   "admin.db.compressionInProgress": "Image Compression In Progress",
   "admin.db.toggleSkipImg": "Image Skip",
   "admin.db.toggleCompressImages": "Compress Images",
-
   "admin.transcode.settings": "Settings",
+  "admin.transcode.poweredBy": "Powered By",
   "admin.transcode.disableTitle": "Disable Transcoding?",
   "admin.transcode.enableTitle": "Enable Transcoding?",
   "admin.transcode.downloadFFmpeg": "Enabling this will download FFmpeg",
   "admin.transcode.ffmpegDownloaded": "FFmpeg Downloaded",
   "admin.transcode.ffmpegFailed": "Failed To Download FFmpeg",
   "admin.transcode.comingSoon": "Coming Soon",
-
   "admin.federation.title": "mStream Federation",
+  "admin.federation.poweredBy": "Powered By",
+  "admin.federation.tabFederation": "Federation",
+  "admin.federation.tabSyncthing": "Syncthing",
+  "admin.federation.deviceId": "Device ID:",
+  "admin.federation.disableAction": "Disable Federation",
   "admin.federation.enableButton": "Enable Federation",
   "admin.federation.disableTitle": "Disable Federation?",
   "admin.federation.enableTitle": "Enable Federation?",
@@ -395,8 +383,11 @@
   "admin.federation.tokenLabel": "Federation Token",
   "admin.federation.tokenPlaceholder": "Paste your token here",
   "admin.federation.serverURL": "Server URL",
+  "admin.federation.selectFolders": "Select and name folders you want to federate:",
+  "admin.federation.acceptInviteButton": "Accept Invite",
+  "admin.federation.working": "Working ...",
+  "admin.federation.pasteTokenHint": "Paste your token in the textbox to continue",
   "admin.federation.acceptFailed": "Failed to accept invite",
-
   "admin.logs.title": "Logging",
   "admin.logs.writeLogs": "Write Logs:",
   "admin.logs.logsDirectory": "Logs Directory:",
@@ -404,14 +395,16 @@
   "admin.logs.downloadFailed": "Download Failed",
   "admin.logs.disableTitle": "Disable Writing Logs To Disk?",
   "admin.logs.enableTitle": "Enable Writing Logs To Disk?",
-
   "admin.lock.title": "Lock Admin Panel",
   "admin.lock.description": "This will prevent anyone from making configuration changes with the Admin Panel.",
+  "admin.lock.undoInstructions": "If you want undo this you will need to:",
+  "admin.lock.undoStep1": "Open the config file",
+  "admin.lock.undoStep2": "Change the value of 'lockAdmin' to 'false'",
+  "admin.lock.undoStep3": "Reboot mStream",
   "admin.lock.disableButton": "Disable Admin Panel",
   "admin.lock.disableTitle": "Disable Admin Panel?",
   "admin.lock.disable": "Disable",
   "admin.lock.disableFailed": "Failed to disable admin panel",
-
   "admin.fileExplorer.title": "File Explorer",
   "admin.fileExplorer.back": "back",
   "admin.fileExplorer.home": "home",
@@ -419,7 +412,6 @@
   "admin.fileExplorer.selectCurrent": "Select Current Directory",
   "admin.fileExplorer.contentsFailed": "Failed to get directory contents",
   "admin.fileExplorer.cannotSelect": "Cannot Select Directory",
-
   "admin.modal.passwordReset": "Password Reset",
   "admin.modal.user": "User:",
   "admin.modal.newPassword": "New Password",

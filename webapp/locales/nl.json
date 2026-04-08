@@ -27,7 +27,6 @@
   "nav.mobileApps": "Mobiele Apps",
   "nav.jukeboxMode": "Jukeboxmodus",
   "nav.searchDB": "Zoek in DB",
-
   "modal.close": "Sluiten",
   "modal.sharePlaylist": "Afspeellijst Delen",
   "modal.playbackSpeed": "Afspeelsnelheid",
@@ -38,16 +37,13 @@
   "modal.createFolder": "Map Aanmaken",
   "modal.metadata": "Metadata",
   "modal.changeAlbumArt": "Albumhoes Wijzigen",
-
   "share.expirationLabel": "Vervaltijd (in dagen)",
   "share.button": "Delen!",
   "share.placeholder": "Je URL wordt hier geplaatst",
-
   "playlist.namePlaceholder": "Voer de naam van je afspeellijst in",
   "playlist.saveButton": "Afspeellijst Opslaan",
   "playlist.createButton": "Afspeellijst Aanmaken",
   "playlist.addToPlaylist": "Toevoegen aan Afspeellijst:",
-
   "livePlaylist.description1": "De live afspeellijstmodus houdt je huidige wachtrij gesynchroniseerd met de server. Voorlopig werkt dit alleen in de webapp. Het wordt binnenkort beschikbaar op mobiel.",
   "livePlaylist.description2": "Het gebruik van een live afspeellijst op twee apparaten tegelijk kan onverwacht gedrag veroorzaken",
   "livePlaylist.autoStart": "Live Afspeellijst automatisch starten",
@@ -56,12 +52,10 @@
   "livePlaylist.useExisting": "Gebruik een bestaande afspeellijst",
   "livePlaylist.selectPlaylist": "Selecteer Afspeellijst",
   "livePlaylist.enableButton": "Live Afspeellijst Inschakelen",
-
   "server.addressPlaceholder": "Adres",
   "server.usernamePlaceholder": "Gebruikersnaam",
   "server.passwordPlaceholder": "Wachtwoord",
   "server.saveButton": "Server Opslaan",
-
   "upload.tabFiles": "Bestanden Uploaden",
   "upload.tabYoutube": "Youtube DL",
   "upload.location": "Locatie:",
@@ -78,11 +72,9 @@
   "upload.metaYear": "Jaar:",
   "upload.loadingMetadata": "Metadata laden...",
   "upload.downloadButton": "Downloaden",
-
   "folder.location": "Locatie:",
   "folder.namePlaceholder": "Mapnaam",
   "folder.createButton": "Map Aanmaken",
-
   "metadata.title": "Titel:",
   "metadata.album": "Album:",
   "metadata.artist": "Artiest:",
@@ -94,24 +86,24 @@
   "metadata.filePath": "Bestandspad:",
   "metadata.albumArt": "Albumhoes:",
   "metadata.changeAlbumArt": "Albumhoes Wijzigen",
-
   "albumArt.loadingAlbumArt": "Albumhoes laden...",
   "albumArt.uploadCustom": "Aangepaste afbeelding uploaden",
   "albumArt.uploadHint": "JPEG, PNG of WebP. Max 10MB.",
   "albumArt.saveCover": "cover.jpg opslaan in albummap",
   "albumArt.embedInFile": "Albumhoes insluiten in audiobestand",
   "albumArt.uploadButton": "Uploaden en Toepassen",
-
   "fileExplorer.searchPlaceholder": "Lijst Doorzoeken",
   "fileExplorer.downloading": "Downloaden...",
-
   "toast.filesExplorerOnly": "Bestanden kunnen alleen aan de bestandsverkenner worden toegevoegd",
   "toast.cannotUploadHere": "Kan hier geen bestand uploaden",
   "toast.filesUploaded": "Bestanden Geüpload",
   "toast.uploadPartial": "{{success}} van {{total}} zijn succesvol geüpload",
   "toast.uploadFailed": "Upload Mislukt",
   "toast.albumQueued": "Album in Wachtrij",
-  "toast.albumQueuedMessage": { "one": "{{count}} nummer toegevoegd", "other": "{{count}} nummers toegevoegd" },
+  "toast.albumQueuedMessage": {
+    "one": "{{count}} nummer toegevoegd",
+    "other": "{{count}} nummers toegevoegd"
+  },
   "toast.folderCreated": "Map Aangemaakt",
   "toast.folderCreateFailed": "Map aanmaken mislukt",
   "toast.youtubeUrlRequired": "URL moet een YouTube-link zijn",
@@ -129,27 +121,29 @@
   "toast.noPlaylistToSave": "Geen afspeellijst om op te slaan!",
   "toast.playlistSaved": "Afspeellijst Opgeslagen",
   "toast.autoDJRequiresDir": "Auto DJ vereist een map",
-
   "error.callFailed": "Oproep Mislukt",
   "error.serverCallFailed": "Serveroproep mislukt",
-
   "status.scanInProgress": "Scan Bezig",
-  "status.filesInDB": { "one": "{{count}} bestand in DB", "other": "{{count}} bestanden in DB" },
+  "status.filesInDB": {
+    "one": "{{count}} bestand in DB",
+    "other": "{{count}} bestanden in DB"
+  },
   "status.noArtistOrAlbumInfo": "Geen artiest- of albuminformatie beschikbaar voor zoekopdracht",
   "status.searching": "Zoeken...",
   "status.noAlbumArtFound": "Geen albumhoes gevonden",
   "status.searchFailed": "Zoeken mislukt: {{error}}",
   "status.albumArtResults": "{{count}} resultaten gevonden. Klik om te selecteren:",
   "status.downloadingAudio": "Audio downloaden...",
-  "status.downloadingFiles": { "one": "{{count}} bestand downloaden...", "other": "{{count}} bestanden downloaden..." },
-
+  "status.downloadingFiles": {
+    "one": "{{count}} bestand downloaden...",
+    "other": "{{count}} bestanden downloaden..."
+  },
   "label.artist": "Artiest:",
   "label.album": "Album:",
   "label.playlist": "Afspeellijst:",
   "label.genre": "Genre:",
   "label.disabled": "Uitgeschakeld",
   "label.newPlaylist": "Nieuwe Afspeellijst",
-
   "panel.fileExplorer": "Bestandsverkenner",
   "panel.playlists": "Afspeellijsten",
   "panel.artists": "Artiesten",
@@ -167,7 +161,6 @@
   "panel.searchDB": "Zoek in DB",
   "panel.config": "Configuratie",
   "panel.layout": "Layout",
-
   "transcode.disabled": "Transcoderen is uitgeschakeld op deze server",
   "autoDJ.description": "Auto DJ genereert willekeurig een afspeellijst. Klik op de 'DJ'-knop onderaan om het in te schakelen",
   "autoDJ.minRating": "Minimale Beoordeling",
@@ -180,20 +173,19 @@
   "jukebox.serverAudio": "Serveraudio",
   "jukebox.serverAudioDescription": "Speel muziek af via de luidsprekers van de server in plaats van de browser",
   "jukebox.openServerAudio": "Serveraudiospeler Openen",
-
   "layout.audioBookControls": "Audioboekknoppen",
   "layout.playerOnBottom": "Speler Onderaan",
   "layout.metadataInQueue": "Metadata in Wachtrij",
   "layout.compressAlbumArt": "Albumhoes Comprimeren",
-
+  "layout.hideTopBar": "Bovenbalk verbergen",
   "error.genericError": "Er is een fout opgetreden. Vernieuw de pagina en probeer het opnieuw",
-  "error.serverCallFailed": "Serveroproep mislukt",
-
-  "label.getLastSongs": { "one": "nummer", "other": "nummers" },
+  "label.getLastSongs": {
+    "one": "nummer",
+    "other": "nummers"
+  },
   "label.welcomeToMStream": "Welkom bij mStream!",
   "label.preset": "Preset:",
   "label.viewDownloads": "downloads bekijken",
-
   "tooltip.goBack": "Terug",
   "tooltip.search": "Zoeken",
   "tooltip.createFolder": "Map Aanmaken",
@@ -206,16 +198,13 @@
   "tooltip.downloadPlaylist": "Afspeellijst Downloaden",
   "tooltip.sharePlaylist": "Afspeellijst Delen",
   "tooltip.clearPlaylist": "Afspeellijst Wissen",
-
   "settings.language": "Taal",
-
   "login.title": "Inloggen",
   "login.username": "Gebruikersnaam",
   "login.password": "Wachtwoord",
   "login.submit": "Inloggen",
   "login.success": "Inloggen Gelukt!",
   "login.failed": "Inloggen Mislukt",
-
   "admin.nav.config": "Configuratie",
   "admin.nav.directories": "Mappen",
   "admin.nav.users": "Gebruikers",
@@ -230,9 +219,9 @@
   "admin.nav.navigation": "Navigatie",
   "admin.nav.player": "Speler",
   "admin.nav.logout": "Uitloggen",
-
   "admin.folders.title": "Map Toevoegen",
   "admin.folders.selectDirectory": "Selecteer Map",
+  "admin.folders.selectDirectoryHint": "Klik om een map te kiezen",
   "admin.folders.vPathLabel": "Serverpadalilas (vPath)",
   "admin.folders.vPathHint": "Geen speciale tekens of spaties",
   "admin.folders.giveAccessToAll": "Toegang Geven aan Alle Gebruikers",
@@ -252,7 +241,6 @@
   "admin.folders.goBack": "Terug",
   "admin.folders.rebooting": "Server wordt opnieuw opgestart. Wacht 30 seconden tot de server weer online is",
   "admin.folders.removeFailed": "Map verwijderen mislukt",
-
   "admin.users.title": "Gebruiker Toevoegen",
   "admin.users.usernameLabel": "Gebruikersnaam",
   "admin.users.passwordLabel": "Wachtwoord",
@@ -282,7 +270,6 @@
   "admin.users.changeFolders": "mappen wijzigen",
   "admin.users.changeAccess": "toegang",
   "admin.users.delete": "verw.",
-
   "admin.settings.security": "Beveiliging",
   "admin.settings.fileUploading": "Bestanden Uploaden:",
   "admin.settings.enabled": "Ingeschakeld",
@@ -304,7 +291,6 @@
   "admin.settings.editSSL": "SSL Bewerken",
   "admin.settings.removeSSL": "SSL Verwijderen",
   "admin.settings.updated": "Succesvol Bijgewerkt",
-
   "admin.settings.switchFrontend": "Overschakelen naar {{label}} frontend?",
   "admin.settings.switchRestart": "De server wordt opnieuw opgestart om de wijziging toe te passen.",
   "admin.settings.switchingTo": "Overschakelen naar {{label}}...",
@@ -318,7 +304,6 @@
   "admin.settings.generateButton": "Sleutel Genereren",
   "admin.settings.failed": "Mislukt",
   "admin.settings.cancel": "Annuleren",
-
   "admin.settings.disableUploading": "Bestanden Uploaden Uitschakelen?",
   "admin.settings.enableUploading": "Bestanden Uploaden Inschakelen?",
   "admin.settings.disableFolders": "Mappen Aanmaken Uitschakelen?",
@@ -331,7 +316,6 @@
   "admin.settings.disableAutoBoot": "Serveraudio Automatisch Starten Uitschakelen?",
   "admin.settings.enableAutoBoot": "Serveraudio Automatisch Starten Inschakelen?",
   "admin.settings.autoBootHint": "Wanneer ingeschakeld, start mStream automatisch de Rust-audiospeler bij het opstarten",
-
   "admin.db.scanSettings": "DB-scaninstellingen",
   "admin.db.scanInterval": "Scaninterval:",
   "admin.db.bootScanDelay": "Scanvertraging bij Opstarten:",
@@ -377,16 +361,20 @@
   "admin.db.compressionInProgress": "Afbeeldingscompressie Bezig",
   "admin.db.toggleSkipImg": "Afbeeldingen Overslaan",
   "admin.db.toggleCompressImages": "Afbeeldingen Comprimeren",
-
   "admin.transcode.settings": "Instellingen",
+  "admin.transcode.poweredBy": "Aangedreven door",
   "admin.transcode.disableTitle": "Transcoderen Uitschakelen?",
   "admin.transcode.enableTitle": "Transcoderen Inschakelen?",
   "admin.transcode.downloadFFmpeg": "Dit inschakelen zal FFmpeg downloaden",
   "admin.transcode.ffmpegDownloaded": "FFmpeg Gedownload",
   "admin.transcode.ffmpegFailed": "FFmpeg Downloaden Mislukt",
   "admin.transcode.comingSoon": "Binnenkort Beschikbaar",
-
   "admin.federation.title": "mStream Federatie",
+  "admin.federation.poweredBy": "Aangedreven door",
+  "admin.federation.tabFederation": "Federatie",
+  "admin.federation.tabSyncthing": "Syncthing",
+  "admin.federation.deviceId": "Apparaat-ID:",
+  "admin.federation.disableAction": "Federatie uitschakelen",
   "admin.federation.enableButton": "Federatie Inschakelen",
   "admin.federation.disableTitle": "Federatie Uitschakelen?",
   "admin.federation.enableTitle": "Federatie Inschakelen?",
@@ -395,8 +383,11 @@
   "admin.federation.tokenLabel": "Federatietoken",
   "admin.federation.tokenPlaceholder": "Plak je token hier",
   "admin.federation.serverURL": "Server URL",
+  "admin.federation.selectFolders": "Selecteer en benoem de mappen die u wilt federeren:",
+  "admin.federation.acceptInviteButton": "Uitnodiging accepteren",
+  "admin.federation.working": "Bezig ...",
+  "admin.federation.pasteTokenHint": "Plak uw token in het tekstvak om door te gaan",
   "admin.federation.acceptFailed": "Uitnodiging accepteren mislukt",
-
   "admin.logs.title": "Logboeken",
   "admin.logs.writeLogs": "Logboeken Schrijven:",
   "admin.logs.logsDirectory": "Logboekmap:",
@@ -404,14 +395,16 @@
   "admin.logs.downloadFailed": "Download Mislukt",
   "admin.logs.disableTitle": "Logboeken Schrijven naar Schijf Uitschakelen?",
   "admin.logs.enableTitle": "Logboeken Schrijven naar Schijf Inschakelen?",
-
   "admin.lock.title": "Beheerderspaneel Vergrendelen",
   "admin.lock.description": "Dit voorkomt dat iemand configuratiewijzigingen kan aanbrengen via het Beheerderspaneel.",
+  "admin.lock.undoInstructions": "Om dit ongedaan te maken, moet u:",
+  "admin.lock.undoStep1": "Het configuratiebestand openen",
+  "admin.lock.undoStep2": "De waarde van 'lockAdmin' wijzigen naar 'false'",
+  "admin.lock.undoStep3": "mStream opnieuw starten",
   "admin.lock.disableButton": "Beheerderspaneel Uitschakelen",
   "admin.lock.disableTitle": "Beheerderspaneel Uitschakelen?",
   "admin.lock.disable": "Uitschakelen",
   "admin.lock.disableFailed": "Beheerderspaneel uitschakelen mislukt",
-
   "admin.fileExplorer.title": "Bestandsverkenner",
   "admin.fileExplorer.back": "terug",
   "admin.fileExplorer.home": "home",
@@ -419,7 +412,6 @@
   "admin.fileExplorer.selectCurrent": "Huidige Map Selecteren",
   "admin.fileExplorer.contentsFailed": "Mapinhoud ophalen mislukt",
   "admin.fileExplorer.cannotSelect": "Kan Map Niet Selecteren",
-
   "admin.modal.passwordReset": "Wachtwoord Resetten",
   "admin.modal.user": "Gebruiker:",
   "admin.modal.newPassword": "Nieuw Wachtwoord",

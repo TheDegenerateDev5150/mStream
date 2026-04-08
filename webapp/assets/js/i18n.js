@@ -4,8 +4,15 @@ const I18N = (() => {
   let fallback = {};
   const DEFAULT_LANG = 'en';
 
-  // Walk a dot-separated key path: "toast.uploadFailed" → obj.toast.uploadFailed
+  // Listeners notified whenever a new language finishes loading.
+  const changeListeners = new Set();
+
+  // Look up a key. Locale files use flat dot-delimited keys (e.g. "login.username"),
+  // so try a direct lookup first. Fall back to nested-object walking so future
+  // locale files can use either shape.
   function resolve(obj, key) {
+    if (obj == null) { return undefined; }
+    if (obj[key] !== undefined) { return obj[key]; }
     return key.split('.').reduce((o, k) => (o && o[k] !== undefined) ? o[k] : undefined, obj);
   }
 
@@ -80,7 +87,21 @@ const I18N = (() => {
 
     localStorage.setItem('mstream-lang', lang);
     mod.translatePage();
+    changeListeners.forEach(fn => { try { fn(lang); } catch (_) { /* noop */ } });
   };
+
+  // Subscribe to language-change events. Returns an unsubscribe function.
+  // Used by Vue-based pages (admin) to re-render when the dictionary updates.
+  mod.onChange = (fn) => {
+    changeListeners.add(fn);
+    return () => changeListeners.delete(fn);
+  };
+
+  // Promise that resolves after the first loadLanguage() completes.
+  // Pages that build UI dynamically can await this before rendering.
+  mod.ready = new Promise(resolve => {
+    const unsub = mod.onChange(() => { unsub(); resolve(); });
+  });
 
   // Scan the DOM for data-i18n attributes and translate matching elements.
   // Use data-i18n-attr to translate an attribute (e.g. placeholder) instead of textContent.

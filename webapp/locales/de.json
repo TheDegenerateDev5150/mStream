@@ -27,7 +27,6 @@
   "nav.mobileApps": "Mobile Apps",
   "nav.jukeboxMode": "Jukebox-Modus",
   "nav.searchDB": "Datenbank durchsuchen",
-
   "modal.close": "Schließen",
   "modal.sharePlaylist": "Wiedergabeliste teilen",
   "modal.playbackSpeed": "Wiedergabegeschwindigkeit",
@@ -38,16 +37,13 @@
   "modal.createFolder": "Ordner erstellen",
   "modal.metadata": "Metadaten",
   "modal.changeAlbumArt": "Albumcover ändern",
-
   "share.expirationLabel": "Ablaufzeit (in Tagen)",
   "share.button": "Teilen!",
   "share.placeholder": "Ihre URL wird hier angezeigt",
-
   "playlist.namePlaceholder": "Name der Wiedergabeliste eingeben",
   "playlist.saveButton": "Wiedergabeliste speichern",
   "playlist.createButton": "Wiedergabeliste erstellen",
   "playlist.addToPlaylist": "Zur Wiedergabeliste hinzufügen:",
-
   "livePlaylist.description1": "Der Live-Wiedergabeliste-Modus synchronisiert Ihre aktuelle Warteschlange mit dem Server. Derzeit funktioniert dies nur in der Web-App. Für Mobilgeräte wird es bald verfügbar sein.",
   "livePlaylist.description2": "Die Nutzung der Live-Wiedergabeliste auf zwei Geräten gleichzeitig kann zu unerwartetem Verhalten führen",
   "livePlaylist.autoStart": "Live-Wiedergabeliste automatisch starten",
@@ -56,12 +52,10 @@
   "livePlaylist.useExisting": "Vorhandene Wiedergabeliste verwenden",
   "livePlaylist.selectPlaylist": "Wiedergabeliste auswählen",
   "livePlaylist.enableButton": "Live-Wiedergabeliste aktivieren",
-
   "server.addressPlaceholder": "Adresse",
   "server.usernamePlaceholder": "Benutzername",
   "server.passwordPlaceholder": "Passwort",
   "server.saveButton": "Server speichern",
-
   "upload.tabFiles": "Dateien hochladen",
   "upload.tabYoutube": "YouTube DL",
   "upload.location": "Speicherort:",
@@ -78,11 +72,9 @@
   "upload.metaYear": "Jahr:",
   "upload.loadingMetadata": "Metadaten werden geladen...",
   "upload.downloadButton": "Herunterladen",
-
   "folder.location": "Speicherort:",
   "folder.namePlaceholder": "Ordnername",
   "folder.createButton": "Ordner erstellen",
-
   "metadata.title": "Titel:",
   "metadata.album": "Album:",
   "metadata.artist": "Künstler:",
@@ -94,24 +86,24 @@
   "metadata.filePath": "Dateipfad:",
   "metadata.albumArt": "Albumcover:",
   "metadata.changeAlbumArt": "Albumcover ändern",
-
   "albumArt.loadingAlbumArt": "Albumcover wird geladen...",
   "albumArt.uploadCustom": "Eigenes Bild hochladen",
   "albumArt.uploadHint": "JPEG, PNG oder WebP. Maximal 10 MB.",
   "albumArt.saveCover": "cover.jpg im Albumordner speichern",
   "albumArt.embedInFile": "Albumcover in Audiodatei einbetten",
   "albumArt.uploadButton": "Hochladen und anwenden",
-
   "fileExplorer.searchPlaceholder": "Liste durchsuchen",
   "fileExplorer.downloading": "Wird heruntergeladen...",
-
   "toast.filesExplorerOnly": "Dateien können nur zum Datei-Explorer hinzugefügt werden",
   "toast.cannotUploadHere": "Hier kann keine Datei hochgeladen werden",
   "toast.filesUploaded": "Dateien hochgeladen",
   "toast.uploadPartial": "{{success}} von {{total}} wurden erfolgreich hochgeladen",
   "toast.uploadFailed": "Hochladen fehlgeschlagen",
   "toast.albumQueued": "Album in Warteschlange",
-  "toast.albumQueuedMessage": { "one": "{{count}} Lied hinzugefügt", "other": "{{count}} Lieder hinzugefügt" },
+  "toast.albumQueuedMessage": {
+    "one": "{{count}} Lied hinzugefügt",
+    "other": "{{count}} Lieder hinzugefügt"
+  },
   "toast.folderCreated": "Ordner erstellt",
   "toast.folderCreateFailed": "Ordner konnte nicht erstellt werden",
   "toast.youtubeUrlRequired": "Die URL muss ein YouTube-Link sein",
@@ -129,27 +121,29 @@
   "toast.noPlaylistToSave": "Keine Wiedergabeliste zum Speichern!",
   "toast.playlistSaved": "Wiedergabeliste gespeichert",
   "toast.autoDJRequiresDir": "Auto DJ benötigt ein Verzeichnis",
-
   "error.callFailed": "Aufruf fehlgeschlagen",
   "error.serverCallFailed": "Serveraufruf fehlgeschlagen",
-
   "status.scanInProgress": "Scan läuft",
-  "status.filesInDB": { "one": "{{count}} Datei in der Datenbank", "other": "{{count}} Dateien in der Datenbank" },
+  "status.filesInDB": {
+    "one": "{{count}} Datei in der Datenbank",
+    "other": "{{count}} Dateien in der Datenbank"
+  },
   "status.noArtistOrAlbumInfo": "Keine Künstler- oder Albuminformationen für die Suche verfügbar",
   "status.searching": "Suche läuft...",
   "status.noAlbumArtFound": "Kein Albumcover gefunden",
   "status.searchFailed": "Suche fehlgeschlagen: {{error}}",
   "status.albumArtResults": "{{count}} Ergebnisse gefunden. Klicken Sie zur Auswahl:",
   "status.downloadingAudio": "Audio wird heruntergeladen...",
-  "status.downloadingFiles": { "one": "{{count}} Datei wird heruntergeladen...", "other": "{{count}} Dateien werden heruntergeladen..." },
-
+  "status.downloadingFiles": {
+    "one": "{{count}} Datei wird heruntergeladen...",
+    "other": "{{count}} Dateien werden heruntergeladen..."
+  },
   "label.artist": "Künstler:",
   "label.album": "Album:",
   "label.playlist": "Wiedergabeliste:",
   "label.genre": "Genre:",
   "label.disabled": "Deaktiviert",
   "label.newPlaylist": "Neue Wiedergabeliste",
-
   "panel.fileExplorer": "Datei-Explorer",
   "panel.playlists": "Wiedergabelisten",
   "panel.artists": "Künstler",
@@ -167,7 +161,6 @@
   "panel.searchDB": "Datenbank durchsuchen",
   "panel.config": "Konfiguration",
   "panel.layout": "Layout",
-
   "transcode.disabled": "Die Transkodierung ist auf diesem Server deaktiviert",
   "autoDJ.description": "Auto DJ erstellt eine zufällige Wiedergabeliste. Klicken Sie auf die 'DJ'-Schaltfläche unten, um ihn zu aktivieren",
   "autoDJ.minRating": "Mindestbewertung",
@@ -180,20 +173,19 @@
   "jukebox.serverAudio": "Server-Audio",
   "jukebox.serverAudioDescription": "Musik über die Lautsprecher des Servers statt über den Browser wiedergeben",
   "jukebox.openServerAudio": "Server-Audio-Player öffnen",
-
   "layout.audioBookControls": "Hörbuch-Steuerung",
   "layout.playerOnBottom": "Player unten",
   "layout.metadataInQueue": "Metadaten in der Warteschlange",
   "layout.compressAlbumArt": "Albumcover komprimieren",
-
+  "layout.hideTopBar": "Obere Leiste ausblenden",
   "error.genericError": "Ein Fehler ist aufgetreten. Bitte aktualisieren Sie die Seite und versuchen Sie es erneut",
-  "error.serverCallFailed": "Serveraufruf fehlgeschlagen",
-
-  "label.getLastSongs": { "one": "Lied", "other": "Lieder" },
+  "label.getLastSongs": {
+    "one": "Lied",
+    "other": "Lieder"
+  },
   "label.welcomeToMStream": "Willkommen bei mStream!",
   "label.preset": "Voreinstellung:",
   "label.viewDownloads": "Downloads anzeigen",
-
   "tooltip.goBack": "Zurück",
   "tooltip.search": "Suche",
   "tooltip.createFolder": "Ordner erstellen",
@@ -206,16 +198,13 @@
   "tooltip.downloadPlaylist": "Wiedergabeliste herunterladen",
   "tooltip.sharePlaylist": "Wiedergabeliste teilen",
   "tooltip.clearPlaylist": "Wiedergabeliste leeren",
-
   "settings.language": "Sprache",
-
   "login.title": "Anmelden",
   "login.username": "Benutzername",
   "login.password": "Passwort",
   "login.submit": "Anmelden",
   "login.success": "Anmeldung erfolgreich!",
   "login.failed": "Anmeldung fehlgeschlagen",
-
   "admin.nav.config": "Konfiguration",
   "admin.nav.directories": "Verzeichnisse",
   "admin.nav.users": "Benutzer",
@@ -230,9 +219,9 @@
   "admin.nav.navigation": "Navigation",
   "admin.nav.player": "Player",
   "admin.nav.logout": "Abmelden",
-
   "admin.folders.title": "Ordner hinzufügen",
   "admin.folders.selectDirectory": "Verzeichnis auswählen",
+  "admin.folders.selectDirectoryHint": "Klicken Sie, um ein Verzeichnis auszuwählen",
   "admin.folders.vPathLabel": "Serverpfad-Alias (vPath)",
   "admin.folders.vPathHint": "Keine Sonderzeichen oder Leerzeichen",
   "admin.folders.giveAccessToAll": "Allen Benutzern Zugriff gewähren",
@@ -252,7 +241,6 @@
   "admin.folders.goBack": "Zurück",
   "admin.folders.rebooting": "Server wird neu gestartet. Bitte warten Sie 30 Sekunden, bis der Server wieder online ist",
   "admin.folders.removeFailed": "Ordner konnte nicht entfernt werden",
-
   "admin.users.title": "Benutzer hinzufügen",
   "admin.users.usernameLabel": "Benutzername",
   "admin.users.passwordLabel": "Passwort",
@@ -282,7 +270,6 @@
   "admin.users.changeFolders": "Ordner ändern",
   "admin.users.changeAccess": "Zugriff",
   "admin.users.delete": "löschen",
-
   "admin.settings.security": "Sicherheit",
   "admin.settings.fileUploading": "Datei-Upload:",
   "admin.settings.enabled": "Aktiviert",
@@ -304,7 +291,6 @@
   "admin.settings.editSSL": "SSL bearbeiten",
   "admin.settings.removeSSL": "SSL entfernen",
   "admin.settings.updated": "Erfolgreich aktualisiert",
-
   "admin.settings.switchFrontend": "Zum {{label}}-Frontend wechseln?",
   "admin.settings.switchRestart": "Der Server wird neu gestartet, um die Änderung anzuwenden.",
   "admin.settings.switchingTo": "Wechsel zu {{label}}...",
@@ -318,7 +304,6 @@
   "admin.settings.generateButton": "Schlüssel generieren",
   "admin.settings.failed": "Fehlgeschlagen",
   "admin.settings.cancel": "Abbrechen",
-
   "admin.settings.disableUploading": "Datei-Upload deaktivieren?",
   "admin.settings.enableUploading": "Datei-Upload aktivieren?",
   "admin.settings.disableFolders": "Ordnererstellung deaktivieren?",
@@ -331,7 +316,6 @@
   "admin.settings.disableAutoBoot": "Automatischen Start von Server-Audio deaktivieren?",
   "admin.settings.enableAutoBoot": "Automatischen Start von Server-Audio aktivieren?",
   "admin.settings.autoBootHint": "Wenn aktiviert, startet mStream den Rust-Audio-Player automatisch beim Hochfahren",
-
   "admin.db.scanSettings": "Datenbank-Scan-Einstellungen",
   "admin.db.scanInterval": "Scan-Intervall:",
   "admin.db.bootScanDelay": "Scan-Verzögerung beim Start:",
@@ -377,16 +361,20 @@
   "admin.db.compressionInProgress": "Bildkomprimierung läuft",
   "admin.db.toggleSkipImg": "Bilder überspringen",
   "admin.db.toggleCompressImages": "Bilder komprimieren",
-
   "admin.transcode.settings": "Einstellungen",
+  "admin.transcode.poweredBy": "Betrieben von",
   "admin.transcode.disableTitle": "Transkodierung deaktivieren?",
   "admin.transcode.enableTitle": "Transkodierung aktivieren?",
   "admin.transcode.downloadFFmpeg": "Die Aktivierung lädt FFmpeg herunter",
   "admin.transcode.ffmpegDownloaded": "FFmpeg heruntergeladen",
   "admin.transcode.ffmpegFailed": "FFmpeg konnte nicht heruntergeladen werden",
   "admin.transcode.comingSoon": "Demnächst verfügbar",
-
   "admin.federation.title": "mStream-Föderation",
+  "admin.federation.poweredBy": "Betrieben von",
+  "admin.federation.tabFederation": "Föderation",
+  "admin.federation.tabSyncthing": "Syncthing",
+  "admin.federation.deviceId": "Geräte-ID:",
+  "admin.federation.disableAction": "Föderation deaktivieren",
   "admin.federation.enableButton": "Föderation aktivieren",
   "admin.federation.disableTitle": "Föderation deaktivieren?",
   "admin.federation.enableTitle": "Föderation aktivieren?",
@@ -395,8 +383,11 @@
   "admin.federation.tokenLabel": "Föderationstoken",
   "admin.federation.tokenPlaceholder": "Token hier einfügen",
   "admin.federation.serverURL": "Server-URL",
+  "admin.federation.selectFolders": "Wählen und benennen Sie die Ordner, die Sie föderieren möchten:",
+  "admin.federation.acceptInviteButton": "Einladung annehmen",
+  "admin.federation.working": "Wird verarbeitet ...",
+  "admin.federation.pasteTokenHint": "Fügen Sie Ihr Token in das Textfeld ein, um fortzufahren",
   "admin.federation.acceptFailed": "Einladung konnte nicht angenommen werden",
-
   "admin.logs.title": "Protokollierung",
   "admin.logs.writeLogs": "Protokolle schreiben:",
   "admin.logs.logsDirectory": "Protokollverzeichnis:",
@@ -404,14 +395,16 @@
   "admin.logs.downloadFailed": "Download fehlgeschlagen",
   "admin.logs.disableTitle": "Protokollierung auf Festplatte deaktivieren?",
   "admin.logs.enableTitle": "Protokollierung auf Festplatte aktivieren?",
-
   "admin.lock.title": "Admin-Panel sperren",
   "admin.lock.description": "Dies verhindert, dass jemand Konfigurationsänderungen über das Admin-Panel vornimmt.",
+  "admin.lock.undoInstructions": "Um dies rückgängig zu machen, müssen Sie:",
+  "admin.lock.undoStep1": "Die Konfigurationsdatei öffnen",
+  "admin.lock.undoStep2": "Den Wert von 'lockAdmin' auf 'false' ändern",
+  "admin.lock.undoStep3": "mStream neu starten",
   "admin.lock.disableButton": "Admin-Panel deaktivieren",
   "admin.lock.disableTitle": "Admin-Panel deaktivieren?",
   "admin.lock.disable": "Deaktivieren",
   "admin.lock.disableFailed": "Admin-Panel konnte nicht deaktiviert werden",
-
   "admin.fileExplorer.title": "Datei-Explorer",
   "admin.fileExplorer.back": "zurück",
   "admin.fileExplorer.home": "Start",
@@ -419,7 +412,6 @@
   "admin.fileExplorer.selectCurrent": "Aktuelles Verzeichnis auswählen",
   "admin.fileExplorer.contentsFailed": "Verzeichnisinhalte konnten nicht abgerufen werden",
   "admin.fileExplorer.cannotSelect": "Verzeichnis kann nicht ausgewählt werden",
-
   "admin.modal.passwordReset": "Passwort zurücksetzen",
   "admin.modal.user": "Benutzer:",
   "admin.modal.newPassword": "Neues Passwort",

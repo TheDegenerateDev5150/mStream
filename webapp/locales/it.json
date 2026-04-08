@@ -27,7 +27,6 @@
   "nav.mobileApps": "App Mobile",
   "nav.jukeboxMode": "Modalità Jukebox",
   "nav.searchDB": "Cerca nel DB",
-
   "modal.close": "Chiudi",
   "modal.sharePlaylist": "Condividi Playlist",
   "modal.playbackSpeed": "Velocità di riproduzione",
@@ -38,16 +37,13 @@
   "modal.createFolder": "Crea Cartella",
   "modal.metadata": "Metadati",
   "modal.changeAlbumArt": "Cambia Copertina Album",
-
   "share.expirationLabel": "Tempo di scadenza (in giorni)",
   "share.button": "Condividi!",
   "share.placeholder": "Il tuo URL verrà inserito qui",
-
   "playlist.namePlaceholder": "Inserisci il nome della playlist",
   "playlist.saveButton": "Salva Playlist",
   "playlist.createButton": "Crea Playlist",
   "playlist.addToPlaylist": "Aggiungi alla Playlist:",
-
   "livePlaylist.description1": "La modalità playlist live mantiene la coda corrente sincronizzata con il server. Per ora funziona solo sull'app web. Sarà disponibile su mobile a breve.",
   "livePlaylist.description2": "Usare la playlist live su due dispositivi contemporaneamente potrebbe causare comportamenti anomali",
   "livePlaylist.autoStart": "Avvia Playlist Live automaticamente",
@@ -56,12 +52,10 @@
   "livePlaylist.useExisting": "Usa una playlist esistente",
   "livePlaylist.selectPlaylist": "Seleziona Playlist",
   "livePlaylist.enableButton": "Attiva Playlist Live",
-
   "server.addressPlaceholder": "Indirizzo",
   "server.usernamePlaceholder": "Nome utente",
   "server.passwordPlaceholder": "Password",
   "server.saveButton": "Salva Server",
-
   "upload.tabFiles": "Carica File",
   "upload.tabYoutube": "Youtube DL",
   "upload.location": "Posizione:",
@@ -78,11 +72,9 @@
   "upload.metaYear": "Anno:",
   "upload.loadingMetadata": "Caricamento metadati...",
   "upload.downloadButton": "Scarica",
-
   "folder.location": "Posizione:",
   "folder.namePlaceholder": "Nome cartella",
   "folder.createButton": "Crea Cartella",
-
   "metadata.title": "Titolo:",
   "metadata.album": "Album:",
   "metadata.artist": "Artista:",
@@ -94,24 +86,24 @@
   "metadata.filePath": "Percorso File:",
   "metadata.albumArt": "Copertina Album:",
   "metadata.changeAlbumArt": "Cambia Copertina Album",
-
   "albumArt.loadingAlbumArt": "Caricamento copertina album...",
   "albumArt.uploadCustom": "Carica immagine personalizzata",
   "albumArt.uploadHint": "JPEG, PNG o WebP. Max 10MB.",
   "albumArt.saveCover": "Salva cover.jpg nella cartella dell'album",
   "albumArt.embedInFile": "Incorpora la copertina nel file audio",
   "albumArt.uploadButton": "Carica e Applica",
-
   "fileExplorer.searchPlaceholder": "Cerca nella lista",
   "fileExplorer.downloading": "Download in corso...",
-
   "toast.filesExplorerOnly": "I file possono essere aggiunti solo all'esplora file",
   "toast.cannotUploadHere": "Impossibile caricare il file qui",
   "toast.filesUploaded": "File caricati",
   "toast.uploadPartial": "{{success}} su {{total}} sono stati caricati con successo",
   "toast.uploadFailed": "Caricamento fallito",
   "toast.albumQueued": "Album in coda",
-  "toast.albumQueuedMessage": { "one": "{{count}} brano aggiunto", "other": "{{count}} brani aggiunti" },
+  "toast.albumQueuedMessage": {
+    "one": "{{count}} brano aggiunto",
+    "other": "{{count}} brani aggiunti"
+  },
   "toast.folderCreated": "Cartella creata",
   "toast.folderCreateFailed": "Creazione cartella fallita",
   "toast.youtubeUrlRequired": "L'URL deve essere un link di YouTube",
@@ -129,27 +121,29 @@
   "toast.noPlaylistToSave": "Nessuna playlist da salvare!",
   "toast.playlistSaved": "Playlist salvata",
   "toast.autoDJRequiresDir": "Auto DJ richiede una directory",
-
   "error.callFailed": "Chiamata fallita",
   "error.serverCallFailed": "Chiamata al server fallita",
-
   "status.scanInProgress": "Scansione in corso",
-  "status.filesInDB": { "one": "{{count}} file nel DB", "other": "{{count}} file nel DB" },
+  "status.filesInDB": {
+    "one": "{{count}} file nel DB",
+    "other": "{{count}} file nel DB"
+  },
   "status.noArtistOrAlbumInfo": "Nessuna informazione su artista o album disponibile per la ricerca",
   "status.searching": "Ricerca in corso...",
   "status.noAlbumArtFound": "Nessuna copertina album trovata",
   "status.searchFailed": "Ricerca fallita: {{error}}",
   "status.albumArtResults": "Trovati {{count}} risultati. Clicca per selezionare:",
   "status.downloadingAudio": "Download audio in corso...",
-  "status.downloadingFiles": { "one": "Download di {{count}} file in corso...", "other": "Download di {{count}} file in corso..." },
-
+  "status.downloadingFiles": {
+    "one": "Download di {{count}} file in corso...",
+    "other": "Download di {{count}} file in corso..."
+  },
   "label.artist": "Artista:",
   "label.album": "Album:",
   "label.playlist": "Playlist:",
   "label.genre": "Genere:",
   "label.disabled": "Disabilitato",
   "label.newPlaylist": "Nuova Playlist",
-
   "panel.fileExplorer": "Esplora File",
   "panel.playlists": "Playlist",
   "panel.artists": "Artisti",
@@ -167,7 +161,6 @@
   "panel.searchDB": "Cerca nel DB",
   "panel.config": "Configurazione",
   "panel.layout": "Layout",
-
   "transcode.disabled": "La transcodifica è disabilitata su questo server",
   "autoDJ.description": "Auto DJ genera casualmente una playlist. Clicca il pulsante 'DJ' in basso per attivarlo",
   "autoDJ.minRating": "Valutazione minima",
@@ -180,20 +173,19 @@
   "jukebox.serverAudio": "Audio del Server",
   "jukebox.serverAudioDescription": "Riproduci la musica attraverso gli altoparlanti del server invece del browser",
   "jukebox.openServerAudio": "Apri Lettore Audio del Server",
-
   "layout.audioBookControls": "Controlli Audiolibri",
   "layout.playerOnBottom": "Lettore in basso",
   "layout.metadataInQueue": "Metadati nella coda",
   "layout.compressAlbumArt": "Comprimi Copertina Album",
-
+  "layout.hideTopBar": "Nascondi barra superiore",
   "error.genericError": "Si è verificato un errore. Aggiorna la pagina e riprova",
-  "error.serverCallFailed": "Chiamata al server fallita",
-
-  "label.getLastSongs": { "one": "brano", "other": "brani" },
+  "label.getLastSongs": {
+    "one": "brano",
+    "other": "brani"
+  },
   "label.welcomeToMStream": "Benvenuto su mStream!",
   "label.preset": "Preset:",
   "label.viewDownloads": "visualizza download",
-
   "tooltip.goBack": "Indietro",
   "tooltip.search": "Cerca",
   "tooltip.createFolder": "Crea Cartella",
@@ -206,16 +198,13 @@
   "tooltip.downloadPlaylist": "Scarica Playlist",
   "tooltip.sharePlaylist": "Condividi Playlist",
   "tooltip.clearPlaylist": "Svuota Playlist",
-
   "settings.language": "Lingua",
-
   "login.title": "Accesso",
   "login.username": "Nome utente",
   "login.password": "Password",
   "login.submit": "Accedi",
   "login.success": "Accesso riuscito!",
   "login.failed": "Accesso fallito",
-
   "admin.nav.config": "Configurazione",
   "admin.nav.directories": "Directory",
   "admin.nav.users": "Utenti",
@@ -230,9 +219,9 @@
   "admin.nav.navigation": "Navigazione",
   "admin.nav.player": "Lettore",
   "admin.nav.logout": "Esci",
-
   "admin.folders.title": "Aggiungi Cartella",
   "admin.folders.selectDirectory": "Seleziona Directory",
+  "admin.folders.selectDirectoryHint": "Clicca per scegliere una directory",
   "admin.folders.vPathLabel": "Alias Percorso Server (vPath)",
   "admin.folders.vPathHint": "Nessun carattere speciale o spazio",
   "admin.folders.giveAccessToAll": "Dai accesso a tutti gli utenti",
@@ -252,7 +241,6 @@
   "admin.folders.goBack": "Indietro",
   "admin.folders.rebooting": "Server in riavvio. Attendi 30 secondi affinché il server torni online",
   "admin.folders.removeFailed": "Rimozione cartella fallita",
-
   "admin.users.title": "Aggiungi Utente",
   "admin.users.usernameLabel": "Nome utente",
   "admin.users.passwordLabel": "Password",
@@ -282,7 +270,6 @@
   "admin.users.changeFolders": "cambia cartelle",
   "admin.users.changeAccess": "accesso",
   "admin.users.delete": "elimina",
-
   "admin.settings.security": "Sicurezza",
   "admin.settings.fileUploading": "Caricamento File:",
   "admin.settings.enabled": "Abilitato",
@@ -304,7 +291,6 @@
   "admin.settings.editSSL": "Modifica SSL",
   "admin.settings.removeSSL": "Rimuovi SSL",
   "admin.settings.updated": "Aggiornato con successo",
-
   "admin.settings.switchFrontend": "Passare al frontend {{label}}?",
   "admin.settings.switchRestart": "Il server si riavvierà per applicare la modifica.",
   "admin.settings.switchingTo": "Passaggio a {{label}}...",
@@ -318,7 +304,6 @@
   "admin.settings.generateButton": "Genera Chiave",
   "admin.settings.failed": "Fallito",
   "admin.settings.cancel": "Annulla",
-
   "admin.settings.disableUploading": "Disabilitare il Caricamento File?",
   "admin.settings.enableUploading": "Abilitare il Caricamento File?",
   "admin.settings.disableFolders": "Disabilitare la Creazione Cartelle?",
@@ -331,7 +316,6 @@
   "admin.settings.disableAutoBoot": "Disabilitare l'Avvio Automatico Audio Server?",
   "admin.settings.enableAutoBoot": "Abilitare l'Avvio Automatico Audio Server?",
   "admin.settings.autoBootHint": "Quando abilitato, mStream avvierà automaticamente il lettore audio Rust all'avvio",
-
   "admin.db.scanSettings": "Impostazioni Scansione DB",
   "admin.db.scanInterval": "Intervallo di Scansione:",
   "admin.db.bootScanDelay": "Ritardo Scansione all'Avvio:",
@@ -377,16 +361,20 @@
   "admin.db.compressionInProgress": "Compressione immagini in corso",
   "admin.db.toggleSkipImg": "Ignora Immagini",
   "admin.db.toggleCompressImages": "Comprimi Immagini",
-
   "admin.transcode.settings": "Impostazioni",
+  "admin.transcode.poweredBy": "Fornito da",
   "admin.transcode.disableTitle": "Disabilitare la Transcodifica?",
   "admin.transcode.enableTitle": "Abilitare la Transcodifica?",
   "admin.transcode.downloadFFmpeg": "L'abilitazione scaricherà FFmpeg",
   "admin.transcode.ffmpegDownloaded": "FFmpeg scaricato",
   "admin.transcode.ffmpegFailed": "Download di FFmpeg fallito",
   "admin.transcode.comingSoon": "Prossimamente",
-
   "admin.federation.title": "Federazione mStream",
+  "admin.federation.poweredBy": "Fornito da",
+  "admin.federation.tabFederation": "Federazione",
+  "admin.federation.tabSyncthing": "Syncthing",
+  "admin.federation.deviceId": "ID dispositivo:",
+  "admin.federation.disableAction": "Disattiva federazione",
   "admin.federation.enableButton": "Abilita Federazione",
   "admin.federation.disableTitle": "Disabilitare la Federazione?",
   "admin.federation.enableTitle": "Abilitare la Federazione?",
@@ -395,8 +383,11 @@
   "admin.federation.tokenLabel": "Token di Federazione",
   "admin.federation.tokenPlaceholder": "Incolla il tuo token qui",
   "admin.federation.serverURL": "URL del Server",
+  "admin.federation.selectFolders": "Seleziona e nomina le cartelle che vuoi federare:",
+  "admin.federation.acceptInviteButton": "Accetta invito",
+  "admin.federation.working": "In corso ...",
+  "admin.federation.pasteTokenHint": "Incolla il tuo token nella casella di testo per continuare",
   "admin.federation.acceptFailed": "Accettazione invito fallita",
-
   "admin.logs.title": "Registrazione Log",
   "admin.logs.writeLogs": "Scrivi Log:",
   "admin.logs.logsDirectory": "Directory dei Log:",
@@ -404,14 +395,16 @@
   "admin.logs.downloadFailed": "Download fallito",
   "admin.logs.disableTitle": "Disabilitare la scrittura dei log su disco?",
   "admin.logs.enableTitle": "Abilitare la scrittura dei log su disco?",
-
   "admin.lock.title": "Blocca Pannello Admin",
   "admin.lock.description": "Questo impedirà a chiunque di apportare modifiche alla configurazione tramite il Pannello Admin.",
+  "admin.lock.undoInstructions": "Per annullare, dovrai:",
+  "admin.lock.undoStep1": "Aprire il file di configurazione",
+  "admin.lock.undoStep2": "Cambiare il valore di 'lockAdmin' in 'false'",
+  "admin.lock.undoStep3": "Riavviare mStream",
   "admin.lock.disableButton": "Disabilita Pannello Admin",
   "admin.lock.disableTitle": "Disabilitare il Pannello Admin?",
   "admin.lock.disable": "Disabilita",
   "admin.lock.disableFailed": "Disabilitazione pannello admin fallita",
-
   "admin.fileExplorer.title": "Esplora File",
   "admin.fileExplorer.back": "indietro",
   "admin.fileExplorer.home": "home",
@@ -419,7 +412,6 @@
   "admin.fileExplorer.selectCurrent": "Seleziona Directory Corrente",
   "admin.fileExplorer.contentsFailed": "Impossibile ottenere il contenuto della directory",
   "admin.fileExplorer.cannotSelect": "Impossibile Selezionare la Directory",
-
   "admin.modal.passwordReset": "Reimposta Password",
   "admin.modal.user": "Utente:",
   "admin.modal.newPassword": "Nuova Password",

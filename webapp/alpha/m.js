@@ -2321,6 +2321,14 @@ function setupLayoutPanel() {
         </label>
       </div>
       <br>
+      <div class="switch">
+        <label>
+          <input onchange="tglHideTopBar();" type="checkbox" ${VUEPLAYERCORE.altLayout.hideTopBar === true ? 'checked' : ''}>
+          <span class="lever"></span>
+          ${t('layout.hideTopBar')}
+        </label>
+      </div>
+      <br>
       <!-- <div class="switch">
         <label>
           <input type="checkbox">
@@ -2383,7 +2391,13 @@ function flipPlayer() {
   VUEPLAYERCORE.altLayout.flipPlayer = !VUEPLAYERCORE.altLayout.flipPlayer;
   document.getElementById('content').classList.toggle('col-rev');
   document.getElementById('flip-me').classList.toggle('col-rev');
-  
+
+  localStorage.setItem('altLayout', JSON.stringify(VUEPLAYERCORE.altLayout));
+}
+
+function tglHideTopBar() {
+  VUEPLAYERCORE.altLayout.hideTopBar = !VUEPLAYERCORE.altLayout.hideTopBar;
+  document.body.classList.toggle('top-bar-hidden', VUEPLAYERCORE.altLayout.hideTopBar);
   localStorage.setItem('altLayout', JSON.stringify(VUEPLAYERCORE.altLayout));
 }
 
@@ -2462,4 +2476,12 @@ if (isElectron()) {
 } else {
   init();
   loadFileExplorer();
+}
+
+// The sidenav dropdown must be populated AFTER initElectron()'s `innerHTML +=`
+// runs (which re-serializes and re-parses the entire sidenav and would otherwise
+// wipe dynamically-created child nodes). In non-Electron contexts this is a
+// no-op because the sidenav is never mutated — we just populate normally.
+if (typeof window.initSidenavLangDropdown === 'function') {
+  window.initSidenavLangDropdown();
 }

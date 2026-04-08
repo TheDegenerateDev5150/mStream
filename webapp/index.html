@@ -18,6 +18,7 @@
 
   <script src="assets/js/i18n.js"></script>
   <script>I18N.loadLanguage(I18N.detectLanguage());</script>
+  <script src="assets/js/flags.js"></script>
   <script defer src="assets/js/lib/cookie.min.js"></script>
 
   <!-- Fonts -->
@@ -25,10 +26,12 @@
   
   <!-- Style Sheets -->
   <link rel="stylesheet" href="alpha/spa.css">
+  <link rel="stylesheet" href="assets/css/lang-dropdown.css">
   <link rel="stylesheet" href="assets/css/materialize.css">
 
   <!-- JS -->
   <script defer src="alpha/spa.js"></script>
+  <script defer src="assets/js/lang-dropdown.js"></script>
   <link rel="stylesheet" href="assets/css/waves.css">
   <script defer src="assets/js/waves.js"></script>
 
@@ -377,8 +380,62 @@
     </div>
   </div>
 
+  <div id="nav-bar">
+    <div class="nav-bar-logo">
+      <svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+        viewBox="0 0 612 153" style="enable-background:new 0 0 612 153;" xml:space="preserve">
+        <style type="text/css">
+          .nav-bar-logo .st0{fill-rule:evenodd;clip-rule:evenodd;fill:#6684B2;}
+          .nav-bar-logo .st1{fill-rule:evenodd;clip-rule:evenodd;fill:#6684B2;}
+          .nav-bar-logo .st2{fill-rule:evenodd;clip-rule:evenodd;fill:#26477B;}
+        </style>
+        <g>
+          <path class="st0" d="M179.9,45.5c-6.2,0-11.5,1.7-15.9,5c-4.4,3.3-6.5,8.1-6.5,14.4c0,4.9,1.3,9.1,3.8,12.4
+            c2.5,3.4,5.7,5.8,9.3,7.3c3.7,1.5,7.3,2.8,11,3.8c3.7,1,6.8,2.3,9.3,3.9c2.5,1.5,3.8,3.5,3.8,5.8c0,4.8-4.4,7.2-13.1,7.2h-24.1V118
+            h24.1c17.1,0,25.6-6.7,25.6-20.2c0-1.9-0.2-3.8-0.6-5.8c-0.4-2-1.2-4-2.6-6c-1.3-2.1-3.3-3.7-5.8-4.9c-2.5-1.2-6.4-2.7-11.5-4.5
+            l-8.8-3.1c-0.7-0.2-1.7-0.7-2.9-1.3c-1.3-0.7-2.2-1.3-2.8-1.9c-0.6-0.6-1.1-1.4-1.6-2.3c-0.5-0.9-0.7-2-0.7-3.2c0-2,1-3.5,2.9-4.6
+            c1.9-1.1,4.3-1.6,7-1.6h24.6V45.5H179.9z"/>
+          <path class="st0" d="M226.4,58.3v31c0,10.2,2.5,17.6,7.6,22c5.1,4.4,13,6.6,23.7,6.6v-12.8c-2.7,0-4.9-0.2-6.8-0.4
+            c-1.8-0.3-3.7-0.9-5.8-1.9c-2-0.9-3.6-2.6-4.7-4.9c-1.1-2.3-1.6-5.2-1.6-8.7V58.3h18.8V45.5h-18.8V31.6L214,58.3H226.4z"/>
+          <path class="st0" d="M281.1,118V76.8c0-7.2,0.9-12,2.6-14.5c1-1.3,2.2-2.2,3.6-2.8c1.4-0.6,2.6-1,3.6-1.1c1-0.1,2.5-0.1,4.3-0.1
+            H310V45.5h-12.2c-3.6,0-6.5,0.1-8.6,0.3c-2.1,0.2-4.5,0.9-7.3,2c-2.8,1.1-5.1,2.8-7.1,5c-4,4.4-6,12.4-6,24V118H281.1z"/>
+          <path class="st0" d="M326.2,53.8c-6.2,7.4-9.3,17-9.3,28.9c0,10.7,3.2,19.4,9.5,26.2s14.7,10.1,25.3,10.1c8.7,0,16.3-2.7,22.7-8.1
+            L366,102c-3.7,2.1-8.5,3.2-14.3,3.2c-6.5,0-11.8-2.3-15.8-6.9c-4-4.6-6-10.5-6-17.9c0-7,1.9-12.9,5.6-17.9c3.8-5,8.9-7.5,15.5-7.5
+            c3.3,0,6.1,0.8,8.2,2.4c2.1,1.6,3.2,4,3.2,7.2c0,5-1.2,8.5-3.6,10.6c-2.4,2.1-6.7,3.2-12.9,3.2h-6.7v11.7h5.7
+            c20.3,0,30.5-8.5,30.5-25.4c0-13.6-7.9-20.7-23.7-21.5C340.9,43,332.4,46.5,326.2,53.8z"/>
+          <path class="st0" d="M412.3,73.2c-7.4,0-13.6,1.9-18.5,5.7c-4.9,3.8-7.4,9.4-7.4,16.7c0,7.3,2.3,12.9,7,16.7
+            c4.6,3.8,10.9,5.7,18.8,5.7h31V73.6c0-9.1-2.4-16-7.2-20.8c-4.8-4.8-11.7-7.2-20.7-7.2h-22.9v12.8h22.3c10.9,0,16.4,6.1,16.4,18.2
+            v28.7h-18.4c-9.1,0-13.6-3.2-13.6-9.8c0-3.3,1.2-5.9,3.6-7.8c2.4-1.8,5.8-2.7,10.2-2.7c5.1,0,9.4,1.4,12.9,4.3V75.3
+            C420.9,73.9,416.5,73.2,412.3,73.2z"/>
+          <path class="st0" d="M458.8,118H471V58.3h24.4V118h12.2V58.3h5.7c6.8,0,11.3,0.7,13.5,2c4.3,2.5,6.5,7.7,6.5,15.5V118h12.2V75.7
+            c0-6-0.6-11.2-1.9-15.5c-1.2-4.3-3.9-7.8-7.9-10.6c-3.9-2.7-9.1-4.1-15.7-4.1h-61.4V118z"/>
+          <polygon class="st1" points="75,118.5 75,35.5 96,48.5 96,118.5 	"/>
+          <polygon class="st2" points="99,118.5 99,49.5 110.5,56.5 121,49.5 121,118.5 	"/>
+          <polygon class="st1" points="124,118.5 124,48.5 145,35.5 145,118.5 	"/>
+        </g>
+      </svg>
+    </div>
+    <div id="scan-status"></div>
+    <div id="scan-status-files"></div>
+    <div class="nav-bar-right">
+      <div class="nav-lang-wrap">
+        <button type="button" class="nav-lang-toggle" id="nav-lang-toggle" aria-haspopup="listbox" aria-expanded="false">
+          <span class="nav-lang-current"></span>
+          <span class="nav-lang-caret">▾</span>
+        </button>
+        <ul class="nav-lang-menu" id="nav-lang-menu" role="listbox" hidden></ul>
+      </div>
+      <a class="nav-icon-link nav-discord" target="_blank" rel="noopener" href="https://discord.gg/AM896Rr" title="Discord" aria-label="Discord">
+        <svg viewBox="0 0 24 24" width="22" height="22" xmlns="http://www.w3.org/2000/svg"><path fill="currentColor" d="M20.317 4.3698a19.7913 19.7913 0 0 0-4.8851-1.5152.0741.0741 0 0 0-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 0 0-.0785-.037 19.7363 19.7363 0 0 0-4.8852 1.515.0699.0699 0 0 0-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 0 0 .0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 0 0 .0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 0 0-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 0 1-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 0 1 .0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 0 1 .0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 0 1-.0066.1276 12.2986 12.2986 0 0 1-1.873.8914.0766.0766 0 0 0-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 0 0 .0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 0 0 .0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 0 0-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419-.0189 1.3332-.9555 2.419-2.1569 2.419zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.419-2.1568 2.419z"/></svg>
+      </a>
+      <a class="nav-icon-link nav-github" target="_blank" rel="noopener" href="https://github.com/IrosTheBeggar/mStream" title="GitHub" aria-label="GitHub">
+        <svg viewBox="0 0 24 24" width="22" height="22" xmlns="http://www.w3.org/2000/svg"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
+      </a>
+    </div>
+  </div>
+
   <div id="sidenav">
-    <div class="side-nav-header">
+    <div class="side-nav-header sidenav-logo">
       <?xml version="1.0" encoding="utf-8"?>
         <svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
           viewBox="0 0 612 153" style="enable-background:new 0 0 612 153;" xml:space="preserve">
@@ -497,6 +554,18 @@
       <svg xmlns="http://www.w3.org/2000/svg" enable-background="new 0 0 24 24" height="24" viewBox="0 0 24 24" width="24"><rect fill="none" height="24" width="24"/><path d="M9,19l1.41-1.41L5.83,13H22V11H5.83l4.59-4.59L9,5l-7,7L9,19z"/></svg>
       <span data-i18n="nav.logout">Log Out</span>
     </div>
+    <!-- Language picker at bottom of sidenav — only shown when top bar is hidden -->
+    <div class="sidenav-spacer-bottom"></div>
+    <div class="sidenav-lang-header">
+      <span data-i18n="settings.language">Language</span>
+    </div>
+    <div class="sidenav-lang-wrap">
+      <button type="button" class="sidenav-lang-toggle" id="sidenav-lang-toggle" aria-haspopup="listbox" aria-expanded="false">
+        <span class="sidenav-lang-current"></span>
+        <span class="sidenav-lang-caret">▾</span>
+      </button>
+      <ul class="sidenav-lang-menu" id="sidenav-lang-menu" role="listbox" hidden></ul>
+    </div>
   </div>
 
   <div id="sidenav-cover" class="click-through"></div>
@@ -542,18 +611,18 @@
         <div v-if="altLayout.moveMeta === false" class="card data-card hide-on-small-only">
           <div class="card-content">
             <p>
-              <b>Title:</b>
+              <b data-i18n="metadata.title">Title:</b>
               {{ (meta.title) ? meta.title : (meta.filepath ? meta.filepath.split('/').pop() : '')  }}
             </p>
             <p>
-              <b>Artist:</b>
+              <b data-i18n="metadata.artist">Artist:</b>
               <span class="pointer" v-on:click="goToArtist">{{ (meta.artist) ? meta.artist : '' }}</span>
             </p>
             <p>
-              <b>Album:</b>
+              <b data-i18n="metadata.album">Album:</b>
               <span class="pointer" v-on:click="goToAlbum">{{ (meta.album) ? meta.album : '' }}</span>
             </p>
-            <p><b>Year:</b> {{ (meta.year) ? meta.year : '' }}</p>
+            <p><b data-i18n="metadata.year">Year:</b> {{ (meta.year) ? meta.year : '' }}</p>
           </div>
         </div>
         <div class="progress-wrapper">
@@ -678,18 +747,18 @@
               </div>
               <div class="card-meta">
                 <p>
-                  <b>Title:</b>
+                  <b data-i18n="metadata.title">Title:</b>
                   {{ (meta.title) ? meta.title : (meta.filepath ? meta.filepath.split('/').pop() : '')  }}
                 </p>
                 <p>
-                  <b>Artist:</b>
+                  <b data-i18n="metadata.artist">Artist:</b>
                   <span class="pointer" v-on:click="goToArtist">{{ (meta.artist) ? meta.artist : '' }}</span>
                 </p>
                 <p>
-                  <b>Album:</b>
+                  <b data-i18n="metadata.album">Album:</b>
                   <span class="pointer" v-on:click="goToAlbum">{{ (meta.album) ? meta.album : '' }}</span>
                 </p>
-                <p><b>Year:</b> {{ (meta.year) ? meta.year : '' }}</p>
+                <p><b data-i18n="metadata.year">Year:</b> {{ (meta.year) ? meta.year : '' }}</p>
               </div>
             </div>
           </div>
@@ -712,14 +781,6 @@
     </div>
   </div>
 
-  <div id="nav-bar">
-    <div>
-      <a target="_blank" href="https://github.com/IrosTheBeggar/mStream">Github</a>
-    </div>
-    <div id="scan-status"></div>
-    <div id="scan-status-files"></div>
-  </div>
-  
   <div class="fixed-action-btn responsive-hide">
     <a class="btn-floating btn-large blue-grey darken-1" onclick="toggleSideMenu()">
       <svg id="sidenav-button" class="ham hamRotate180 ham5" viewBox="0 0 100 100" >
