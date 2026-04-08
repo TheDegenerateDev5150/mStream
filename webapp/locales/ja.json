@@ -27,10 +27,6 @@
   "nav.mobileApps": "モバイルアプリ",
   "nav.jukeboxMode": "ジュークボックスモード",
   "nav.searchDB": "データベース検索",
-<<<<<<< HEAD
-=======
-
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "modal.close": "閉じる",
   "modal.sharePlaylist": "プレイリストを共有",
   "modal.playbackSpeed": "再生速度",
@@ -41,25 +37,13 @@
   "modal.createFolder": "フォルダーを作成",
   "modal.metadata": "メタデータ",
   "modal.changeAlbumArt": "アルバムアートを変更",
-<<<<<<< HEAD
   "share.expirationLabel": "有効期限（日数）",
   "share.button": "共有する！",
   "share.placeholder": "URLがここに表示されます",
-=======
-
-  "share.expirationLabel": "有効期限（日数）",
-  "share.button": "共有する！",
-  "share.placeholder": "URLがここに表示されます",
-
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "playlist.namePlaceholder": "プレイリスト名を入力してください",
   "playlist.saveButton": "プレイリストを保存",
   "playlist.createButton": "プレイリストを作成",
   "playlist.addToPlaylist": "プレイリストに追加：",
-<<<<<<< HEAD
-=======
-
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "livePlaylist.description1": "ライブプレイリストモードは、現在のキューをサーバーと同期します。現時点ではWebアプリでのみ動作します。モバイルでも近日中に利用可能になります。",
   "livePlaylist.description2": "2台のデバイスで同時にライブプレイリストを使用すると、予期しない動作が発生する場合があります",
   "livePlaylist.autoStart": "ライブプレイリストを自動的に開始",
@@ -68,18 +52,10 @@
   "livePlaylist.useExisting": "既存のプレイリストを使用",
   "livePlaylist.selectPlaylist": "プレイリストを選択",
   "livePlaylist.enableButton": "ライブプレイリストを有効にする",
-<<<<<<< HEAD
-=======
-
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "server.addressPlaceholder": "アドレス",
   "server.usernamePlaceholder": "ユーザー名",
   "server.passwordPlaceholder": "パスワード",
   "server.saveButton": "サーバーを保存",
-<<<<<<< HEAD
-=======
-
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "upload.tabFiles": "ファイルをアップロード",
   "upload.tabYoutube": "YouTube ダウンロード",
   "upload.location": "場所：",
@@ -96,17 +72,9 @@
   "upload.metaYear": "年：",
   "upload.loadingMetadata": "メタデータを読み込み中...",
   "upload.downloadButton": "ダウンロード",
-<<<<<<< HEAD
   "folder.location": "場所：",
   "folder.namePlaceholder": "フォルダー名",
   "folder.createButton": "フォルダーを作成",
-=======
-
-  "folder.location": "場所：",
-  "folder.namePlaceholder": "フォルダー名",
-  "folder.createButton": "フォルダーを作成",
-
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "metadata.title": "タイトル：",
   "metadata.album": "アルバム：",
   "metadata.artist": "アーティスト：",
@@ -118,39 +86,24 @@
   "metadata.filePath": "ファイルパス：",
   "metadata.albumArt": "アルバムアート：",
   "metadata.changeAlbumArt": "アルバムアートを変更",
-<<<<<<< HEAD
-=======
-
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "albumArt.loadingAlbumArt": "アルバムアートを読み込み中...",
   "albumArt.uploadCustom": "カスタム画像をアップロード",
   "albumArt.uploadHint": "JPEG、PNG、または WebP。最大10MB。",
   "albumArt.saveCover": "cover.jpg をアルバムフォルダーに保存",
   "albumArt.embedInFile": "アルバムアートをオーディオファイルに埋め込む",
   "albumArt.uploadButton": "アップロードして適用",
-<<<<<<< HEAD
   "fileExplorer.searchPlaceholder": "リストを検索",
   "fileExplorer.downloading": "ダウンロード中...",
-=======
-
-  "fileExplorer.searchPlaceholder": "リストを検索",
-  "fileExplorer.downloading": "ダウンロード中...",
-
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "toast.filesExplorerOnly": "ファイルはファイルエクスプローラーにのみ追加できます",
   "toast.cannotUploadHere": "ここにはアップロードできません",
   "toast.filesUploaded": "ファイルがアップロードされました",
   "toast.uploadPartial": "{{total}} 件中 {{success}} 件が正常にアップロードされました",
   "toast.uploadFailed": "アップロードに失敗しました",
   "toast.albumQueued": "アルバムがキューに追加されました",
-<<<<<<< HEAD
   "toast.albumQueuedMessage": {
     "one": "{{count}} 曲が追加されました",
     "other": "{{count}} 曲が追加されました"
   },
-=======
-  "toast.albumQueuedMessage": { "one": "{{count}} 曲が追加されました", "other": "{{count}} 曲が追加されました" },
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "toast.folderCreated": "フォルダーが作成されました",
   "toast.folderCreateFailed": "フォルダーの作成に失敗しました",
   "toast.youtubeUrlRequired": "URL は YouTube のリンクである必要があります",
@@ -168,7 +121,6 @@
   "toast.noPlaylistToSave": "保存するプレイリストがありません！",
   "toast.playlistSaved": "プレイリストが保存されました",
   "toast.autoDJRequiresDir": "自動 DJ にはディレクトリが必要です",
-<<<<<<< HEAD
   "error.callFailed": "呼び出しに失敗しました",
   "error.serverCallFailed": "サーバー呼び出しに失敗しました",
   "status.scanInProgress": "スキャン中",
@@ -176,39 +128,22 @@
     "one": "データベースに {{count}} ファイル",
     "other": "データベースに {{count}} ファイル"
   },
-=======
-
-  "error.callFailed": "呼び出しに失敗しました",
-  "error.serverCallFailed": "サーバー呼び出しに失敗しました",
-
-  "status.scanInProgress": "スキャン中",
-  "status.filesInDB": { "one": "データベースに {{count}} ファイル", "other": "データベースに {{count}} ファイル" },
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "status.noArtistOrAlbumInfo": "検索に利用できるアーティストまたはアルバム情報がありません",
   "status.searching": "検索中...",
   "status.noAlbumArtFound": "アルバムアートが見つかりません",
   "status.searchFailed": "検索に失敗しました：{{error}}",
   "status.albumArtResults": "{{count}} 件の結果が見つかりました。クリックして選択してください：",
   "status.downloadingAudio": "オーディオをダウンロード中...",
-<<<<<<< HEAD
   "status.downloadingFiles": {
     "one": "{{count}} ファイルをダウンロード中...",
     "other": "{{count}} ファイルをダウンロード中..."
   },
-=======
-  "status.downloadingFiles": { "one": "{{count}} ファイルをダウンロード中...", "other": "{{count}} ファイルをダウンロード中..." },
-
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "label.artist": "アーティスト：",
   "label.album": "アルバム：",
   "label.playlist": "プレイリスト：",
   "label.genre": "ジャンル：",
   "label.disabled": "無効",
   "label.newPlaylist": "新しいプレイリスト",
-<<<<<<< HEAD
-=======
-
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "panel.fileExplorer": "ファイルエクスプローラー",
   "panel.playlists": "プレイリスト",
   "panel.artists": "アーティスト",
@@ -226,10 +161,6 @@
   "panel.searchDB": "データベース検索",
   "panel.config": "設定",
   "panel.layout": "レイアウト",
-<<<<<<< HEAD
-=======
-
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "transcode.disabled": "このサーバーではトランスコードが無効です",
   "autoDJ.description": "自動 DJ はプレイリストをランダムに生成します。下部の「DJ」ボタンをクリックして有効にしてください",
   "autoDJ.minRating": "最低評価",
@@ -242,15 +173,10 @@
   "jukebox.serverAudio": "サーバーオーディオ",
   "jukebox.serverAudioDescription": "ブラウザの代わりにサーバーのスピーカーで音楽を再生します",
   "jukebox.openServerAudio": "サーバーオーディオプレーヤーを開く",
-<<<<<<< HEAD
-=======
-
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "layout.audioBookControls": "オーディオブックコントロール",
   "layout.playerOnBottom": "プレーヤーを下部に表示",
   "layout.metadataInQueue": "キュー内のメタデータ",
   "layout.compressAlbumArt": "アルバムアートを圧縮",
-<<<<<<< HEAD
   "layout.hideTopBar": "上部バーを非表示",
   "error.genericError": "エラーが発生しました。ページを更新してもう一度お試しください",
   "label.getLastSongs": {
@@ -260,16 +186,6 @@
   "label.welcomeToMStream": "mStream へようこそ！",
   "label.preset": "プリセット：",
   "label.viewDownloads": "ダウンロードを表示",
-=======
-
-  "error.genericError": "エラーが発生しました。ページを更新してもう一度お試しください",
-
-  "label.getLastSongs": { "one": "曲", "other": "曲" },
-  "label.welcomeToMStream": "mStream へようこそ！",
-  "label.preset": "プリセット：",
-  "label.viewDownloads": "ダウンロードを表示",
-
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "tooltip.goBack": "戻る",
   "tooltip.search": "検索",
   "tooltip.createFolder": "フォルダーを作成",
@@ -282,23 +198,13 @@
   "tooltip.downloadPlaylist": "プレイリストをダウンロード",
   "tooltip.sharePlaylist": "プレイリストを共有",
   "tooltip.clearPlaylist": "プレイリストをクリア",
-<<<<<<< HEAD
   "settings.language": "言語",
-=======
-
-  "settings.language": "言語",
-
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "login.title": "ログイン",
   "login.username": "ユーザー名",
   "login.password": "パスワード",
   "login.submit": "ログイン",
   "login.success": "ログイン成功！",
   "login.failed": "ログイン失敗",
-<<<<<<< HEAD
-=======
-
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.nav.config": "設定",
   "admin.nav.directories": "ディレクトリ",
   "admin.nav.users": "ユーザー",
@@ -313,15 +219,9 @@
   "admin.nav.navigation": "ナビゲーション",
   "admin.nav.player": "プレーヤー",
   "admin.nav.logout": "ログアウト",
-<<<<<<< HEAD
   "admin.folders.title": "フォルダーを追加",
   "admin.folders.selectDirectory": "ディレクトリを選択",
   "admin.folders.selectDirectoryHint": "クリックしてディレクトリを選択",
-=======
-
-  "admin.folders.title": "フォルダーを追加",
-  "admin.folders.selectDirectory": "ディレクトリを選択",
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.folders.vPathLabel": "サーバーパスエイリアス（vPath）",
   "admin.folders.vPathHint": "特殊文字やスペースは使用できません",
   "admin.folders.giveAccessToAll": "すべてのユーザーにアクセスを許可",
@@ -341,10 +241,6 @@
   "admin.folders.goBack": "戻る",
   "admin.folders.rebooting": "サーバーを再起動中です。サーバーがオンラインに戻るまで30秒お待ちください",
   "admin.folders.removeFailed": "フォルダーの削除に失敗しました",
-<<<<<<< HEAD
-=======
-
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.users.title": "ユーザーを追加",
   "admin.users.usernameLabel": "ユーザー名",
   "admin.users.passwordLabel": "パスワード",
@@ -374,10 +270,6 @@
   "admin.users.changeFolders": "フォルダー変更",
   "admin.users.changeAccess": "アクセス",
   "admin.users.delete": "削除",
-<<<<<<< HEAD
-=======
-
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.settings.security": "セキュリティ",
   "admin.settings.fileUploading": "ファイルアップロード：",
   "admin.settings.enabled": "有効",
@@ -399,10 +291,6 @@
   "admin.settings.editSSL": "SSL を編集",
   "admin.settings.removeSSL": "SSL を削除",
   "admin.settings.updated": "正常に更新されました",
-<<<<<<< HEAD
-=======
-
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.settings.switchFrontend": "{{label}} フロントエンドに切り替えますか？",
   "admin.settings.switchRestart": "変更を適用するためにサーバーが再起動します。",
   "admin.settings.switchingTo": "{{label}} に切り替え中...",
@@ -416,10 +304,6 @@
   "admin.settings.generateButton": "キーを生成",
   "admin.settings.failed": "失敗しました",
   "admin.settings.cancel": "キャンセル",
-<<<<<<< HEAD
-=======
-
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.settings.disableUploading": "ファイルアップロードを無効にしますか？",
   "admin.settings.enableUploading": "ファイルアップロードを有効にしますか？",
   "admin.settings.disableFolders": "フォルダー作成を無効にしますか？",
@@ -432,10 +316,6 @@
   "admin.settings.disableAutoBoot": "サーバーオーディオの自動起動を無効にしますか？",
   "admin.settings.enableAutoBoot": "サーバーオーディオの自動起動を有効にしますか？",
   "admin.settings.autoBootHint": "有効にすると、mStream は起動時に自動的に Rust オーディオプレーヤーを開始します",
-<<<<<<< HEAD
-=======
-
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.db.scanSettings": "データベーススキャン設定",
   "admin.db.scanInterval": "スキャン間隔：",
   "admin.db.bootScanDelay": "起動時スキャン遅延：",
@@ -481,30 +361,20 @@
   "admin.db.compressionInProgress": "画像圧縮が進行中です",
   "admin.db.toggleSkipImg": "画像スキップ",
   "admin.db.toggleCompressImages": "画像を圧縮",
-<<<<<<< HEAD
   "admin.transcode.settings": "設定",
   "admin.transcode.poweredBy": "提供元",
-=======
-
-  "admin.transcode.settings": "設定",
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.transcode.disableTitle": "トランスコードを無効にしますか？",
   "admin.transcode.enableTitle": "トランスコードを有効にしますか？",
   "admin.transcode.downloadFFmpeg": "有効にすると FFmpeg がダウンロードされます",
   "admin.transcode.ffmpegDownloaded": "FFmpeg がダウンロードされました",
   "admin.transcode.ffmpegFailed": "FFmpeg のダウンロードに失敗しました",
   "admin.transcode.comingSoon": "近日公開",
-<<<<<<< HEAD
   "admin.federation.title": "mStream フェデレーション",
   "admin.federation.poweredBy": "提供元",
   "admin.federation.tabFederation": "フェデレーション",
   "admin.federation.tabSyncthing": "Syncthing",
   "admin.federation.deviceId": "デバイスID：",
   "admin.federation.disableAction": "フェデレーションを無効化",
-=======
-
-  "admin.federation.title": "mStream フェデレーション",
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.federation.enableButton": "フェデレーションを有効にする",
   "admin.federation.disableTitle": "フェデレーションを無効にしますか？",
   "admin.federation.enableTitle": "フェデレーションを有効にしますか？",
@@ -513,16 +383,11 @@
   "admin.federation.tokenLabel": "フェデレーショントークン",
   "admin.federation.tokenPlaceholder": "トークンをここに貼り付けてください",
   "admin.federation.serverURL": "サーバー URL",
-<<<<<<< HEAD
   "admin.federation.selectFolders": "フェデレーションするフォルダーを選択して名前を付けてください：",
   "admin.federation.acceptInviteButton": "招待を受ける",
   "admin.federation.working": "処理中 ...",
   "admin.federation.pasteTokenHint": "続行するには、テキストボックスにトークンを貼り付けてください",
   "admin.federation.acceptFailed": "招待の受け入れに失敗しました",
-=======
-  "admin.federation.acceptFailed": "招待の受け入れに失敗しました",
-
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.logs.title": "ログ記録",
   "admin.logs.writeLogs": "ログを書き込み：",
   "admin.logs.logsDirectory": "ログディレクトリ：",
@@ -530,26 +395,16 @@
   "admin.logs.downloadFailed": "ダウンロードに失敗しました",
   "admin.logs.disableTitle": "ディスクへのログ書き込みを無効にしますか？",
   "admin.logs.enableTitle": "ディスクへのログ書き込みを有効にしますか？",
-<<<<<<< HEAD
   "admin.lock.title": "管理パネルをロック",
   "admin.lock.description": "これにより、管理パネルでの設定変更がすべてのユーザーに対して無効になります。",
   "admin.lock.undoInstructions": "これを元に戻すには、次の操作が必要です：",
   "admin.lock.undoStep1": "設定ファイルを開く",
   "admin.lock.undoStep2": "'lockAdmin' の値を 'false' に変更する",
   "admin.lock.undoStep3": "mStream を再起動する",
-=======
-
-  "admin.lock.title": "管理パネルをロック",
-  "admin.lock.description": "これにより、管理パネルでの設定変更がすべてのユーザーに対して無効になります。",
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.lock.disableButton": "管理パネルを無効にする",
   "admin.lock.disableTitle": "管理パネルを無効にしますか？",
   "admin.lock.disable": "無効にする",
   "admin.lock.disableFailed": "管理パネルの無効化に失敗しました",
-<<<<<<< HEAD
-=======
-
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.fileExplorer.title": "ファイルエクスプローラー",
   "admin.fileExplorer.back": "戻る",
   "admin.fileExplorer.home": "ホーム",
@@ -557,10 +412,6 @@
   "admin.fileExplorer.selectCurrent": "現在のディレクトリを選択",
   "admin.fileExplorer.contentsFailed": "ディレクトリの内容の取得に失敗しました",
   "admin.fileExplorer.cannotSelect": "ディレクトリを選択できません",
-<<<<<<< HEAD
-=======
-
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
   "admin.modal.passwordReset": "パスワードリセット",
   "admin.modal.user": "ユーザー：",
   "admin.modal.newPassword": "新しいパスワード",

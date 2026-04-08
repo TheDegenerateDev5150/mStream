@@ -2318,7 +2318,6 @@ function setupLayoutPanel() {
           <input onchange="tglCompressArt();" type="checkbox" ${VUEPLAYERCORE.altLayout.compressArt === true ? 'checked' : ''}>
           <span class="lever"></span>
           ${t('layout.compressAlbumArt')}
-<<<<<<< HEAD
         </label>
       </div>
       <br>
@@ -2327,8 +2326,6 @@ function setupLayoutPanel() {
           <input onchange="tglHideTopBar();" type="checkbox" ${VUEPLAYERCORE.altLayout.hideTopBar === true ? 'checked' : ''}>
           <span class="lever"></span>
           ${t('layout.hideTopBar')}
-=======
->>>>>>> 19459ea716eacc08d12261a3698c665a092e7322
         </label>
       </div>
       <br>
