@@ -2286,6 +2286,7 @@ function advancedConfig() {
 ////////////////// Layout
 function setupLayoutPanel() {
   setBrowserRootPanel(t('panel.layout'), false);
+  programState = [{ state: 'layout' }];
 
   const newHtml = `
     <div>
@@ -2400,6 +2401,22 @@ function tglHideTopBar() {
   document.body.classList.toggle('top-bar-hidden', VUEPLAYERCORE.altLayout.hideTopBar);
   localStorage.setItem('altLayout', JSON.stringify(VUEPLAYERCORE.altLayout));
 }
+
+// Re-render the Layout panel when the language changes externally (via the
+// nav-bar dropdown, the sidenav-bottom dropdown, the admin panel, etc.).
+// setupLayoutPanel builds its content via ${t(...)} interpolation at render
+// time, so already-rendered switch labels go stale on language changes.
+// translatePage() can't help because the template uses no data-i18n attributes.
+//
+// We use the existing `programState` panel-tracking stack to know which root
+// panel is active — see the `programState = [{ state: '...' }]` lines in
+// loadFileExplorer, getAllPlaylists, etc. setupLayoutPanel sets it to
+// 'layout' so this listener can recognize when re-rendering is appropriate.
+I18N.onChange(() => {
+  if (programState[0] && programState[0].state === 'layout') {
+    setupLayoutPanel();
+  }
+});
 
 async function updateServer() {
   try {
