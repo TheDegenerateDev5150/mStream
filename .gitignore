@@ -51,3 +51,5 @@ waveform-cache/*
 !waveform-cache/README.md
 
 .claude/*
+
+/TODO.md

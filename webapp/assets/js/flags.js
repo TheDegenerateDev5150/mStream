@@ -1,0 +1,18 @@
+// Shared inline SVG flags for every supported mStream language. Used by both
+// the admin panel and the main webapp's language pickers. Kept as a window
+// global so it can be consumed from any script without a module system.
+// All flags use a 30x20 viewBox (3:2 aspect ratio) for consistent sizing.
+window.FLAG_SVGS = {
+  en: '<svg viewBox="0 0 30 20" xmlns="http://www.w3.org/2000/svg"><rect width="30" height="20" fill="#B22234"/><rect y="1.54" width="30" height="1.54" fill="#fff"/><rect y="4.62" width="30" height="1.54" fill="#fff"/><rect y="7.69" width="30" height="1.54" fill="#fff"/><rect y="10.77" width="30" height="1.54" fill="#fff"/><rect y="13.85" width="30" height="1.54" fill="#fff"/><rect y="16.92" width="30" height="1.54" fill="#fff"/><rect width="12" height="10.77" fill="#3C3B6E"/><g fill="#fff"><circle cx="1.5" cy="1.5" r="0.5"/><circle cx="4.5" cy="1.5" r="0.5"/><circle cx="7.5" cy="1.5" r="0.5"/><circle cx="10.5" cy="1.5" r="0.5"/><circle cx="1.5" cy="4" r="0.5"/><circle cx="4.5" cy="4" r="0.5"/><circle cx="7.5" cy="4" r="0.5"/><circle cx="10.5" cy="4" r="0.5"/><circle cx="1.5" cy="6.5" r="0.5"/><circle cx="4.5" cy="6.5" r="0.5"/><circle cx="7.5" cy="6.5" r="0.5"/><circle cx="10.5" cy="6.5" r="0.5"/><circle cx="1.5" cy="9" r="0.5"/><circle cx="4.5" cy="9" r="0.5"/><circle cx="7.5" cy="9" r="0.5"/><circle cx="10.5" cy="9" r="0.5"/></g></svg>',
+  es: '<svg viewBox="0 0 30 20" xmlns="http://www.w3.org/2000/svg"><rect width="30" height="5" fill="#AA151B"/><rect y="5" width="30" height="10" fill="#F1BF00"/><rect y="15" width="30" height="5" fill="#AA151B"/></svg>',
+  zh: '<svg viewBox="0 0 30 20" xmlns="http://www.w3.org/2000/svg"><rect width="30" height="20" fill="#EE1C25"/><polygon points="6,3 6.9,5.7 9.7,5.7 7.4,7.4 8.3,10.1 6,8.4 3.7,10.1 4.6,7.4 2.3,5.7 5.1,5.7" fill="#FFDE00"/></svg>',
+  fr: '<svg viewBox="0 0 30 20" xmlns="http://www.w3.org/2000/svg"><rect width="10" height="20" fill="#002654"/><rect x="10" width="10" height="20" fill="#fff"/><rect x="20" width="10" height="20" fill="#ED2939"/></svg>',
+  de: '<svg viewBox="0 0 30 20" xmlns="http://www.w3.org/2000/svg"><rect width="30" height="6.67" fill="#000"/><rect y="6.67" width="30" height="6.67" fill="#DD0000"/><rect y="13.33" width="30" height="6.67" fill="#FFCE00"/></svg>',
+  pt: '<svg viewBox="0 0 30 20" xmlns="http://www.w3.org/2000/svg"><rect width="12" height="20" fill="#046A38"/><rect x="12" width="18" height="20" fill="#DA291C"/></svg>',
+  ja: '<svg viewBox="0 0 30 20" xmlns="http://www.w3.org/2000/svg"><rect width="30" height="20" fill="#fff"/><circle cx="15" cy="10" r="6" fill="#BC002D"/></svg>',
+  ru: '<svg viewBox="0 0 30 20" xmlns="http://www.w3.org/2000/svg"><rect width="30" height="6.67" fill="#fff"/><rect y="6.67" width="30" height="6.67" fill="#0039A6"/><rect y="13.33" width="30" height="6.67" fill="#D52B1E"/></svg>',
+  ko: '<svg viewBox="0 0 30 20" xmlns="http://www.w3.org/2000/svg"><rect width="30" height="20" fill="#fff"/><circle cx="15" cy="10" r="5" fill="#CD2E3A"/><path d="M10,10 A5,5 0 0,1 20,10 A2.5,2.5 0 0,0 15,10 A2.5,2.5 0 0,1 10,10 Z" fill="#0047A0"/></svg>',
+  it: '<svg viewBox="0 0 30 20" xmlns="http://www.w3.org/2000/svg"><rect width="10" height="20" fill="#008C45"/><rect x="10" width="10" height="20" fill="#F4F5F0"/><rect x="20" width="10" height="20" fill="#CD212A"/></svg>',
+  nl: '<svg viewBox="0 0 30 20" xmlns="http://www.w3.org/2000/svg"><rect width="30" height="6.67" fill="#AE1C28"/><rect y="6.67" width="30" height="6.67" fill="#fff"/><rect y="13.33" width="30" height="6.67" fill="#21468B"/></svg>',
+  pl: '<svg viewBox="0 0 30 20" xmlns="http://www.w3.org/2000/svg"><rect width="30" height="10" fill="#fff"/><rect y="10" width="30" height="10" fill="#DC143C"/></svg>'
+};

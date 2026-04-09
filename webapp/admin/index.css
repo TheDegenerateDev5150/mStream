@@ -75,3 +75,99 @@ a {
 .flex {
   display: flex;
 }
+
+/* Language selector wedged at the bottom of the admin sidebar */
+.admin-lang-wrap {
+  position: relative;
+  padding: 4px 10px 16px 10px;
+}
+
+.admin-lang-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background-color: #2a2a34;
+  color: #eee;
+  border: 1px solid #505061;
+  border-radius: 3px;
+  font-family: 'Jura', sans-serif;
+  font-size: 14px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.admin-lang-toggle:hover,
+.admin-lang-toggle[aria-expanded="true"] {
+  border-color: #7f7f9a;
+}
+
+.admin-lang-current {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.admin-lang-flag {
+  display: inline-block;
+  flex-shrink: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 1px;
+  overflow: hidden;
+  line-height: 0;
+}
+
+.admin-lang-flag svg {
+  display: block;
+  width: 20px;
+  height: 13px;
+}
+
+.admin-lang-caret {
+  font-size: 10px;
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.admin-lang-menu {
+  position: absolute;
+  bottom: calc(100% - 4px);
+  left: 10px;
+  right: 10px;
+  max-height: 280px;
+  overflow-y: auto;
+  margin: 0 0 4px 0;
+  padding: 4px 0;
+  list-style: none;
+  background-color: #2a2a34;
+  border: 1px solid #7f7f9a;
+  border-radius: 3px;
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.4);
+  z-index: 1000;
+}
+
+.admin-lang-menu li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  color: #ddd;
+  cursor: pointer;
+  font-family: 'Jura', sans-serif;
+  font-size: 14px;
+}
+
+.admin-lang-menu li:hover {
+  background-color: #3a3a47;
+  color: #fff;
+}
+
+.admin-lang-menu li[aria-selected="true"] {
+  background-color: #505061;
+  color: #fff;
+}

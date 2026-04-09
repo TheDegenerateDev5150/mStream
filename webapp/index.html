@@ -16,6 +16,9 @@
   <meta name="msapplication-config" content="assets/fav/browserconfig.xml">
   <meta name="theme-color" content="#ffffff">
 
+  <script src="assets/js/i18n.js"></script>
+  <script>I18N.loadLanguage(I18N.detectLanguage());</script>
+  <script src="assets/js/flags.js"></script>
   <script defer src="assets/js/lib/cookie.min.js"></script>
 
   <!-- Fonts -->
@@ -23,10 +26,12 @@
   
   <!-- Style Sheets -->
   <link rel="stylesheet" href="alpha/spa.css">
+  <link rel="stylesheet" href="assets/css/lang-dropdown.css">
   <link rel="stylesheet" href="assets/css/materialize.css">
 
   <!-- JS -->
   <script defer src="alpha/spa.js"></script>
+  <script defer src="assets/js/lang-dropdown.js"></script>
   <link rel="stylesheet" href="assets/css/waves.css">
   <script defer src="assets/js/waves.js"></script>
 
@@ -75,7 +80,7 @@
   <!-- Overlay with Visualizer -->
   <div id="main-overlay" class="hide-fade main-overlay" onclick="VIZ.toggleDom();">
     <div class="hide" id="presetControls">
-      <div>Preset: <select id="presetSelect"></select></div>
+      <div><span data-i18n="label.preset">Preset:</span> <select id="presetSelect"></select></div>
     </div>
     <canvas id="viz-canvas">
     </canvas>
@@ -89,20 +94,20 @@
   <div class="hystmodal" id="sharePlaylist" aria-hidden="true">
     <div class="hystmodal__wrap">
       <div class="hystmodal__window" role="dialog" aria-modal="true">
-        <a data-hystclose class="hystmodal__close">Close</a>  
+        <a data-hystclose class="hystmodal__close" data-i18n="modal.close">Close</a>  
         <!-- You modal HTML markup -->
         <div class="hystmodal__styled">
-          <h5>Share Playlist</h5>
+          <h5 data-i18n="modal.sharePlaylist">Share Playlist</h5>
           <form action="javascript:submitShareForm()">
             <div class="row collapse">
               <div class="small-6 large-6 columns">
-                <label>Expiration Time (in days)</label>
+                <label data-i18n="share.expirationLabel">Expiration Time (in days)</label>
                 <input id="share_time" autocomplete="off" value="14" class="form-control" type="text" pattern="[0-9]+">
               </div>
             </div>
-            <input id="share_it" class="btn green" type="submit" value="Share It!">
+            <input id="share_it" class="btn green" type="submit" value="Share It!" data-i18n="share.button" data-i18n-attr="value">
           </form>
-          <textarea id="share-textarea" autocomplete="off" rows="8" cols="60" placeholder="Your URL will be put here" readonly="readonly"></textarea>
+          <textarea id="share-textarea" autocomplete="off" rows="8" cols="60" placeholder="Your URL will be put here" readonly="readonly" data-i18n="share.placeholder" data-i18n-attr="placeholder"></textarea>
         </div>
       </div>
     </div> 
@@ -112,7 +117,7 @@
   <div class="hystmodal" id="speedModal" aria-hidden="true">
     <div class="hystmodal__wrap">
       <div class="hystmodal__window" role="dialog" aria-modal="true">
-        <a data-hystclose class="hystmodal__close">Close</a>  
+        <a data-hystclose class="hystmodal__close" data-i18n="modal.close">Close</a>  
         <!-- You modal HTML markup -->
         <div id="speed-modal" class="hystmodal__styled">
           <h5>Playback Speed ({{stats.playbackRate.toFixed(2)}}x)</h5>
@@ -138,13 +143,13 @@
   <div class="hystmodal" id="savePlaylist" aria-hidden="true">
     <div class="hystmodal__wrap">
       <div class="hystmodal__window" role="dialog" aria-modal="true">
-        <a data-hystclose class="hystmodal__close">Close</a>  
+        <a data-hystclose class="hystmodal__close" data-i18n="modal.close">Close</a>  
         <!-- You modal HTML markup -->
         <div class="hystmodal__styled">
-          <h5>Save Playlist</h5>
+          <h5 data-i18n="modal.savePlaylist">Save Playlist</h5>
           <form action="javascript:savePlaylist()">
-            <input id="playlist_name" autocomplete="off" type="text" required placeholder="Enter your playlist name" pattern="[a-zA-Z0-9 _-]+">
-            <input id="save_playlist" type="submit" class="btn green" value="Save Playlist">
+            <input id="playlist_name" autocomplete="off" type="text" required placeholder="Enter your playlist name" pattern="[a-zA-Z0-9 _-]+" data-i18n="playlist.namePlaceholder" data-i18n-attr="placeholder">
+            <input id="save_playlist" type="submit" class="btn green" value="Save Playlist" data-i18n="playlist.saveButton" data-i18n-attr="value">
           </form>
         </div>
       </div>
@@ -155,19 +160,19 @@
   <div class="hystmodal" id="livePlaylist" aria-hidden="true">
     <div class="hystmodal__wrap">
       <div class="hystmodal__window" role="dialog" aria-modal="true">
-        <a data-hystclose class="hystmodal__close">Close</a>  
+        <a data-hystclose class="hystmodal__close" data-i18n="modal.close">Close</a>  
         <div class="hystmodal__styled">
-          <h5>Live Playlist Mode</h5>
-          <p>
+          <h5 data-i18n="modal.livePlaylist">Live Playlist Mode</h5>
+          <p data-i18n="livePlaylist.description1">
             Live playlist mode keeps your current queue synced to the server.  For now this only works on the web app. It will be available on mobile soon.
           </p>
-          <p>
+          <p data-i18n="livePlaylist.description2">
             Using live playlist on two devices at the same time might result in some odd behavior
           </p>
           <form action="javascript:setLivePlaylist()">
             <label for="persist_live_queue">
               <input type="checkbox" checked class="filled-in" id="persist_live_queue" name="persist_live_queue" />
-              <span>Start Live Playlist Automatically</span>
+              <span data-i18n="livePlaylist.autoStart">Start Live Playlist Automatically</span>
             </label>
             <br>
 
@@ -175,27 +180,27 @@
               <p>
                 <label>
                   <input class="with-gap" name="group1" type="radio" checked />
-                  <span>Make a new playlist</span>
+                  <span data-i18n="livePlaylist.makeNew">Make a new playlist</span>
                 </label>
-                <input id="new-live-playlist-name" type="text" name="live-queue-name" placeholder="Playlist Name" autocomplete="off" class="make-white">
+                <input id="new-live-playlist-name" type="text" name="live-queue-name" placeholder="Playlist Name" autocomplete="off" class="make-white" data-i18n="livePlaylist.namePlaceholder" data-i18n-attr="placeholder">
               </p>
 
               <p>
                 <label>
                   <input class="with-gap" name="group1" type="radio" id="radio-use-existing" />
-                  <span>Use an existing playlist</span>
+                  <span data-i18n="livePlaylist.useExisting">Use an existing playlist</span>
                 </label>
               </p>
               <p>
                 <select id="live-playlist-select" class="browser-default">
-                  <option value="" disabled selected>Select Playlist</option>
+                  <option value="" disabled selected data-i18n="livePlaylist.selectPlaylist">Select Playlist</option>
                 </select>
                 <!-- <label>Materialize Select</label> -->
               </p>
             </div>
 
 
-            <input id="set_live_playlist" type="submit" class="btn green" value="Enable Live Playlist">
+            <input id="set_live_playlist" type="submit" class="btn green" value="Enable Live Playlist" data-i18n="livePlaylist.enableButton" data-i18n-attr="value">
           </form>
         </div>
       </div>
@@ -206,16 +211,16 @@
   <div class="hystmodal" id="editServer" aria-hidden="true">
     <div class="hystmodal__wrap">
       <div class="hystmodal__window" role="dialog" aria-modal="true">
-        <a data-hystclose class="hystmodal__close">Close</a>  
+        <a data-hystclose class="hystmodal__close" data-i18n="modal.close">Close</a>  
         <!-- You modal HTML markup -->
         <div class="hystmodal__styled">
-          <h5>Edit Server</h5>
+          <h5 data-i18n="modal.editServer">Edit Server</h5>
           <form action="javascript:updateServer()">
-            <input id="server_address" autocomplete="off" type="text" required placeholder="Address">
-            <input id="server_username" autocomplete="off" type="text" required placeholder="Username">
-            <input id="server_password" autocomplete="off" type="password" required placeholder="Password">
+            <input id="server_address" autocomplete="off" type="text" required placeholder="Address" data-i18n="server.addressPlaceholder" data-i18n-attr="placeholder">
+            <input id="server_username" autocomplete="off" type="text" required placeholder="Username" data-i18n="server.usernamePlaceholder" data-i18n-attr="placeholder">
+            <input id="server_password" autocomplete="off" type="password" required placeholder="Password" data-i18n="server.passwordPlaceholder" data-i18n-attr="placeholder">
 
-            <input id="save_server" type="submit" class="btn green" value="Save Server">
+            <input id="save_server" type="submit" class="btn green" value="Save Server" data-i18n="server.saveButton" data-i18n-attr="value">
           </form>
         </div>
       </div>
@@ -226,13 +231,13 @@
   <div class="hystmodal" id="newPlaylist" aria-hidden="true">
     <div class="hystmodal__wrap">
       <div class="hystmodal__window" role="dialog" aria-modal="true">
-        <a data-hystclose class="hystmodal__close">Close</a>  
+        <a data-hystclose class="hystmodal__close" data-i18n="modal.close">Close</a>  
         <!-- You modal HTML markup -->
         <div class="hystmodal__styled">
-          <h5>New Playlist</h5>
+          <h5 data-i18n="modal.newPlaylist">New Playlist</h5>
           <form id="newPlaylistForm" action="javascript:newPlaylist()">
-            <input autocomplete="off" id="new_playlist_name" type="text" required placeholder="Enter your playlist name" pattern="[a-zA-Z0-9 _-]+">
-            <input id="new_playlist" type="submit" class="btn green" value="Create Playlist">
+            <input autocomplete="off" id="new_playlist_name" type="text" required placeholder="Enter your playlist name" pattern="[a-zA-Z0-9 _-]+" data-i18n="playlist.namePlaceholder" data-i18n-attr="placeholder">
+            <input id="new_playlist" type="submit" class="btn green" value="Create Playlist" data-i18n="playlist.createButton" data-i18n-attr="value">
           </form>
         </div>
       </div>
@@ -243,21 +248,21 @@
   <div class="hystmodal" id="uploadModal" aria-hidden="true">
     <div class="hystmodal__wrap">
       <div class="hystmodal__window" role="dialog" aria-modal="true">
-        <a data-hystclose class="hystmodal__close">Close</a>
+        <a data-hystclose class="hystmodal__close" data-i18n="modal.close">Close</a>
         <div class="hystmodal__styled">
           <div style="display:flex; gap:0; margin-bottom:16px; border-bottom:1px solid rgba(255,255,255,0.2);">
-            <button id="tab_upload" onclick="switchUploadTab('upload')" style="flex:1; padding:10px; background:none; border:none; color:#fff; cursor:pointer; font-size:14px; font-weight:bold; border-bottom:2px solid transparent;">Upload Files</button>
-            <button id="tab_ytdl" onclick="switchUploadTab('ytdl')" style="flex:1; padding:10px; background:none; border:none; color:#fff; cursor:pointer; font-size:14px; font-weight:bold; border-bottom:2px solid transparent;">Youtube DL</button>
+            <button id="tab_upload" onclick="switchUploadTab('upload')" style="flex:1; padding:10px; background:none; border:none; color:#fff; cursor:pointer; font-size:14px; font-weight:bold; border-bottom:2px solid transparent;" data-i18n="upload.tabFiles">Upload Files</button>
+            <button id="tab_ytdl" onclick="switchUploadTab('ytdl')" style="flex:1; padding:10px; background:none; border:none; color:#fff; cursor:pointer; font-size:14px; font-weight:bold; border-bottom:2px solid transparent;" data-i18n="upload.tabYoutube">Youtube DL</button>
           </div>
-          <p style="color:#fff; margin: 0 0 12px; opacity: 0.7;"><b>Location: </b><span id="upload_filepath"></span></p>
+          <p style="color:#fff; margin: 0 0 12px; opacity: 0.7;"><b data-i18n="upload.location">Location:</b> <span id="upload_filepath"></span></p>
 
           <!-- Upload Tab -->
           <div id="tab_content_upload">
             <div id="upload_drop_area" style="border:2px dashed rgba(255,255,255,0.4); border-radius:8px; padding:32px 16px; text-align:center; color:rgba(255,255,255,0.6); margin-bottom:16px; cursor:default;">
-              <p style="margin:0 0 8px; font-size:16px;">Drag & drop files anywhere on the page</p>
-              <p style="margin:0; font-size:13px; opacity:0.7;">or use the button below to select files</p>
+              <p style="margin:0 0 8px; font-size:16px;" data-i18n="upload.dragDrop">Drag & drop files anywhere on the page</p>
+              <p style="margin:0; font-size:13px; opacity:0.7;" data-i18n="upload.dragDropHint">or use the button below to select files</p>
             </div>
-            <label class="btn green" style="display:inline-block; cursor:pointer;">
+            <label class="btn green" style="display:inline-block; cursor:pointer;" data-i18n="upload.chooseFiles">
               Choose Files
               <input id="upload_file_input" type="file" multiple style="display:none;" onchange="handleFileUpload(this.files)">
             </label>
@@ -265,22 +270,22 @@
 
           <!-- Youtube DL Tab -->
           <div id="tab_content_ytdl" class="super-hide">
-            <p>Download youtube videos to your server. <b>You must have yt-dlp installed for this to work!</b></p>
-            <p id="ytdl_transcode_warning" class="super-hide" style="color:#e57373;">Transcoding needs to be enabled for this feature</p>
+            <p><span data-i18n="upload.ytdlDescription">Download youtube videos to your server.</span> <b data-i18n="upload.ytdlRequirement">You must have yt-dlp installed for this to work!</b></p>
+            <p id="ytdl_transcode_warning" class="super-hide" style="color:#e57373;" data-i18n="upload.ytdlTranscodeWarning">Transcoding needs to be enabled for this feature</p>
             <form action="javascript:submitYtdl()">
-              <input id="ytdl_url" autocomplete="off" type="url" required placeholder="Enter URL" style="color:#fff;">
+              <input id="ytdl_url" autocomplete="off" type="url" required placeholder="Enter URL" style="color:#fff;" data-i18n="upload.urlPlaceholder" data-i18n-attr="placeholder">
               <select id="ytdl_codec"></select>
               <div id="ytdl_metadata" class="super-hide" style="display:flex; align-items:flex-start; gap:14px; margin:12px 0; color:#fff;">
                 <img id="ytdl_meta_thumb" src="" style="width:80px; height:80px; object-fit:cover; border-radius:4px; flex-shrink:0;">
                 <div style="flex:1; line-height:1.6;">
-                  <div><b>Title:</b> <span id="ytdl_meta_title" contenteditable="true" style="display:inline-block; min-width:120px; border-bottom:1px solid rgba(255,255,255,0.3);"></span></div>
-                  <div><b>Artist:</b> <span id="ytdl_meta_artist" contenteditable="true" style="display:inline-block; min-width:120px; border-bottom:1px solid rgba(255,255,255,0.3);"></span></div>
-                  <div><b>Album:</b> <span id="ytdl_meta_album" contenteditable="true" style="display:inline-block; min-width:120px; border-bottom:1px solid rgba(255,255,255,0.3);"></span></div>
-                  <div><b>Year:</b> <span id="ytdl_meta_year" contenteditable="true" style="display:inline-block; min-width:60px; border-bottom:1px solid rgba(255,255,255,0.3);"></span></div>
+                  <div><b data-i18n="upload.metaTitle">Title:</b> <span id="ytdl_meta_title" contenteditable="true" style="display:inline-block; min-width:120px; border-bottom:1px solid rgba(255,255,255,0.3);"></span></div>
+                  <div><b data-i18n="upload.metaArtist">Artist:</b> <span id="ytdl_meta_artist" contenteditable="true" style="display:inline-block; min-width:120px; border-bottom:1px solid rgba(255,255,255,0.3);"></span></div>
+                  <div><b data-i18n="upload.metaAlbum">Album:</b> <span id="ytdl_meta_album" contenteditable="true" style="display:inline-block; min-width:120px; border-bottom:1px solid rgba(255,255,255,0.3);"></span></div>
+                  <div><b data-i18n="upload.metaYear">Year:</b> <span id="ytdl_meta_year" contenteditable="true" style="display:inline-block; min-width:60px; border-bottom:1px solid rgba(255,255,255,0.3);"></span></div>
                 </div>
               </div>
-              <div id="ytdl_meta_loading" class="super-hide" style="color:#fff; opacity:0.5; margin:12px 0;">Loading metadata...</div>
-              <input id="ytdl_submit" type="submit" class="btn green" value="Download">
+              <div id="ytdl_meta_loading" class="super-hide" style="color:#fff; opacity:0.5; margin:12px 0;" data-i18n="upload.loadingMetadata">Loading metadata...</div>
+              <input id="ytdl_submit" type="submit" class="btn green" value="Download" data-i18n="upload.downloadButton" data-i18n-attr="value">
             </form>
           </div>
         </div>
@@ -292,13 +297,13 @@
   <div class="hystmodal" id="mkdirModal" aria-hidden="true">
     <div class="hystmodal__wrap">
       <div class="hystmodal__window" role="dialog" aria-modal="true">
-        <a data-hystclose class="hystmodal__close">Close</a>
+        <a data-hystclose class="hystmodal__close" data-i18n="modal.close">Close</a>
         <div class="hystmodal__styled">
-          <h5>Create Folder</h5>
+          <h5 data-i18n="modal.createFolder">Create Folder</h5>
           <form action="javascript:submitMkdir()">
-            <p style="color:#fff; margin: 0 0 12px; opacity: 0.7;"><b>Location: </b><span id="mkdir_filepath"></span></p>
-            <input id="mkdir_name" autocomplete="off" type="text" required placeholder="Folder name" pattern="[a-zA-Z0-9 _\-\.]+" style="color:#fff;">
-            <input id="mkdir_submit" type="submit" class="btn green" value="Create Folder">
+            <p style="color:#fff; margin: 0 0 12px; opacity: 0.7;"><b data-i18n="folder.location">Location:</b> <span id="mkdir_filepath"></span></p>
+            <input id="mkdir_name" autocomplete="off" type="text" required placeholder="Folder name" pattern="[a-zA-Z0-9 _\-\.]+" style="color:#fff;" data-i18n="folder.namePlaceholder" data-i18n-attr="placeholder">
+            <input id="mkdir_submit" type="submit" class="btn green" value="Create Folder" data-i18n="folder.createButton" data-i18n-attr="value">
           </form>
         </div>
       </div>
@@ -309,21 +314,21 @@
   <div class="hystmodal" id="metadataModel" aria-hidden="true">
     <div class="hystmodal__wrap">
       <div class="hystmodal__window" role="dialog" aria-modal="true">
-        <a data-hystclose class="hystmodal__close">Close</a>  
+        <a data-hystclose class="hystmodal__close" data-i18n="modal.close">Close</a>  
         <!-- You modal HTML markup -->
         <div class="hystmodal__styled no-margin">
-          <h5>Metadata</h5>
-          <p><b>Title:</b> <span id="meta--title"></span></p>
-          <p><b>Album:</b> <span id="meta--album"></span></p>
-          <p><b>Artist:</b> <span id="meta--artist"></span></p>
-          <p><b>Year:</b> <span id="meta--year"></span></p>
-          <p><b>Track #:</b> <span id="meta--track"></span></p>
-          <p><b>Disc #:</b><span id="meta--disk"></span></p>
-          <p><b>Rating:</b> <span id="meta--rating"></span></p>
-          <p><b>Replay Gain:</b> <span id="meta--rg"></span></p>
-          <p><b>File Path:</b> <a href="#" target="_blank" id="meta--fp"></a></p>
-          <p><b>Album Art:</b> <a href="#" target="_blank" id="meta--aa"></a></p>
-          <button class="btn blue" style="margin-top:12px;" onclick="var _a=document.getElementById('meta--artist').innerText, _al=document.getElementById('meta--album').innerText, _t=document.getElementById('meta--title').innerText, _fp=document.getElementById('meta--fp').innerText; myModal.close(); setTimeout(function(){ openAlbumArtModal({artist:_a, album:_al, title:_t}, _fp); }, 300);">Change Album Art</button>
+          <h5 data-i18n="modal.metadata">Metadata</h5>
+          <p><b data-i18n="metadata.title">Title:</b> <span id="meta--title"></span></p>
+          <p><b data-i18n="metadata.album">Album:</b> <span id="meta--album"></span></p>
+          <p><b data-i18n="metadata.artist">Artist:</b> <span id="meta--artist"></span></p>
+          <p><b data-i18n="metadata.year">Year:</b> <span id="meta--year"></span></p>
+          <p><b data-i18n="metadata.track">Track #:</b> <span id="meta--track"></span></p>
+          <p><b data-i18n="metadata.disc">Disc #:</b><span id="meta--disk"></span></p>
+          <p><b data-i18n="metadata.rating">Rating:</b> <span id="meta--rating"></span></p>
+          <p><b data-i18n="metadata.replayGain">Replay Gain:</b> <span id="meta--rg"></span></p>
+          <p><b data-i18n="metadata.filePath">File Path:</b> <a href="#" target="_blank" id="meta--fp"></a></p>
+          <p><b data-i18n="metadata.albumArt">Album Art:</b> <a href="#" target="_blank" id="meta--aa"></a></p>
+          <button class="btn blue" style="margin-top:12px;" onclick="var _a=document.getElementById('meta--artist').innerText, _al=document.getElementById('meta--album').innerText, _t=document.getElementById('meta--title').innerText, _fp=document.getElementById('meta--fp').innerText; myModal.close(); setTimeout(function(){ openAlbumArtModal({artist:_a, album:_al, title:_t}, _fp); }, 300);" data-i18n="metadata.changeAlbumArt">Change Album Art</button>
         </div>
       </div>
     </div> 
@@ -332,39 +337,39 @@
   <div class="hystmodal" id="albumArtModal" aria-hidden="true">
     <div class="hystmodal__wrap">
       <div class="hystmodal__window" role="dialog" aria-modal="true" style="max-width:600px;">
-        <a data-hystclose class="hystmodal__close">Close</a>
+        <a data-hystclose class="hystmodal__close" data-i18n="modal.close">Close</a>
         <div class="hystmodal__styled no-margin">
-          <h5>Change Album Art</h5>
+          <h5 data-i18n="modal.changeAlbumArt">Change Album Art</h5>
           <div id="aa-song-info" style="margin-bottom:12px;padding:10px;background:rgba(255,255,255,.05);border-radius:4px;">
             <div id="aa-info-title" style="font-weight:bold;"></div>
             <div id="aa-info-artist" style="color:#aaa;font-size:13px;"></div>
             <div id="aa-info-album" style="color:#aaa;font-size:13px;"></div>
             <div id="aa-info-filepath" style="color:#666;font-size:11px;margin-top:4px;word-break:break-all;"></div>
           </div>
-          <div id="aa-search-status" style="padding:10px 0;color:#888;">Loading album art...</div>
+          <div id="aa-search-status" style="padding:10px 0;color:#888;" data-i18n="albumArt.loadingAlbumArt">Loading album art...</div>
           <div id="aa-results" style="display:flex;flex-wrap:wrap;gap:10px;margin:10px 0;"></div>
 
           <div style="margin:16px 0;padding:16px 0;border-top:1px solid #444;">
-            <b>Upload Custom Image</b>
-            <p style="color:#888;font-size:12px;margin:4px 0;">JPEG, PNG, or WebP. Max 10MB.</p>
+            <b data-i18n="albumArt.uploadCustom">Upload Custom Image</b>
+            <p style="color:#888;font-size:12px;margin:4px 0;" data-i18n="albumArt.uploadHint">JPEG, PNG, or WebP. Max 10MB.</p>
             <input type="file" id="aa-upload-input" accept="image/jpeg,image/png,image/webp" style="margin:8px 0;">
           </div>
 
           <div style="margin:12px 0;">
             <label>
               <input type="checkbox" id="aa-write-folder" class="filled-in">
-              <span>Save cover.jpg to album folder</span>
+              <span data-i18n="albumArt.saveCover">Save cover.jpg to album folder</span>
             </label>
           </div>
           <div id="aa-embed-row" style="margin:12px 0;">
             <label>
               <input type="checkbox" id="aa-write-file" class="filled-in">
-              <span>Embed album art in audio file</span>
+              <span data-i18n="albumArt.embedInFile">Embed album art in audio file</span>
             </label>
           </div>
 
           <div style="margin-top:16px;">
-            <button class="btn blue" id="aa-upload-btn" onclick="uploadCustomAlbumArt()">Upload & Apply</button>
+            <button class="btn blue" id="aa-upload-btn" onclick="uploadCustomAlbumArt()" data-i18n="albumArt.uploadButton">Upload & Apply</button>
           </div>
 
           <input type="hidden" id="aa-filepath">
@@ -375,8 +380,62 @@
     </div>
   </div>
 
+  <div id="nav-bar">
+    <div class="nav-bar-logo">
+      <svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+        viewBox="0 0 612 153" style="enable-background:new 0 0 612 153;" xml:space="preserve">
+        <style type="text/css">
+          .nav-bar-logo .st0{fill-rule:evenodd;clip-rule:evenodd;fill:#6684B2;}
+          .nav-bar-logo .st1{fill-rule:evenodd;clip-rule:evenodd;fill:#6684B2;}
+          .nav-bar-logo .st2{fill-rule:evenodd;clip-rule:evenodd;fill:#26477B;}
+        </style>
+        <g>
+          <path class="st0" d="M179.9,45.5c-6.2,0-11.5,1.7-15.9,5c-4.4,3.3-6.5,8.1-6.5,14.4c0,4.9,1.3,9.1,3.8,12.4
+            c2.5,3.4,5.7,5.8,9.3,7.3c3.7,1.5,7.3,2.8,11,3.8c3.7,1,6.8,2.3,9.3,3.9c2.5,1.5,3.8,3.5,3.8,5.8c0,4.8-4.4,7.2-13.1,7.2h-24.1V118
+            h24.1c17.1,0,25.6-6.7,25.6-20.2c0-1.9-0.2-3.8-0.6-5.8c-0.4-2-1.2-4-2.6-6c-1.3-2.1-3.3-3.7-5.8-4.9c-2.5-1.2-6.4-2.7-11.5-4.5
+            l-8.8-3.1c-0.7-0.2-1.7-0.7-2.9-1.3c-1.3-0.7-2.2-1.3-2.8-1.9c-0.6-0.6-1.1-1.4-1.6-2.3c-0.5-0.9-0.7-2-0.7-3.2c0-2,1-3.5,2.9-4.6
+            c1.9-1.1,4.3-1.6,7-1.6h24.6V45.5H179.9z"/>
+          <path class="st0" d="M226.4,58.3v31c0,10.2,2.5,17.6,7.6,22c5.1,4.4,13,6.6,23.7,6.6v-12.8c-2.7,0-4.9-0.2-6.8-0.4
+            c-1.8-0.3-3.7-0.9-5.8-1.9c-2-0.9-3.6-2.6-4.7-4.9c-1.1-2.3-1.6-5.2-1.6-8.7V58.3h18.8V45.5h-18.8V31.6L214,58.3H226.4z"/>
+          <path class="st0" d="M281.1,118V76.8c0-7.2,0.9-12,2.6-14.5c1-1.3,2.2-2.2,3.6-2.8c1.4-0.6,2.6-1,3.6-1.1c1-0.1,2.5-0.1,4.3-0.1
+            H310V45.5h-12.2c-3.6,0-6.5,0.1-8.6,0.3c-2.1,0.2-4.5,0.9-7.3,2c-2.8,1.1-5.1,2.8-7.1,5c-4,4.4-6,12.4-6,24V118H281.1z"/>
+          <path class="st0" d="M326.2,53.8c-6.2,7.4-9.3,17-9.3,28.9c0,10.7,3.2,19.4,9.5,26.2s14.7,10.1,25.3,10.1c8.7,0,16.3-2.7,22.7-8.1
+            L366,102c-3.7,2.1-8.5,3.2-14.3,3.2c-6.5,0-11.8-2.3-15.8-6.9c-4-4.6-6-10.5-6-17.9c0-7,1.9-12.9,5.6-17.9c3.8-5,8.9-7.5,15.5-7.5
+            c3.3,0,6.1,0.8,8.2,2.4c2.1,1.6,3.2,4,3.2,7.2c0,5-1.2,8.5-3.6,10.6c-2.4,2.1-6.7,3.2-12.9,3.2h-6.7v11.7h5.7
+            c20.3,0,30.5-8.5,30.5-25.4c0-13.6-7.9-20.7-23.7-21.5C340.9,43,332.4,46.5,326.2,53.8z"/>
+          <path class="st0" d="M412.3,73.2c-7.4,0-13.6,1.9-18.5,5.7c-4.9,3.8-7.4,9.4-7.4,16.7c0,7.3,2.3,12.9,7,16.7
+            c4.6,3.8,10.9,5.7,18.8,5.7h31V73.6c0-9.1-2.4-16-7.2-20.8c-4.8-4.8-11.7-7.2-20.7-7.2h-22.9v12.8h22.3c10.9,0,16.4,6.1,16.4,18.2
+            v28.7h-18.4c-9.1,0-13.6-3.2-13.6-9.8c0-3.3,1.2-5.9,3.6-7.8c2.4-1.8,5.8-2.7,10.2-2.7c5.1,0,9.4,1.4,12.9,4.3V75.3
+            C420.9,73.9,416.5,73.2,412.3,73.2z"/>
+          <path class="st0" d="M458.8,118H471V58.3h24.4V118h12.2V58.3h5.7c6.8,0,11.3,0.7,13.5,2c4.3,2.5,6.5,7.7,6.5,15.5V118h12.2V75.7
+            c0-6-0.6-11.2-1.9-15.5c-1.2-4.3-3.9-7.8-7.9-10.6c-3.9-2.7-9.1-4.1-15.7-4.1h-61.4V118z"/>
+          <polygon class="st1" points="75,118.5 75,35.5 96,48.5 96,118.5 	"/>
+          <polygon class="st2" points="99,118.5 99,49.5 110.5,56.5 121,49.5 121,118.5 	"/>
+          <polygon class="st1" points="124,118.5 124,48.5 145,35.5 145,118.5 	"/>
+        </g>
+      </svg>
+    </div>
+    <div id="scan-status"></div>
+    <div id="scan-status-files"></div>
+    <div class="nav-bar-right">
+      <div class="nav-lang-wrap">
+        <button type="button" class="nav-lang-toggle" id="nav-lang-toggle" aria-haspopup="listbox" aria-expanded="false">
+          <span class="nav-lang-current"></span>
+          <span class="nav-lang-caret">▾</span>
+        </button>
+        <ul class="nav-lang-menu" id="nav-lang-menu" role="listbox" hidden></ul>
+      </div>
+      <a class="nav-icon-link nav-discord" target="_blank" rel="noopener" href="https://discord.gg/AM896Rr" title="Discord" aria-label="Discord">
+        <svg viewBox="0 0 24 24" width="22" height="22" xmlns="http://www.w3.org/2000/svg"><path fill="currentColor" d="M20.317 4.3698a19.7913 19.7913 0 0 0-4.8851-1.5152.0741.0741 0 0 0-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 0 0-.0785-.037 19.7363 19.7363 0 0 0-4.8852 1.515.0699.0699 0 0 0-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 0 0 .0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 0 0 .0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 0 0-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 0 1-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 0 1 .0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 0 1 .0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 0 1-.0066.1276 12.2986 12.2986 0 0 1-1.873.8914.0766.0766 0 0 0-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 0 0 .0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 0 0 .0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 0 0-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419-.0189 1.3332-.9555 2.419-2.1569 2.419zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.419-2.1568 2.419z"/></svg>
+      </a>
+      <a class="nav-icon-link nav-github" target="_blank" rel="noopener" href="https://github.com/IrosTheBeggar/mStream" title="GitHub" aria-label="GitHub">
+        <svg viewBox="0 0 24 24" width="22" height="22" xmlns="http://www.w3.org/2000/svg"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
+      </a>
+    </div>
+  </div>
+
   <div id="sidenav">
-    <div class="side-nav-header">
+    <div class="side-nav-header sidenav-logo">
       <?xml version="1.0" encoding="utf-8"?>
         <svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
           viewBox="0 0 612 153" style="enable-background:new 0 0 612 153;" xml:space="preserve">
@@ -412,88 +471,100 @@
         </svg>
     </div>
     <div style="display: none;" class="side-nav-header">
-      <button class="my-waves" >Now Playing</button>
+      <button class="my-waves" data-i18n="nav.nowPlaying">Now Playing</button>
     </div>
     <div class="side-nav-header">
-      <span>Music</span>
+      <span data-i18n="nav.music">Music</span>
     </div>
     <div class="side-nav-item select my-waves" onclick="changeView(loadFileExplorer, this)">
       <?xml version="1.0" encoding="utf-8"?><svg width="24" height="24" xmlns="http://www.w3.org/2000/svg" viewBox="6 6 40 40" style="enable-background:new 0 0 48 48"><path d="M16.516 20.688C16.266 21.25 12 31.906 12 31.906V17c0-.55.45-1 1-1h1.334l.35-1.052C14.857 14.427 15.45 14 16 14h5c.55 0 1.143.427 1.316.948l.35 1.052H32c.55 0 1 .45 1 1v3H17.5c-.275 0-.734.125-.984.688zM41 21H19c-.55 0-1.167.418-1.371.929l-5.258 13.143c-.204.51.079.928.629.928h22c.55 0 1.167-.418 1.371-.929l5.258-13.143c.204-.51-.079-.928-.629-.928z"/></svg>
-      <span>File Explorer</span>
+      <span data-i18n="nav.fileExplorer">File Explorer</span>
     </div>
     <div class="side-nav-item my-waves" onclick="changeView(getAllPlaylists, this)">
       <?xml version="1.0" encoding="utf-8"?><svg width="24" height="24" xmlns="http://www.w3.org/2000/svg" viewBox="8 5 38 38" style="enable-background:new 0 0 48 48"><path d="M37.192 23.032c-.847.339-.179-.339-.179-.339s1.422-2.092.406-3.786c-.793-1.321-3.338-1.075-4.42-1.669v14.154c0 .037-.016.07-.022.106-.154 1.504-1.607 3.034-3.696 3.712-2.559.829-5.102.063-5.678-1.711-.574-1.774 1.034-3.887 3.595-4.717.66-.189 2.207-.439 2.801-.193V12.607a.609.609 0 0 1 .608-.607h1.785c.336 0 .608.273.608.607v.549c1.542 1.004 6.18 1.455 6.851 4.139.805 3.225-1.813 5.398-2.659 5.737zM12.5 20H28v-3H12.5c-.275 0-.5.225-.5.5v2c0 .275.225.5.5.5zm0 6H28v-3H12.5c-.275 0-.5.225-.5.5v2c0 .275.225.5.5.5zm10.125 3H12.5c-.275 0-.5.225-.5.5v2c0 .275.225.5.5.5h8.551c.176-1.075.728-2.113 1.574-3z"/></svg>
-      <span>Playlists</span>
+      <span data-i18n="nav.playlists">Playlists</span>
     </div>
     <div class="side-nav-item my-waves" onclick="changeView(getAllAlbums, this)">
       <?xml version="1.0" encoding="utf-8"?><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="10 12 28 28" style="enable-background:new 0 0 48 48"><path d="M11 17v14a1 1 0 0 1-1-1V18a1 1 0 0 1 1-1zM37 17v14a1 1 0 0 0 1-1V18a1 1 0 0 0-1-1zM13 16h1v16h-1a1 1 0 0 1-1-1V17a1 1 0 0 1 1-1zM35 16h-1v16h1a1 1 0 0 0 1-1V17a1 1 0 0 0-1-1zM32 15H16c-.55 0-1 .45-1 1v16c0 .55.45 1 1 1h16c.55 0 1-.45 1-1V16c0-.55-.45-1-1-1zm-3 12c0 1.469-2.022 1.71-2.301 1.71-.846 0-1.55-.395-1.752-1.02-.276-.852.461-1.796 1.607-2.218.649-.238 1.446-.155 1.446-.146v-4.407l-6 1.369V28c0 1.813-2.102 2.057-2.417 2.057-.816 0-1.44-.374-1.629-.955-.271-.835.441-1.77 1.603-2.174.646-.225 1.443-.137 1.443-.131v-6.604c0-.245.072-.469.291-.529l7.491-1.854-.039-.01c.218 0 .257.169.257.393V27z"/></svg>
-      <span>Albums</span>
+      <span data-i18n="nav.albums">Albums</span>
     </div>
     <div class="side-nav-item my-waves" onclick="changeView(getAllArtists, this)">
       <?xml version="1.0" encoding="utf-8"?><svg width="24" height="24" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000"><path d="M611.4 34.4c92-46.8 206.7-25.7 276.3 58.1 66.9 80.5 71.4 193.8 18.5 278.4-13.2.1-27-2.3-41.2-6.6-56-17.1-114.7-64.1-161.8-122.1-47.3-58.2-82-126-90.1-184.6-1-8-1.6-15.7-1.7-23.2zM146.8 678c-.7 41.6 19.8 64.6 59 71l431.9-297.1C578.1 413.3 527.3 349.7 501 282.7L146.8 678zm14.1 94.3c-35.9 38.4-46.8 78.1-38.3 107.7 3.5 12.1 10.4 22.5 20.2 30.3 10.4 8.3 24.5 13.8 41.6 15.3 58.5 5.1 146-33.6 248.3-150.9 102.8-118 195.4-173.9 271.3-187.5 45.9-8.2 86.3-1.4 119.7 16.6 33.4 18 59.4 47 76.7 83.1 27 56.4 32.6 130.2 12 205.2l-60-17.2c16.3-59.8 12.6-117.4-7.9-160-11.5-24-28.4-43.1-49.8-54.6-21.5-11.5-48.3-15.8-79.9-10.1-63.2 11.4-143 61-235.4 167-117.5 134.9-224.8 178.7-300 172.2-29.6-2.6-54.8-12.8-74.6-28.4-20.4-16.1-34.7-37.9-41.9-63.2-14.3-50.1.3-113.2 53.1-169.7l44.9 44.2zM871.5 412c-69.8-23.6-139.6-79.4-194.4-146.8-49.9-61.3-88.3-133.3-103.8-200.3-41 51.7-57.7 118-48.6 181.6 25.1 77.2 90.1 157.1 162.7 191.2 60.8 18 127.9 10 184.1-25.7z"/></svg>
-      <span>Artists</span>
+      <span data-i18n="nav.artists">Artists</span>
     </div>
     <div class="side-nav-item my-waves" onclick="changeView(getAllGenres, this)">
       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="#FFF"><path d="M0 0h24v24H0z" fill="none"/><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
-      <span>Genres</span>
+      <span data-i18n="nav.genres">Genres</span>
     </div>
     <div onclick="changeView(getRecentlyAdded, this)" class="side-nav-item my-waves">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="22" height="22"><path d="M256 8C119 8 8 119 8 256s111 248 248 248 248-111 248-248S393 8 256 8zm0 448c-110.5 0-200-89.5-200-200S145.5 56 256 56s200 89.5 200 200-89.5 200-200 200zm61.8-104.4l-84.9-61.7c-3.1-2.3-4.9-5.9-4.9-9.7V116c0-6.6 5.4-12 12-12h32c6.6 0 12 5.4 12 12v141.7l66.8 48.6c5.4 3.9 6.5 11.4 2.6 16.8L334.6 349c-3.9 5.3-11.4 6.5-16.8 2.6z"/></svg>
-      <span>Recent Added</span>
+      <span data-i18n="nav.recentAdded">Recent Added</span>
     </div>
     <div onclick="changeView(getRecentlyPlayed, this)" class="side-nav-item my-waves">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="22" height="22"><path d="M256 8C119 8 8 119 8 256s111 248 248 248 248-111 248-248S393 8 256 8zm0 448c-110.5 0-200-89.5-200-200S145.5 56 256 56s200 89.5 200 200-89.5 200-200 200zm61.8-104.4l-84.9-61.7c-3.1-2.3-4.9-5.9-4.9-9.7V116c0-6.6 5.4-12 12-12h32c6.6 0 12 5.4 12 12v141.7l66.8 48.6c5.4 3.9 6.5 11.4 2.6 16.8L334.6 349c-3.9 5.3-11.4 6.5-16.8 2.6z"/></svg>
-      <span>Recently Played</span>
+      <span data-i18n="nav.recentlyPlayed">Recently Played</span>
     </div>
     <div onclick="changeView(getMostPlayed, this)" class="side-nav-item my-waves">
       <svg xmlns="http://www.w3.org/2000/svg" height="22px" viewBox="0 0 24 24" width="22px" fill="#FFFFFF"><path d="M0 0h24v24H0z" fill="none"/><path d="M3.5 18.49l6-6.01 4 4L22 6.92l-1.41-1.41-7.09 7.97-4-4L2 16.99z"/></svg>
-      <span>Most Played</span>
+      <span data-i18n="nav.mostPlayed">Most Played</span>
     </div>
     <div class="side-nav-item my-waves" onclick="changeView(getRatedSongs, this)">
       <?xml version="1.0" encoding="iso-8859-1"?><svg width="24" height="24" xmlns="http://www.w3.org/2000/svg" viewBox="-3 0 62 62" style="enable-background:new 0 0 53.867 53.867"><path style="fill:#efce4a" d="M26.934 1.318l8.322 16.864 18.611 2.705L40.4 34.013l3.179 18.536-16.645-8.751-16.646 8.751 3.179-18.536L0 20.887l18.611-2.705z"/></svg>
-      <span>Rated</span>
+      <span data-i18n="nav.rated">Rated</span>
     </div>
     <div class="side-nav-item my-waves" onclick="changeView(setupSearchPanel, this)">
       <svg viewBox="-150 -50 1224 1174" height="24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M960 832L710.875 582.875C746.438 524.812 768 457.156 768 384 768 171.969 596 0 384 0 171.969 0 0 171.969 0 384c0 212 171.969 384 384 384 73.156 0 140.812-21.562 198.875-57L832 960c17.5 17.5 46.5 17.375 64 0l64-64c17.5-17.5 17.5-46.5 0-64zM384 640c-141.375 0-256-114.625-256-256s114.625-256 256-256 256 114.625 256 256-114.625 256-256 256z"></path></svg>
-      <span>Search</span>
+      <span data-i18n="nav.search">Search</span>
     </div>
     <div class="side-nav-header">
-      <span>System</span>
+      <span data-i18n="nav.system">System</span>
     </div>
     <div onclick="changeView(getMobilePanel, this);" class="side-nav-item my-waves">
       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M15.5 1h-8C6.12 1 5 2.12 5 3.5v17C5 21.88 6.12 23 7.5 23h8c1.38 0 2.5-1.12 2.5-2.5v-17C18 2.12 16.88 1 15.5 1zm-4 21c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm4.5-4H7V4h9v14z"/><path d="M0 0h24v24H0z" fill="none"/></svg>
-      <span>Apps</span>
+      <span data-i18n="nav.apps">Apps</span>
     </div>
     <div class="side-nav-item my-waves" onclick="changeView(autoDjPanel, this);">
       <svg xmlns="http://www.w3.org/2000/svg" fill="#DDD" width="24" height="24" viewBox="0 0 55.334 55.334"><g><circle cx="27.667" cy="27.667" r="3.618"/><path d="M27.667 0C12.387 0 0 12.387 0 27.667s12.387 27.667 27.667 27.667 27.667-12.387 27.667-27.667S42.947 0 27.667 0zM17.118 6.881a23.213 23.213 0 0111.214-2.509c.367.01.619.922.564 2.025l-.282 5.677c-.055 1.103-.289 1.986-.523 1.979a13.577 13.577 0 00-6.027 1.196c-1.007.455-2.212.184-2.774-.767l-2.896-4.897c-.562-.951-.261-2.203.724-2.704zm-1.132 10.414l-4.278-3.742c-.832-.727-.918-1.994-.119-2.756l.057-.053c.802-.76 2.059-.605 2.737.266l3.494 4.484c.679.871.837 1.889.391 2.314-.447.427-1.45.214-2.282-.513zm1.891 10.372c0-5.407 4.383-9.79 9.79-9.79s9.79 4.383 9.79 9.79-4.383 9.79-9.79 9.79-9.79-4.383-9.79-9.79zM38.17 48.476a23.21 23.21 0 01-11.244 2.484c-.409-.013-.692-.929-.632-2.032l.31-5.676c.061-1.103.322-1.981.586-1.972a13.596 13.596 0 005.656-1.01c1.022-.42 2.275-.144 2.877.782l3.101 4.77c.602.925.332 2.155-.654 2.654zm5.449-3.82c-.766.72-2.005.551-2.703-.305l-3.59-4.407c-.698-.856-.876-1.848-.435-2.255.442-.407 1.443-.179 2.274.549l4.28 3.744c.832.727.941 1.954.174 2.674z"/></g></svg>
-      <span>Auto DJ</span>
+      <span data-i18n="nav.autoDJ">Auto DJ</span>
     </div>
     <div class="side-nav-item my-waves" onclick="changeView(setupTranscodePanel, this);">
       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 48 48"><path id="ffmpeg-logo" fill="none" stroke="#DDD" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" d="M8.5 8.5h9l-9 9v11l20-20h11l-31 31h11l20-20v11l-9 9h9"/></svg>
-      <span>Transcode</span>
+      <span data-i18n="nav.transcode">Transcode</span>
     </div>
     <div class="side-nav-item my-waves" onclick="changeView(setupJukeboxPanel, this);">
       <svg v-bind:class="{ 'aux-button-active-2': jukebox.live }" height="24" width="24" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" x="0px" y="0px" viewBox="0 0 65 65" enable-background="new 0 0 65 65" xml:space="preserve"><g><path d="M36.1,14.4c-1.4-1.4-3.9-1.4-5.3,0L1.1,44.1c-1.4,1.4-1.4,3.8,0,5.3l14.5,14.5c0.7,0.7,1.6,1.1,2.6,1.1   c1,0,1.9-0.4,2.6-1.1l29.7-29.7c1.5-1.4,1.5-3.8,0-5.3L36.1,14.4z M49.5,33.2L19.8,62.9c-0.8,0.8-2.3,0.8-3.2,0L2.1,48.3   c-0.9-0.9-0.9-2.3,0-3.2l29.7-29.7c0.4-0.4,1-0.7,1.6-0.7c0.6,0,1.2,0.2,1.6,0.7L49.5,30C50.4,30.9,50.4,32.3,49.5,33.2z"></path><rect x="32.4" y="19.5" transform="matrix(0.707 0.7072 -0.7072 0.707 24.3992 -18.4628)" width="4.2" height="1.5"></rect><rect x="42.7" y="29.8" transform="matrix(-0.7072 -0.707 0.707 -0.7072 54.8735 83.7577)" width="4.2" height="1.5"></rect><rect x="14.7" y="37.1" transform="matrix(0.7071 0.7071 -0.7071 0.7071 31.7025 -0.8228)" width="4.2" height="1.5"></rect><rect x="25" y="47.4" transform="matrix(-0.7071 -0.7071 0.7071 -0.7071 12.2855 101.3977)" width="4.2" height="1.5"></rect><rect x="19.9" y="42.3" transform="matrix(0.7071 0.7071 -0.7071 0.7071 36.8513 -2.9555)" width="4.2" height="1.5"></rect><rect x="11.7" y="40.2" transform="matrix(0.7071 0.7071 -0.7071 0.7071 32.9629 2.2207)" width="4.2" height="1.5"></rect><rect x="22" y="50.5" transform="matrix(-0.707 -0.7072 0.7072 -0.707 4.9277 104.4377)" width="4.2" height="1.5"></rect><rect x="16.8" y="45.3" transform="matrix(0.7071 0.7071 -0.7071 0.7071 38.1117 8.766792e-002)" width="4.2" height="1.5"></rect><rect x="8.6" y="43.2" transform="matrix(0.7071 0.7071 -0.7071 0.7071 34.2235 5.2638)" width="4.2" height="1.5"></rect><rect x="18.9" y="53.5" transform="matrix(-0.7072 -0.707 0.707 -0.7072 -2.4064 107.4868)" width="4.2" height="1.5"></rect><rect x="13.8" y="48.3" transform="matrix(-0.707 -0.7072 0.7072 -0.707 -7.5673 95.0498)" width="4.2" height="1.5"></rect><rect x="10.8" y="51.4" transform="matrix(-0.7072 -0.707 0.707 -0.7072 -14.9034 98.0997)" width="4.2" height="1.5"></rect><path d="M35.4,38.8c-1.1,1.1-2.4,1.7-3.9,1.9l0.2,1.5c1.8-0.2,3.5-1,4.8-2.3c1.3-1.3,2.1-3,2.3-4.8l-1.5-0.2   C37.1,36.4,36.5,37.8,35.4,38.8z"></path><path d="M31.7,26.2l-0.2,1.5c1.5,0.2,2.8,0.8,3.9,1.9c1.1,1.1,1.7,2.4,1.9,3.9l1.5-0.2c-0.2-1.8-1-3.5-2.3-4.8   C35.2,27.2,33.5,26.4,31.7,26.2z"></path><path d="M26.2,29.6c1.1-1.1,2.4-1.7,3.9-1.9l-0.2-1.5c-1.8,0.2-3.5,1-4.8,2.3c-1.3,1.3-2.1,3-2.3,4.8l1.5,0.2   C24.5,32,25.1,30.6,26.2,29.6z"></path><path d="M24.3,34.9l-1.5,0.2c0.2,1.8,1,3.5,2.3,4.8c1.3,1.3,3,2.1,4.8,2.3l0.2-1.5c-1.5-0.2-2.9-0.8-3.9-1.9   C25.1,37.8,24.5,36.4,24.3,34.9z"></path><path d="M43.4,0v1.5c11.1,0,20.1,9,20.1,20.1H65C65,9.7,55.3,0,43.4,0z"></path><path d="M43.4,7.4v1.5c7,0,12.7,5.7,12.7,12.7h1.5C57.6,13.8,51.2,7.4,43.4,7.4z"></path><path d="M48.6,21.6h1.5c0-3.7-3-6.7-6.7-6.7v1.5C46.3,16.4,48.6,18.7,48.6,21.6z"></path></g></svg>
-      <span>Jukebox</span>
+      <span data-i18n="nav.jukebox">Jukebox</span>
     </div>
     <div class="side-nav-item my-waves" onclick="changeView(setupLayoutPanel, this);">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="24" width="24" fill="#FFF"><path d="M0 0h24v24H0z" fill="none"/><path d="M3 3h8v8H3zm10 0h8v8h-8zM3 13h8v8H3zm15 0h-2v3h-3v2h3v3h2v-3h3v-2h-3z"/></svg>
-      <span>Layout</span>
+      <span data-i18n="nav.layout">Layout</span>
     </div>
     <!-- <div class="side-nav-item my-waves" onclick="changeView(advancedConfig, this);">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="24" width="24" fill="#FFF"><path d="M0 0h24v24H0z" fill="none"/><path d="M3 3h8v8H3zm10 0h8v8h-8zM3 13h8v8H3zm15 0h-2v3h-3v2h3v3h2v-3h3v-2h-3z"/></svg>
       <span>Config</span>
     </div> -->
     <div class="side-nav-header">
-      <span>Navigation</span>
+      <span data-i18n="nav.navigation">Navigation</span>
     </div>
     <div id="admin-side-link" class="side-nav-item my-waves" onclick="window.open('./admin', '_blank');">
       <svg xmlns="http://www.w3.org/2000/svg" enable-background="new 0 0 24 24" height="24" viewBox="0 0 24 24" width="24"><g><rect fill="none" height="24" width="24"/></g><g><g><path d="M17,11c0.34,0,0.67,0.04,1,0.09V6.27L10.5,3L3,6.27v4.91c0,4.54,3.2,8.79,7.5,9.82c0.55-0.13,1.08-0.32,1.6-0.55 C11.41,19.47,11,18.28,11,17C11,13.69,13.69,11,17,11z"/><path d="M17,13c-2.21,0-4,1.79-4,4c0,2.21,1.79,4,4,4s4-1.79,4-4C21,14.79,19.21,13,17,13z M17,14.38c0.62,0,1.12,0.51,1.12,1.12 s-0.51,1.12-1.12,1.12s-1.12-0.51-1.12-1.12S16.38,14.38,17,14.38z M17,19.75c-0.93,0-1.74-0.46-2.24-1.17 c0.05-0.72,1.51-1.08,2.24-1.08s2.19,0.36,2.24,1.08C18.74,19.29,17.93,19.75,17,19.75z"/></g></g></svg>
-      <span>Admin Panel</span>
+      <span data-i18n="nav.adminPanel">Admin Panel</span>
     </div>
     <div id="logout-side-link" class="side-nav-item my-waves" onclick="MSTREAMAPI.logout();">
       <svg xmlns="http://www.w3.org/2000/svg" enable-background="new 0 0 24 24" height="24" viewBox="0 0 24 24" width="24"><rect fill="none" height="24" width="24"/><path d="M9,19l1.41-1.41L5.83,13H22V11H5.83l4.59-4.59L9,5l-7,7L9,19z"/></svg>
-      <span>Log Out</span>
+      <span data-i18n="nav.logout">Log Out</span>
+    </div>
+    <!-- Language picker at bottom of sidenav — only shown when top bar is hidden -->
+    <div class="sidenav-spacer-bottom"></div>
+    <div class="sidenav-lang-header">
+      <span data-i18n="settings.language">Language</span>
+    </div>
+    <div class="sidenav-lang-wrap">
+      <button type="button" class="sidenav-lang-toggle" id="sidenav-lang-toggle" aria-haspopup="listbox" aria-expanded="false">
+        <span class="sidenav-lang-current"></span>
+        <span class="sidenav-lang-caret">▾</span>
+      </button>
+      <ul class="sidenav-lang-menu" id="sidenav-lang-menu" role="listbox" hidden></ul>
     </div>
   </div>
 
@@ -540,18 +611,18 @@
         <div v-if="altLayout.moveMeta === false" class="card data-card hide-on-small-only">
           <div class="card-content">
             <p>
-              <b>Title:</b>
+              <b data-i18n="metadata.title">Title:</b>
               {{ (meta.title) ? meta.title : (meta.filepath ? meta.filepath.split('/').pop() : '')  }}
             </p>
             <p>
-              <b>Artist:</b>
+              <b data-i18n="metadata.artist">Artist:</b>
               <span class="pointer" v-on:click="goToArtist">{{ (meta.artist) ? meta.artist : '' }}</span>
             </p>
             <p>
-              <b>Album:</b>
+              <b data-i18n="metadata.album">Album:</b>
               <span class="pointer" v-on:click="goToAlbum">{{ (meta.album) ? meta.album : '' }}</span>
             </p>
-            <p><b>Year:</b> {{ (meta.year) ? meta.year : '' }}</p>
+            <p><b data-i18n="metadata.year">Year:</b> {{ (meta.year) ? meta.year : '' }}</p>
           </div>
         </div>
         <div class="progress-wrapper">
@@ -563,8 +634,8 @@
         </div>
         <div class="flex">
           <div v-if="altLayout.audioBookCtrls === false" class="button-block">
-            <svg v-if="playerStats.shouldLoopOne === false" class="pointer margin-lr" v-on:click="toggleRepeat" v-bind:class="{ 'aux-button-active': playerStats.shouldLoop }" xmlns="http://www.w3.org/2000/svg" version="1" viewBox="0 0 24 24" width="25" height="25"><title>Repeat</title><path d="M17 2v3H6C4.3 5 3 6.3 3 8v6.813l2-1.626V8c0-.6.4-1 1-1h11v3l5-4-5-4zm4 7.188l-2 1.624V16c0 .6-.4 1-1 1H7v-3l-5 4 5 4v-3h11c1.7 0 3-1.3 3-3V9.187z"/></svg>
-            <svg v-else class="pointer margin-lr aux-button-active" v-on:click="toggleRepeat" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="25" height="25"><title>Repeat One</title><path d="M23.3 29.9V20.45H20.5V18H25.75V29.9ZM14 44 6 36 14 28 16.1 30.2 11.8 34.5H35V26.5H38V37.5H11.8L16.1 41.8ZM10 21.5V10.5H36.2L31.9 6.2L34 4L42 12L34 20L31.9 17.8L36.2 13.5H13V21.5Z"/></svg>
+            <svg v-if="playerStats.shouldLoopOne === false" class="pointer margin-lr" v-on:click="toggleRepeat" v-bind:class="{ 'aux-button-active': playerStats.shouldLoop }" xmlns="http://www.w3.org/2000/svg" version="1" viewBox="0 0 24 24" width="25" height="25"><title data-i18n="tooltip.repeat">Repeat</title><path d="M17 2v3H6C4.3 5 3 6.3 3 8v6.813l2-1.626V8c0-.6.4-1 1-1h11v3l5-4-5-4zm4 7.188l-2 1.624V16c0 .6-.4 1-1 1H7v-3l-5 4 5 4v-3h11c1.7 0 3-1.3 3-3V9.187z"/></svg>
+            <svg v-else class="pointer margin-lr aux-button-active" v-on:click="toggleRepeat" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="25" height="25"><title data-i18n="tooltip.repeatOne">Repeat One</title><path d="M23.3 29.9V20.45H20.5V18H25.75V29.9ZM14 44 6 36 14 28 16.1 30.2 11.8 34.5H35V26.5H38V37.5H11.8L16.1 41.8ZM10 21.5V10.5H36.2L31.9 6.2L34 4L42 12L34 20L31.9 17.8L36.2 13.5H13V21.5Z"/></svg>
             
             <svg class="pointer margin-lr" v-on:click="toggleShuffle" v-bind:class="{ 'aux-button-active': playerStats.shuffle }"  xmlns="http://www.w3.org/2000/svg" version="1" viewBox="0 0 24 24" width="25" height="25"><title>Shuffle</title><path d="M17 2v3h-2.813c-1.1 0-2.187.588-2.687 1.688L6.594 16.5c-.1.3-.482.5-.782.5H2v2h3.813c1.1 0 2.187-.587 2.687-1.688L13.406 7.5c.1-.3.481-.5.781-.5H17v3l5-4-5-4zM2 5v2h3.813c.3 0 .675.194.875.594l1.718 3.312L9.5 8.687l-1-2C7.9 5.588 6.912 5 5.812 5H2zm9.594 8.094L10.5 15.313l1 2c.5 1 1.488 1.687 2.688 1.687H17v3l5-4-5-4v3h-2.813c-.3 0-.675-.194-.874-.594l-1.72-3.312z"/></svg>
             <svg class="auto-dj" v-on:click="toggleAutoDJ" v-bind:class="{ 'aux-button-active': playerStats.autoDJ }" class="center" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid" style="width:25px;webkit-logical-width:25px;webkit-logical-height:25px;user-select:none;transform-origin:12.5px 12.5px;r:0;perspective-origin:12.5px 12.5px;overflow-y:hidden;overflow-x:hidden;inline-size:25px;height:25px;d:none;block-size:25px;background:0% 0%/auto padding-box border-box" overflow="hidden" display="block" ><title>Auto DJ</title><g transform="translate(-.938 19.85)" style="y:0;user-select:none;transform:matrix(1,0,0,1,-.9375,19.85);perspective-origin:0 0"><g class="ld" style="y:0;x:0;user-select:none;transform-origin:7.9375px 0;transform:none;r:0;perspective-origin:0 0;line-height:31.4286px;font:400 22px/31.4286px 'Varela Round','century gothic',verdana;d:none"><text style="y:0;user-select:none;r:0;perspective-origin:7.9375px 0;line-height:31.4286px;font:400 22px/31.4286px Arial" white-space="nowrap" display="block">D</text></g></g><g transform="translate(14.938 19.85)" style="y:0;user-select:none;transform:matrix(1,0,0,1,14.9375,19.85);perspective-origin:0 0"><g class="ld" style="y:0;x:0;user-select:none;transform-origin:5.5px 0;transform:none;r:0;perspective-origin:0 0;line-height:31.4286px;font:400 22px/31.4286px 'Varela Round','century gothic',verdana;d:none"><text style="y:0;user-select:none;r:0;perspective-origin:5.5px 0;line-height:31.4286px;font:400 22px/31.4286px Arial" white-space="nowrap" display="block">J</text></g></g></svg>
@@ -615,29 +686,29 @@
     <div class="row row-x grow">
       <div id="browser" class="col col-x s12 m6 h1 flex-x">
         <div class="header-tab hide-on-small-only">
-          <h5 class="panel_one_name">File Explorer</h5>
+          <h5 class="panel_one_name" data-i18n="panel.fileExplorer">File Explorer</h5>
         </div>
         <div id="directory_bar" class="level-2 flex">
-          <svg onclick="onBackButton();" class="pointer" xmlns="http://www.w3.org/2000/svg" height="24" width="24"><title>Go Back</title><path d="M0 0h24v24H0z" fill="none"/><path class="icon-path" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
-          <svg xmlns="http://www.w3.org/2000/svg" id="local_search_btn" class="pointer" onclick="onSearchButtonClick();" height="24" width="24"><title>Search</title><path d="M0 0h24v24H0z" fill="none"/><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+          <svg onclick="onBackButton();" class="pointer" xmlns="http://www.w3.org/2000/svg" height="24" width="24"><title data-i18n="tooltip.goBack">Go Back</title><path d="M0 0h24v24H0z" fill="none"/><path class="icon-path" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+          <svg xmlns="http://www.w3.org/2000/svg" id="local_search_btn" class="pointer" onclick="onSearchButtonClick();" height="24" width="24"><title data-i18n="tooltip.search">Search</title><path d="M0 0h24v24H0z" fill="none"/><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
           <div id="directoryName" class=""></div>
           <div id="search_folders" class="super-hide">
-            <input id="localSearchBar" onkeyup="runLocalSearch(this)" type="text" placeholder="Search List" autocomplete="off">
+            <input id="localSearchBar" onkeyup="runLocalSearch(this)" type="text" placeholder="Search List" autocomplete="off" data-i18n="fileExplorer.searchPlaceholder" data-i18n-attr="placeholder">
           </div>
-          <svg id="mkdir_btn" onclick="openMkdirModal();" class="pointer super-hide" xmlns="http://www.w3.org/2000/svg" height="24" width="24"><title>Create Folder</title><path d="M0 0h24v24H0z" fill="none"/><path d="M20 6h-8l-2-2H4c-1.11 0-1.99.89-1.99 2L2 18c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2zm-1 8h-3v3h-2v-3h-3v-2h3V9h2v3h3v2z"/></svg>
-          <svg id="upload_btn" onclick="openUploadModal();" class="pointer super-hide" xmlns="http://www.w3.org/2000/svg" height="24" width="24"><title>Upload</title><path d="M0 0h24v24H0z" fill="none"/><path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg>
-          <svg onclick="addAll();" class="pointer" xmlns="http://www.w3.org/2000/svg" height="24" width="24"><title>Add All To Queue</title><path d="M0 0h24v24H0V0z" fill="none"/><path d="M21 3H3c-1.11 0-2 .89-2 2v12a2 2 0 0 0 2 2h5v2h8v-2h5c1.1 0 1.99-.9 1.99-2L23 5a2 2 0 0 0-2-2zm0 14H3V5h18v12zm-5-7v2h-3v3h-2v-3H8v-2h3V7h2v3h3z"/></svg>
+          <svg id="mkdir_btn" onclick="openMkdirModal();" class="pointer super-hide" xmlns="http://www.w3.org/2000/svg" height="24" width="24"><title data-i18n="tooltip.createFolder">Create Folder</title><path d="M0 0h24v24H0z" fill="none"/><path d="M20 6h-8l-2-2H4c-1.11 0-1.99.89-1.99 2L2 18c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2zm-1 8h-3v3h-2v-3h-3v-2h3V9h2v3h3v2z"/></svg>
+          <svg id="upload_btn" onclick="openUploadModal();" class="pointer super-hide" xmlns="http://www.w3.org/2000/svg" height="24" width="24"><title data-i18n="tooltip.upload">Upload</title><path d="M0 0h24v24H0z" fill="none"/><path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg>
+          <svg onclick="addAll();" class="pointer" xmlns="http://www.w3.org/2000/svg" height="24" width="24"><title data-i18n="tooltip.addAllToQueue">Add All To Queue</title><path d="M0 0h24v24H0V0z" fill="none"/><path d="M21 3H3c-1.11 0-2 .89-2 2v12a2 2 0 0 0 2 2h5v2h8v-2h5c1.1 0 1.99-.9 1.99-2L23 5a2 2 0 0 0-2-2zm0 14H3V5h18v12zm-5-7v2h-3v3h-2v-3H8v-2h3V7h2v3h3z"/></svg>
         </div>
         <div class="upload-progress-bar">
           <div style="width:0%" id="upload-progress-inner" class="upload-progress-inner"></div>
         </div>
         <div id="ytdl_download_indicator" class="super-hide" style="display:flex; align-items:center; gap:8px; padding:8px 14px; background:rgba(76,175,80,0.15); border-left:3px solid #4CAF50; color:#fff; font-size:13px;">
           <svg class="spinner" style="width:18px; height:18px;" viewBox="0 0 66 66" xmlns="http://www.w3.org/2000/svg"><circle class="spinner-path" fill="none" stroke-width="6" stroke-linecap="round" cx="33" cy="33" r="30"></circle></svg>
-          <span id="ytdl_download_text" style="flex:1;">Downloading...</span>
-          <a href="/downloads" style="color:#4CAF50; white-space:nowrap;">view downloads</a>
+          <span id="ytdl_download_text" style="flex:1;" data-i18n="fileExplorer.downloading">Downloading...</span>
+          <a href="/downloads" style="color:#4CAF50; white-space:nowrap;" data-i18n="label.viewDownloads">view downloads</a>
         </div>
         <div id="filelist">
-          <h4>Welcome To mStream!</h4>
+          <h4 data-i18n="label.welcomeToMStream">Welcome To mStream!</h4>
         </div>
         <div style="visibility:hidden; position: absolute;" class="pop-f" id="pop-f" role="tooltip">
           <div class="pop-f pop-playlist">Add To Playlist:</div>
@@ -647,23 +718,23 @@
       <div class="col col-y s12 m6 flex-x h1" id="playlist">
         <div class="header-tab">
           <div class="show-on-medium-and-up">
-            <h5>Now Playing</h5>
+            <h5 data-i18n="nav.nowPlaying">Now Playing</h5>
           </div>
           <div class="flex grow flex-end" id="playlist-buttons">
-            <a title="Live Playlist" onclick="openLivePlaylistModal();">
+            <a title="Live Playlist" data-i18n="tooltip.livePlaylist" data-i18n-attr="title" onclick="openLivePlaylistModal();">
               <svg xmlns="http://www.w3.org/2000/svg" v-bind:class="{ 'aux-button-active': livePlaylist.name }"  xml:space="preserve" width="25" height="25" viewBox="0 0 512 512"><path d="M48 64h160c17.672 0 32-14.328 32-32 0-17.674-14.328-32-32-32H48C30.328 0 16 14.326 16 32c0 17.672 14.328 32 32 32zM48 160h160c17.672 0 32-14.328 32-32 0-17.674-14.328-32-32-32H48c-17.672 0-32 14.326-32 32 0 17.672 14.328 32 32 32zM240 224c0-17.674-14.328-32-32-32H48c-17.672 0-32 14.326-32 32 0 17.672 14.328 32 32 32h160c17.672 0 32-14.328 32-32z"/><path d="M411.328 75.914C393.043 61.805 368 42.477 368 32c0-17.672-14.328-32-32-32s-32 14.328-32 32v293.58c-10.023-3.549-20.762-5.58-32-5.58-53.02 0-96 42.98-96 96s42.98 96 96 96 96-42.98 96-96V123.293c1.414 1.094 2.82 2.203 4.23 3.293 36.105 27.852 59.77 48.078 59.77 74.305 0 40.766-21.684 63.516-22.305 64.164-12.672 12.32-12.961 32.578-.641 45.25 6.273 6.453 14.605 9.695 22.949 9.695 8.035 0 16.082-3.008 22.301-9.055 4.27-4.148 41.695-42.484 41.695-110.055.001-59.64-46.948-95.867-84.671-124.976z"/></svg>
             </a>
 
-            <a title="Save Playlist" onclick="openSaveModal();">
+            <a title="Save Playlist" data-i18n="tooltip.savePlaylist" data-i18n-attr="title" onclick="openSaveModal();">
               <?xml version="1.0" encoding="iso-8859-1"?><svg width="27" height="27" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 49 49" style="enable-background:new 0 0 49 49"><path d="M27.5 5h6v10h-6z"/><path d="M39.914 0H.5v49h48V8.586L39.914 0zM10.5 2h26v16h-26V2zm29 45h-31V26h31v21z"/><path d="M13.5 32h7a1 1 0 1 0 0-2h-7a1 1 0 1 0 0 2zM13.5 36h10a1 1 0 1 0 0-2h-10a1 1 0 1 0 0 2zM26.5 36c.27 0 .52-.11.71-.29.18-.19.29-.45.29-.71s-.11-.521-.29-.71c-.37-.37-1.04-.37-1.41 0a.996.996 0 0 0-.3.71c0 .27.109.52.29.71.189.18.439.29.71.29z"/></svg>
             </a>
-            <a title="Download Playlist" class="downloadPlaylist" onclick="downloadPlaylist();">
+            <a title="Download Playlist" data-i18n="tooltip.downloadPlaylist" data-i18n-attr="title" class="downloadPlaylist" onclick="downloadPlaylist();">
               <?xml version="1.0" encoding="utf-8"?><svg width="25" height="25" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000"><path d="M763.8 839.2c0-10.2-3.7-19-11.2-26.5-7.5-7.5-16.3-11.2-26.5-11.2s-19 3.7-26.5 11.2c-7.5 7.5-11.2 16.3-11.2 26.5s3.7 19 11.2 26.5c7.5 7.5 16.3 11.2 26.5 11.2s19-3.7 26.5-11.2c7.5-7.4 11.2-16.3 11.2-26.5zm150.8 0c0-10.2-3.7-19-11.2-26.5-7.5-7.5-16.3-11.2-26.5-11.2s-19 3.7-26.5 11.2c-7.5 7.5-11.2 16.3-11.2 26.5s3.7 19 11.2 26.5c7.5 7.5 16.3 11.2 26.5 11.2s19-3.7 26.5-11.2c7.5-7.4 11.2-16.3 11.2-26.5zM990 707.3v188.5c0 15.7-5.5 29.1-16.5 40s-24.3 16.5-40 16.5h-867c-15.7 0-29.1-5.5-40-16.5-11-11-16.5-24.3-16.5-40V707.3c0-15.7 5.5-29.1 16.5-40 11-11 24.3-16.5 40-16.5h273.9l79.5 80.1c22.8 22 49.5 33 80.1 33 30.6 0 57.3-11 80.1-33l80.1-80.1h273.3c15.7 0 29.1 5.5 40 16.5 11 11 16.5 24.3 16.5 40zM798.6 372.2c6.7 16.1 3.9 29.8-8.2 41.2L526.5 677.3c-7.1 7.5-15.9 11.2-26.5 11.2s-19.4-3.7-26.5-11.2L209.7 413.4c-12.2-11.4-14.9-25.1-8.2-41.2 6.7-15.3 18.3-23 34.7-23H387V85.4c0-10.2 3.7-19 11.2-26.5 7.5-7.5 16.3-11.2 26.5-11.2h150.8c10.2 0 19 3.7 26.5 11.2 7.5 7.5 11.2 16.3 11.2 26.5v263.8H764c16.3 0 27.9 7.7 34.6 23z"/></svg>
             </a>
-            <a title="Share Playlist" onclick="openShareModal();">
+            <a title="Share Playlist" data-i18n="tooltip.sharePlaylist" data-i18n-attr="title" onclick="openShareModal();">
               <svg xmlns="http://www.w3.org/2000/svg" width="25" height="25" viewBox="0 0 50 50"><path d="M 40 0 C 34.536 0 30.079 4.39775 30 9.84375 C 29.999 9.89275 30 9.951 30 10 C 30 13.688 31.99675 16.891 34.96875 18.625 C 36.44575 19.49 38.167 20 40 20 C 45.514 20 50 15.514 50 10 C 50 4.486 45.514 0 40 0 z M 28.0625 10.84375 L 17.84375 15.96875 C 20.22275 18.03275 21.78375 20.99975 21.96875 24.34375 L 32.3125 19.15625 C 29.8965 17.12825 28.3005 14.17675 28.0625 10.84375 z M 10 15 C 4.486 15 0 19.486 0 25 C 0 30.514 4.486 35 10 35 C 12.051 35 13.94325 34.3765 15.53125 33.3125 C 18.21425 31.5205 20 28.471 20 25 C 20 21.411 18.09 18.264 15.25 16.5 C 13.72 15.546 11.931 15 10 15 z M 21.96875 25.65625 C 21.78475 28.99625 20.249 31.9975 17.875 34.0625 L 28.0625 39.15625 C 28.2995 35.82325 29.86925 32.87375 32.28125 30.84375 L 21.96875 25.65625 z M 40 30 C 37.937 30 36.0305 30.64475 34.4375 31.71875 C 31.7705 33.51475 30 36.543 30 40 C 30 40.015 30 40.01725 30 40.03125 C 29.956 40.03425 29.919 40.0595 29.875 40.0625 L 30 40.125 C 30.066 45.583 34.527 50 40 50 C 45.514 50 50 45.514 50 40 C 50 34.486 45.514 30 40 30 z"/></svg>
             </a>
-            <a title="Clear Playlist" onclick="VUEPLAYERCORE.clearQueue();">
+            <a title="Clear Playlist" data-i18n="tooltip.clearPlaylist" data-i18n-attr="title" onclick="VUEPLAYERCORE.clearQueue();">
               <svg xmlns="http://www.w3.org/2000/svg" width="25" height="25" viewBox="11 11 26 26" style="enable-background:new 0 0 48 48"><g fill="#C33"><path d="M32.662 15.338c-4.784-4.784-12.54-4.784-17.324 0s-4.784 12.54 0 17.324 12.54 4.784 17.324 0c4.783-4.784 4.784-12.54 0-17.324zm-5.127 14.318a.5.5 0 0 1-.707 0L24 26.828l-2.828 2.828a.5.5 0 0 1-.707 0l-2.121-2.121a.5.5 0 0 1 0-.707L21.172 24l-2.828-2.828a.5.5 0 0 1 0-.707l2.121-2.121a.5.5 0 0 1 .707 0L24 21.172l2.828-2.828a.5.5 0 0 1 .707 0l2.121 2.121a.5.5 0 0 1 0 .707L26.828 24l2.828 2.828a.5.5 0 0 1 0 .707l-2.121 2.121z"/></g></svg>
             </a>
           </div>
@@ -676,18 +747,18 @@
               </div>
               <div class="card-meta">
                 <p>
-                  <b>Title:</b>
+                  <b data-i18n="metadata.title">Title:</b>
                   {{ (meta.title) ? meta.title : (meta.filepath ? meta.filepath.split('/').pop() : '')  }}
                 </p>
                 <p>
-                  <b>Artist:</b>
+                  <b data-i18n="metadata.artist">Artist:</b>
                   <span class="pointer" v-on:click="goToArtist">{{ (meta.artist) ? meta.artist : '' }}</span>
                 </p>
                 <p>
-                  <b>Album:</b>
+                  <b data-i18n="metadata.album">Album:</b>
                   <span class="pointer" v-on:click="goToAlbum">{{ (meta.album) ? meta.album : '' }}</span>
                 </p>
-                <p><b>Year:</b> {{ (meta.year) ? meta.year : '' }}</p>
+                <p><b data-i18n="metadata.year">Year:</b> {{ (meta.year) ? meta.year : '' }}</p>
               </div>
             </div>
           </div>
@@ -710,14 +781,6 @@
     </div>
   </div>
 
-  <div id="nav-bar">
-    <div>
-      <a target="_blank" href="https://github.com/IrosTheBeggar/mStream">Github</a>
-    </div>
-    <div id="scan-status"></div>
-    <div id="scan-status-files"></div>
-  </div>
-  
   <div class="fixed-action-btn responsive-hide">
     <a class="btn-floating btn-large blue-grey darken-1" onclick="toggleSideMenu()">
       <svg id="sidenav-button" class="ham hamRotate180 ham5" viewBox="0 0 100 100" >

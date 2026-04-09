@@ -1,0 +1,247 @@
+/* ── Language picker dropdowns ────────────────────────────────────────────
+   Custom button + listbox controls because native <select>/<option> can't
+   render inline SVG flags. Two visual variants share the same DOM shape:
+
+     .nav-lang-*      — top nav-bar instance, opens DOWNWARD, fixed-width
+     .sidenav-lang-*  — sidenav-bottom instance, opens UPWARD, full-width
+
+   Mounted by webapp/assets/js/lang-dropdown.js. Flags come from
+   webapp/assets/js/flags.js. The dropdowns are deliberately self-contained
+   so they can be lifted out and dropped into another project alongside the
+   matching JS module. */
+
+/* ── Top nav-bar variant (opens downward) ────────────────────────────── */
+
+.nav-lang-wrap {
+  position: relative;
+}
+
+.nav-lang-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background-color: #262a33;
+  color: #F5F7FA;
+  border: 1px solid #444c56;
+  border-radius: 4px;
+  font-family: 'Jura', sans-serif;
+  font-size: 14px;
+  font-weight: bold;
+  cursor: pointer;
+  min-width: 130px;
+  text-align: left;
+}
+
+.nav-lang-toggle:hover,
+.nav-lang-toggle[aria-expanded="true"] {
+  border-color: #6684b2;
+}
+
+.nav-lang-current {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.nav-lang-flag {
+  display: inline-block;
+  flex-shrink: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 1px;
+  overflow: hidden;
+  line-height: 0;
+}
+
+.nav-lang-flag svg {
+  display: block;
+  width: 20px;
+  height: 13px;
+}
+
+.nav-lang-caret {
+  font-size: 10px;
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
+.nav-lang-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 180px;
+  max-height: 320px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  background-color: #262a33;
+  border: 1px solid #6684b2;
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  z-index: 2000;
+}
+
+.nav-lang-menu li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  color: #dddee4;
+  cursor: pointer;
+  font-family: 'Jura', sans-serif;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.nav-lang-menu li:hover {
+  background-color: #31353d;
+  color: #fff;
+}
+
+.nav-lang-menu li[aria-selected="true"] {
+  background-color: #3a4054;
+  color: #fff;
+}
+
+.nav-lang-menu .nav-lang-flag svg {
+  width: 22px;
+  height: 15px;
+}
+
+/* ── Sidenav-bottom variant (opens upward) ───────────────────────────── */
+
+/* Hidden by default. The .top-bar-hidden body class (managed by spa.css) is
+   what reveals the sidenav variant; the rule lives here so dropdown markup
+   and visibility move together. */
+.sidenav-lang-header,
+.sidenav-lang-wrap {
+  display: none;
+}
+
+body.top-bar-hidden .sidenav-lang-header {
+  display: flex;
+}
+
+body.top-bar-hidden .sidenav-lang-wrap {
+  display: block;
+}
+
+.sidenav-lang-header {
+  width: 100%;
+  min-height: 32px;
+  padding-left: 12px;
+  font-size: 13px;
+  color: #aaa;
+  font-weight: bold;
+  font-family: 'Jura', sans-serif;
+  align-items: center;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.sidenav-lang-wrap {
+  position: relative;
+  padding: 4px 12px 16px 12px;
+}
+
+.sidenav-lang-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background-color: #1a1e25;
+  color: #F5F7FA;
+  border: 1px solid #444c56;
+  border-radius: 4px;
+  font-family: 'Jura', sans-serif;
+  font-size: 14px;
+  font-weight: bold;
+  cursor: pointer;
+  text-align: left;
+}
+
+.sidenav-lang-toggle:hover,
+.sidenav-lang-toggle[aria-expanded="true"] {
+  border-color: #6684b2;
+}
+
+.sidenav-lang-current {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sidenav-lang-flag {
+  display: inline-block;
+  flex-shrink: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 1px;
+  overflow: hidden;
+  line-height: 0;
+}
+
+.sidenav-lang-flag svg {
+  display: block;
+  width: 20px;
+  height: 13px;
+}
+
+.sidenav-lang-caret {
+  font-size: 10px;
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
+.sidenav-lang-menu {
+  position: absolute;
+  bottom: calc(100% - 4px);
+  left: 12px;
+  right: 12px;
+  max-height: 280px;
+  overflow-y: auto;
+  margin: 0 0 4px 0;
+  padding: 4px 0;
+  list-style: none;
+  background-color: #262a33;
+  border: 1px solid #6684b2;
+  border-radius: 4px;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.5);
+  z-index: 3000;
+}
+
+.sidenav-lang-menu li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  color: #dddee4;
+  cursor: pointer;
+  font-family: 'Jura', sans-serif;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.sidenav-lang-menu li:hover {
+  background-color: #31353d;
+  color: #fff;
+}
+
+.sidenav-lang-menu li[aria-selected="true"] {
+  background-color: #3a4054;
+  color: #fff;
+}
+
+.sidenav-lang-menu .sidenav-lang-flag svg {
+  width: 22px;
+  height: 15px;
+}

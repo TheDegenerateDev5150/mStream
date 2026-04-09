@@ -9,7 +9,8 @@ const VUEPLAYERCORE = (() => {
     'moveMeta': false,
     'audioBookCtrls': false,
     'flipPlayer': false,
-    'compressArt': false
+    'compressArt': false,
+    'hideTopBar': false
   };
 
   try {
@@ -18,10 +19,20 @@ const VUEPLAYERCORE = (() => {
     mstreamModule.altLayout.audioBookCtrls = typeof altLayout.audioBookCtrls === 'boolean' ? altLayout.audioBookCtrls : false;
     mstreamModule.altLayout.moveMeta = typeof altLayout.moveMeta === 'boolean' ? altLayout.moveMeta : false;
     mstreamModule.altLayout.compressArt = typeof altLayout.compressArt === 'boolean' ? altLayout.compressArt : false;
+    mstreamModule.altLayout.hideTopBar = typeof altLayout.hideTopBar === 'boolean' ? altLayout.hideTopBar : false;
 
     if (altLayout.flipPlayer === true) {
       document.getElementById('content').classList.add('col-rev');
       document.getElementById('flip-me').classList.add('col-rev');
+    }
+
+    // When the top bar is disabled, mark the body so CSS can:
+    //   - hide #nav-bar
+    //   - show the sidenav logo (its original spot)
+    //   - show the sidenav bottom language picker
+    //   - recompute #content / #sidenav heights
+    if (altLayout.hideTopBar === true) {
+      document.body.classList.add('top-bar-hidden');
     }
   } catch (e) {}
 
@@ -159,7 +170,7 @@ const VUEPLAYERCORE = (() => {
   // Template for playlist items
   Vue.component('playlist-item', {
     template: `
-      <li class="noselect np-queue-item" v-bind:class="{ 'np-queue-active': (this.index === positionCache.val), playError: (this.songError && this.songError === true) }">
+      <li v-on:click="goToSong($event)" class="noselect np-queue-item" v-bind:class="{ 'np-queue-active': (this.index === positionCache.val), playError: (this.songError && this.songError === true) }">
         <span onclick="event.stopPropagation()" class="drag-handle">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="16" height="16"><path fill="#666" d="M4 7v2h24V7Zm0 8v2h24v-2Zm0 8v2h24v-2Z"/></svg>
         </span>
@@ -167,7 +178,7 @@ const VUEPLAYERCORE = (() => {
         <div v-else class="np-queue-art-placeholder">
           <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 24 24" fill="#555"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
         </div>
-        <div v-on:click="goToSong($event)" class="np-queue-info">
+        <div class="np-queue-info">
           <div class="np-queue-title">{{ songTitle }}</div>
           <div class="np-queue-artist" v-if="songArtist">{{ songArtist }}</div>
         </div>
