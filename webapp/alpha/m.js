@@ -503,7 +503,6 @@ async function init() {
       MSTREAMPLAYER.transcodeOptions.serverEnabled = true;
       MSTREAMPLAYER.transcodeOptions.defaultCodec = response.transcode.defaultCodec;
       MSTREAMPLAYER.transcodeOptions.defaultBitrate = response.transcode.defaultBitrate;
-      MSTREAMPLAYER.transcodeOptions.defaultAlgo = response.transcode.defaultAlgorithm;      
     }
   }catch (err) {
     if (isElectron()) {
@@ -534,7 +533,8 @@ async function init() {
     }
     MSTREAMPLAYER.transcodeOptions.selectedCodec = localStorage.getItem('trans-codec-select');
     MSTREAMPLAYER.transcodeOptions.selectedBitrate = localStorage.getItem('trans-bitrate-select');
-    MSTREAMPLAYER.transcodeOptions.selectedAlgo = localStorage.getItem('trans-algo-select');
+    // Drop any stale algorithm selection from previous versions.
+    localStorage.removeItem('trans-algo-select');
   } catch (e) {}
 
   try{
@@ -1838,7 +1838,7 @@ function setupTranscodePanel(){
         </label>
       </div>
       <p>
-        Default Codec:<br> <b>${MSTREAMPLAYER.transcodeOptions.defaultCodec} ${MSTREAMPLAYER.transcodeOptions.defaultBitrate} ${MSTREAMPLAYER.transcodeOptions.defaultAlgo}</b>
+        Default Codec:<br> <b>${MSTREAMPLAYER.transcodeOptions.defaultCodec} ${MSTREAMPLAYER.transcodeOptions.defaultBitrate}</b>
       </p>
       <form>
         <label for="trans-codec-select">Codec</label>
@@ -1857,19 +1857,11 @@ function setupTranscodePanel(){
           <option value="128k">128k</option>
           <option value="192k">192k</option>
         </select>
-        <br>
-        <label for="trans-algo-select">Algorithm</label>
-        <select onchange="changeTranscodeAlgo();" class="browser-default trans-input" name="pets" id="trans-algo-select">
-          <option value="">Default</option>
-          <option value="buffer">Buffer</option>
-          <option value="stream">Stream</option>
-        </select>
       </form>
     </div>`;
 
   document.getElementById('trans-codec-select').value = MSTREAMPLAYER.transcodeOptions.selectedCodec ? MSTREAMPLAYER.transcodeOptions.selectedCodec : "";
   document.getElementById('trans-bitrate-select').value = MSTREAMPLAYER.transcodeOptions.selectedBitrate ? MSTREAMPLAYER.transcodeOptions.selectedBitrate : "";
-  document.getElementById('trans-algo-select').value = MSTREAMPLAYER.transcodeOptions.selectedAlgo ? MSTREAMPLAYER.transcodeOptions.selectedAlgo : "";
 }
 
 function changeTranscodeBitrate() {
@@ -1882,12 +1874,6 @@ function changeTranscodeCodec() {
   const value = document.getElementById("trans-codec-select").value;
   MSTREAMPLAYER.transcodeOptions.selectedCodec = value ? value : null;
   value ? localStorage.setItem('trans-codec-select', value) : localStorage.removeItem('trans-codec-select');
-}
-
-function changeTranscodeAlgo() {
-  const value = document.getElementById("trans-algo-select").value;
-  MSTREAMPLAYER.transcodeOptions.selectedAlgo = value ? value : null;
-  value ? localStorage.setItem('trans-algo-select', value) : localStorage.removeItem('trans-algo-select');
 }
 
 function toggleTranscoding(el, manual){

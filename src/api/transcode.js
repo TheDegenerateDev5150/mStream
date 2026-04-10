@@ -14,7 +14,6 @@ const codecMap = {
 
 const bitrateSet = new Set(['64k', '96k', '128k', '192k']);
 
-export function getTransAlgos() { return ['buffer', 'stream']; } // kept for config schema compat
 export function getTransBitrates() { return Array.from(bitrateSet); }
 export function getTransCodecs() { return Object.keys(codecMap); }
 
@@ -43,10 +42,6 @@ export function reset() {
   lockInit = false;
   ffmpegPath = null;
   stopAutoUpdate();
-}
-
-export function isEnabled() {
-  return lockInit === true && config.program.transcode.enabled === true;
 }
 
 export function isDownloaded() {
@@ -110,16 +105,13 @@ function spawnTranscode(inputPath, codec, bitrate) {
 // ── Route ───────────────────────────────────────────────────────────────────
 
 export function setup(mstream) {
-  if (config.program.transcode.enabled === true) {
-    init().catch(err => {
-      winston.error('Failed to initialize FFmpeg', { stack: err });
-    });
-  }
+  // Always try to bootstrap ffmpeg — album-art embedding, waveform generation,
+  // and yt-dlp ingestion all use it independently of the old transcode toggle.
+  init().catch(err => {
+    winston.error('Failed to initialize FFmpeg', { stack: err });
+  });
 
   mstream.get("/transcode/{*filepath}", (req, res) => {
-    if (!config.program.transcode || config.program.transcode.enabled !== true) {
-      return res.status(500).json({ error: 'transcoding disabled' });
-    }
     if (lockInit !== true) {
       return res.status(500).json({ error: 'transcoding disabled' });
     }

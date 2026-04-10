@@ -61,7 +61,9 @@ function downsample(pcmBuffer, numBars) {
 function generateWaveform(audioPath) {
   return new Promise((resolve, reject) => {
     const bin = ffmpegBin();
-    if (!fs.existsSync(bin)) {
+    // Only verify existence for absolute paths. When ffmpegBin() returns a
+    // bare command name (system-PATH fallback), leave the check to spawn().
+    if (path.isAbsolute(bin) && !fs.existsSync(bin)) {
       return reject(new Error('ffmpeg not available'));
     }
 

@@ -70,11 +70,7 @@ export function setup(mstream) {
     if (config.program.noUpload === true) { throw new WebError('Uploading Disabled'); }
     if (req.user.allow_upload === false || req.user.allow_upload === 0) { throw new WebError('Uploading Disabled', 403); }
 
-    if (!config.program.transcode || config.program.transcode.enabled !== true) {
-      return res.status(500).json({ error: 'transcoding disabled' });
-    }
-
-    if(!transcode.isDownloaded()) {
+    if (!transcode.isDownloaded()) {
       return res.status(500).json({ error: 'FFmpeg not downloaded yet' });
     }
 
@@ -480,9 +476,6 @@ export function setup(mstream) {
     }
     if (req.user.allow_upload === false || req.user.allow_upload === 0) {
       return res.status(403).json({ error: 'Uploading Disabled' });
-    }
-    if (!config.program.transcode || config.program.transcode.enabled !== true) {
-      return res.status(500).json({ error: 'Transcoding disabled' });
     }
     if (!transcode.isDownloaded()) {
       return res.status(500).json({ error: 'FFmpeg not downloaded yet' });

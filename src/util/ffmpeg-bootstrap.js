@@ -31,6 +31,13 @@ const CHECKSUMS_URL = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/l
 let _initPromise = null;
 let _updateTimer = null;
 
+// Set by ensureFfmpeg() once the resolver picks a working binary.
+// Source is 'bundled' (we manage it — whether in the default dir or a custom
+// ffmpegDirectory) or 'system' (resolved via PATH as a literal command name).
+let _resolvedFfmpegPath = null;
+let _resolvedFfprobePath = null;
+let _resolvedSource = null;
+
 // ── Path helpers ────────────────────────────────────────────────────────────
 
 export function getFfmpegDir() {
@@ -38,11 +45,48 @@ export function getFfmpegDir() {
 }
 
 export function ffmpegBin() {
+  if (_resolvedFfmpegPath) { return _resolvedFfmpegPath; }
   return path.join(getFfmpegDir(), `ffmpeg${binaryExt}`);
 }
 
 export function ffprobeBin() {
+  if (_resolvedFfprobePath) { return _resolvedFfprobePath; }
   return path.join(getFfmpegDir(), `ffprobe${binaryExt}`);
+}
+
+// ── Runtime detection helpers ───────────────────────────────────────────────
+
+// Detect musl libc (Alpine, Void musl, etc.) via the canonical Node-builtin
+// check: on glibc systems process.report.getReport().header.glibcVersionRuntime
+// is a version string; on musl it's undefined. Stable since Node v11.8.
+function isMuslLinux() {
+  if (process.platform !== 'linux') { return false; }
+  try {
+    const report = process.report.getReport();
+    return !report.header.glibcVersionRuntime;
+  } catch {
+    return false;
+  }
+}
+
+// Probe the system PATH for ffmpeg + ffprobe. Uses the existing
+// getFfmpegVersion helper which does spawn(name, ['-version']) — bare command
+// names get resolved via PATH by Node's child_process. Returns the bare names
+// so later spawns will keep resolving via PATH (system PATH is stable enough
+// that caching a bare name is fine).
+async function findSystemBinaries() {
+  const [ff, fp] = await Promise.all([
+    getFfmpegVersion('ffmpeg'),
+    getFfmpegVersion('ffprobe'),
+  ]);
+  if (ff.major > 0 && fp.major > 0) {
+    return { ffmpeg: 'ffmpeg', ffprobe: 'ffprobe', ffmpegVersion: ff.versionLine };
+  }
+  return null;
+}
+
+async function pathExists(p) {
+  try { await fsp.access(p); return true; } catch { return false; }
 }
 
 // ── Platform → asset mapping ────────────────────────────────────────────────
@@ -291,40 +335,92 @@ async function downloadAndInstall() {
 // ── Public API ──────────────────────────────────────────────────────────────
 
 /**
- * Ensure ffmpeg + ffprobe are present and recent.
- * Downloads on first call if missing or outdated.
- * Safe to call multiple times — deduplicates via cached promise.
+ * Ensure ffmpeg + ffprobe are available. Walks a resolution chain:
+ *   1. Working binaries already on disk in getFfmpegDir() (default or user-configured)
+ *   2. musl Linux? → skip download, go straight to system PATH fallback
+ *   3. Download + verify the binary actually executes (catches glibc/musl mismatches
+ *      the upfront musl check might have missed)
+ *   4. System PATH fallback (spawn 'ffmpeg' / 'ffprobe' directly)
+ *   5. Nothing works → log and leave _resolvedPaths null; consumers' existence
+ *      checks gracefully degrade those features.
+ *
+ * Safe to call multiple times — dedupes via cached promise. On success sets
+ * _resolvedFfmpegPath / _resolvedFfprobePath / _resolvedSource.
  */
 export async function ensureFfmpeg() {
+  if (_resolvedFfmpegPath) {
+    return { ffmpeg: _resolvedFfmpegPath, ffprobe: _resolvedFfprobePath, source: _resolvedSource };
+  }
   if (_initPromise) return _initPromise;
 
   _initPromise = (async () => {
-    const bin = ffmpegBin();
-    const probe = ffprobeBin();
+    const dir = getFfmpegDir();
+    const bundledFfmpeg = path.join(dir, `ffmpeg${binaryExt}`);
+    const bundledFfprobe = path.join(dir, `ffprobe${binaryExt}`);
 
-    // Check if both binaries exist
-    let present = false;
-    try {
-      await fsp.access(bin);
-      await fsp.access(probe);
-      present = true;
-    } catch {}
-
-    if (present) {
-      const { major, versionLine } = await getFfmpegVersion(bin);
+    // ── Step 1: Working binaries already on disk? ────────────────────────
+    if (await pathExists(bundledFfmpeg) && await pathExists(bundledFfprobe)) {
+      const { major, versionLine } = await getFfmpegVersion(bundledFfmpeg);
       if (major >= MIN_FFMPEG_MAJOR) {
+        _resolvedFfmpegPath = bundledFfmpeg;
+        _resolvedFfprobePath = bundledFfprobe;
+        _resolvedSource = 'bundled';
         winston.info(`[ffmpeg-bootstrap] ${versionLine}`);
-        return;
+        return { ffmpeg: _resolvedFfmpegPath, ffprobe: _resolvedFfprobePath, source: _resolvedSource };
       }
-      winston.warn(`[ffmpeg-bootstrap] ffmpeg v${major || '?'} is outdated (need v${MIN_FFMPEG_MAJOR}+), updating...`);
-      await fsp.unlink(bin).catch(() => {});
-      await fsp.unlink(probe).catch(() => {});
+      winston.warn(`[ffmpeg-bootstrap] ffmpeg v${major || '?'} in ${dir} is unusable, refreshing`);
+      await fsp.unlink(bundledFfmpeg).catch(() => {});
+      await fsp.unlink(bundledFfprobe).catch(() => {});
     }
 
-    await downloadAndInstall();
+    // ── Step 2: musl libc? Skip download, go straight to system fallback ─
+    if (isMuslLinux()) {
+      winston.info('[ffmpeg-bootstrap] musl libc detected, skipping download');
+      const sys = await findSystemBinaries();
+      if (sys) {
+        _resolvedFfmpegPath = sys.ffmpeg;
+        _resolvedFfprobePath = sys.ffprobe;
+        _resolvedSource = 'system';
+        winston.info(`[ffmpeg-bootstrap] Using system ffmpeg: ${sys.ffmpegVersion}`);
+        return { ffmpeg: _resolvedFfmpegPath, ffprobe: _resolvedFfprobePath, source: _resolvedSource };
+      }
+      winston.error('[ffmpeg-bootstrap] No system ffmpeg found. Install with: apk add ffmpeg');
+      return null;
+    }
+
+    // ── Step 3: Download to getFfmpegDir(), verify it executes ───────────
+    const downloadOk = await downloadAndInstall();
+    if (downloadOk) {
+      const { major, versionLine } = await getFfmpegVersion(bundledFfmpeg);
+      if (major >= MIN_FFMPEG_MAJOR) {
+        _resolvedFfmpegPath = bundledFfmpeg;
+        _resolvedFfprobePath = bundledFfprobe;
+        _resolvedSource = 'bundled';
+        winston.info(`[ffmpeg-bootstrap] ${versionLine}`);
+        return { ffmpeg: _resolvedFfmpegPath, ffprobe: _resolvedFfprobePath, source: _resolvedSource };
+      }
+      winston.warn(`[ffmpeg-bootstrap] Downloaded ffmpeg won't execute (likely libc mismatch), trying system fallback`);
+      await fsp.unlink(bundledFfmpeg).catch(() => {});
+      await fsp.unlink(bundledFfprobe).catch(() => {});
+    }
+
+    // ── Step 4: System PATH fallback ─────────────────────────────────────
+    const sys = await findSystemBinaries();
+    if (sys) {
+      _resolvedFfmpegPath = sys.ffmpeg;
+      _resolvedFfprobePath = sys.ffprobe;
+      _resolvedSource = 'system';
+      winston.info(`[ffmpeg-bootstrap] Using system ffmpeg: ${sys.ffmpegVersion}`);
+      return { ffmpeg: _resolvedFfmpegPath, ffprobe: _resolvedFfprobePath, source: _resolvedSource };
+    }
+
+    // ── Step 5: Nothing works ────────────────────────────────────────────
+    winston.error('[ffmpeg-bootstrap] No working ffmpeg found (download failed and no system binary on PATH)');
+    return null;
   })().catch(e => {
     winston.error(`[ffmpeg-bootstrap] ${e.message}`);
     _initPromise = null; // allow retry
+    return null;
   });
 
   return _initPromise;
@@ -333,8 +429,12 @@ export async function ensureFfmpeg() {
 /**
  * Check for updates and re-download if a newer version is available.
  * Compares the checksum of the current archive against the remote.
+ * No-ops when running off system binaries — those are managed by the OS
+ * package manager, not us.
  */
 export async function checkForUpdate() {
+  if (_resolvedSource === 'system') return;
+
   const info = releaseInfo();
   if (!info) return;
 

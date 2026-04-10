@@ -1951,12 +1951,6 @@ const transcodeView = Vue.component('transcode-view', {
               <table>
                 <tbody>
                   <tr>
-                    <td><b>Transcoding:</b> {{ params.enabled === true ? t('admin.settings.enabled') : t('admin.settings.disabled') }}</td>
-                    <td>
-                      [<a v-on:click="toggleEnabled()">{{ t('admin.settings.edit') }}</a>]
-                    </td>
-                  </tr>
-                  <tr>
                     <td><b>FFmpeg Directory:</b> {{params.ffmpegDirectory}}</td>
                     <td>
                       [<a v-on:click="changeFolder()">{{ t('admin.settings.edit') }}</a>]
@@ -1988,53 +1982,6 @@ const transcodeView = Vue.component('transcode-view', {
       </div>
     </div>`,
   methods: {
-    toggleEnabled: function() {
-      iziToast.question({
-        timeout: 20000,
-        close: false,
-        overlayClose: true,
-        overlay: true,
-        displayMode: 'once',
-        id: 'question',
-        zindex: 99999,
-        layout: 2,
-        maxWidth: 600,
-        title: `<b>${this.params.enabled === true ? t('admin.transcode.disableTitle') : t('admin.transcode.enableTitle')}</b>`,
-        message: t('admin.transcode.downloadFFmpeg'),
-        position: 'center',
-        buttons: [
-          [`<button><b>${this.params.enabled === true ? t('admin.settings.disableButton') : t('admin.settings.enableButton')}</b></button>`, async (instance, toast) => {
-            instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
-            try {
-              await API.axios({
-                method: 'POST',
-                url: `${API.url()}/api/v1/admin/transcode/enable`,
-                data: { enable: !this.params.enabled }
-              });
-              Vue.set(ADMINDATA.transcodeParams, 'enabled', !this.params.enabled);
-
-              // download ffmpeg
-              if (this.params.enabled === true) { this.downloadFFMpeg(); }
-
-              iziToast.success({
-                title: t('admin.settings.updated'),
-                position: 'topCenter',
-                timeout: 3500
-              });
-            } catch (err) {
-              iziToast.error({
-                title: t('admin.settings.failed'),
-                position: 'topCenter',
-                timeout: 3500
-              });
-            }
-          }, true],
-          [`<button>${t('admin.folders.goBack')}</button>`, (instance, toast) => {
-            instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
-          }],
-        ]
-      });
-    },
     changeCodec: function() {
       modVM.currentViewModal = 'edit-transcode-codec-modal';
       M.Modal.getInstance(document.getElementById('admin-modal')).open();

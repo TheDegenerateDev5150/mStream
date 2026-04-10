@@ -14,7 +14,7 @@ import * as db from '../db/manager.js';
 import { joiValidate } from '../util/validation.js';
 import { bootRustPlayer, killRustPlayer } from './server-playback.js';
 
-import { getTransAlgos, getTransCodecs, getTransBitrates } from '../api/transcode.js';
+import { getTransCodecs, getTransBitrates } from '../api/transcode.js';
 
 export function setup(mstream) {
   mstream.all('/api/v1/admin/{*path}', (req, res, next) => {
@@ -468,16 +468,6 @@ export function setup(mstream) {
     const memClone = JSON.parse(JSON.stringify(config.program.transcode));
     memClone.downloaded = transcode.isDownloaded();
     res.json(memClone);
-  });
-
-  mstream.post("/api/v1/admin/transcode/enable", async (req, res) => {
-    const schema = Joi.object({
-      enable: Joi.boolean().required()
-    });
-    joiValidate(schema, req.body);
-
-    await admin.enableTranscode(req.body.enable);
-    res.json({});
   });
 
   mstream.post("/api/v1/admin/transcode/default-codec", async (req, res) => {
