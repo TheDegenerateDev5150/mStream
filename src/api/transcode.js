@@ -4,7 +4,15 @@ import winston from 'winston';
 import * as vpath from '../util/vpath.js';
 import * as config from '../state/config.js';
 import * as db from '../db/manager.js';
-import { ensureFfmpeg, ffmpegBin, startAutoUpdate, stopAutoUpdate } from '../util/ffmpeg-bootstrap.js';
+import path from 'node:path';
+import {
+  ensureFfmpeg,
+  ffmpegBin,
+  startAutoUpdate,
+  stopAutoUpdate,
+  getResolvedSource,
+  reset as resetBootstrap
+} from '../util/ffmpeg-bootstrap.js';
 
 const codecMap = {
   'mp3':  { codec: 'libmp3lame', format: 'mp3',  contentType: 'audio/mpeg' },
@@ -24,13 +32,27 @@ async function init() {
   winston.info('Checking ffmpeg...');
   await ensureFfmpeg();
 
+  // If the resolver found nothing (no bundled binary, no download, no system
+  // PATH fallback), leave lockInit false and return. Downstream consumers
+  // (transcode route, album-art embedding, waveforms, ytdl) will degrade
+  // gracefully. The resolver already logged a detailed error.
+  if (!getResolvedSource()) {
+    winston.warn('FFmpeg unavailable — transcoding, album-art embedding, waveforms, and yt-dlp will be disabled');
+    return;
+  }
+
   ffmpegPath = ffmpegBin();
 
-  const { access } = await import('node:fs/promises');
-  try {
-    await access(ffmpegPath);
-  } catch {
-    throw new Error(`FFmpeg binary not found at ${ffmpegPath}`);
+  // Only verify file existence when ffmpegBin() returned an absolute path
+  // (i.e. a binary we manage on disk). Bare command names like 'ffmpeg' are
+  // resolved by spawn() via PATH at call time, so we skip the access check.
+  if (path.isAbsolute(ffmpegPath)) {
+    const { access } = await import('node:fs/promises');
+    try {
+      await access(ffmpegPath);
+    } catch {
+      throw new Error(`FFmpeg binary not found at ${ffmpegPath}`);
+    }
   }
 
   lockInit = true;

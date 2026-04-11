@@ -28,6 +28,7 @@ import * as federationApi from './api/federation.js';
 import * as ytdlApi from './api/ytdl.js';
 import * as serverPlaybackApi from './api/server-playback.js';
 import * as albumArtApi from './api/album-art.js';
+import * as waveformApi from './api/waveform.js';
 // Velvet UI modules — dynamically imported only when ui='velvet' is active
 import WebError from './util/web-error.js';
 import { sanitizeFilename } from './util/validation.js';
@@ -196,18 +197,18 @@ export async function serveIt(configFile) {
   federationApi.setup(mstream);
   ytdlApi.setup(mstream);
   albumArtApi.setup(mstream);
+  waveformApi.setup(mstream);
   serverPlaybackApi.setup(mstream);
 
   // VELVET ONLY: additional API modules loaded only when ui='velvet'
   // These provide features specific to the Velvet UI (ListenBrainz, smart playlists,
-  // waveform, stats tracking, user settings, Discogs, cue points).
+  // stats tracking, user settings, Discogs, cue points).
   // TODO: evaluate which of these should be promoted to core /v1 APIs
   if (config.program.ui === 'velvet') {
-    const [listenbrainzApi, smartPlaylistsApi, waveformApi, wrappedApi,
+    const [listenbrainzApi, smartPlaylistsApi, wrappedApi,
            userSettingsApi, discogsApi, cuepointsApi, velvetStubs] = await Promise.all([
       import('./api/listenbrainz.js'),
       import('./api/smart-playlists.js'),
-      import('./api/waveform.js'),
       import('./api/wrapped.js'),
       import('./api/user-settings.js'),
       import('./api/discogs.js'),
@@ -216,7 +217,6 @@ export async function serveIt(configFile) {
     ]);
     listenbrainzApi.setup(mstream);
     smartPlaylistsApi.setup(mstream);
-    waveformApi.setup(mstream);
     wrappedApi.setup(mstream);
     userSettingsApi.setup(mstream);
     discogsApi.setup(mstream);

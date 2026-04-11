@@ -89,6 +89,7 @@ async function pathExists(p) {
   try { await fsp.access(p); return true; } catch { return false; }
 }
 
+
 // ── Platform → asset mapping ────────────────────────────────────────────────
 
 // BtbN assets (Linux, Windows) — used for download URL and checksum verification
@@ -281,15 +282,20 @@ async function downloadAndInstall() {
   const dir = getFfmpegDir();
   await fsp.mkdir(dir, { recursive: true });
 
+  // Use explicit bundled paths — NOT ffmpegBin()/ffprobeBin(), which may
+  // return a cached resolved path from a previous resolution.
+  const destFfmpeg = path.join(dir, `ffmpeg${binaryExt}`);
+  const destFfprobe = path.join(dir, `ffprobe${binaryExt}`);
+
   winston.info(`[ffmpeg-bootstrap] Downloading ffmpeg for ${process.platform}/${process.arch}...`);
 
   try {
     if (info.source === 'martin-riedl') {
       // macOS: direct binary downloads (no archive)
-      await downloadToFile(info.url, ffmpegBin());
-      await downloadToFile(info.ffprobeUrl, ffprobeBin());
-      await fsp.chmod(ffmpegBin(), 0o755).catch(() => {});
-      await fsp.chmod(ffprobeBin(), 0o755).catch(() => {});
+      await downloadToFile(info.url, destFfmpeg);
+      await downloadToFile(info.ffprobeUrl, destFfprobe);
+      await fsp.chmod(destFfmpeg, 0o755).catch(() => {});
+      await fsp.chmod(destFfprobe, 0o755).catch(() => {});
     } else {
       // BtbN: archive download with checksum verification
       const archivePath = path.join(dir, info.asset);
@@ -314,17 +320,17 @@ async function downloadAndInstall() {
         await extractZip(archivePath, dir, info.asset);
       }
 
-      await fsp.chmod(ffmpegBin(), 0o755).catch(() => {});
-      await fsp.chmod(ffprobeBin(), 0o755).catch(() => {});
+      await fsp.chmod(destFfmpeg, 0o755).catch(() => {});
+      await fsp.chmod(destFfprobe, 0o755).catch(() => {});
       await fsp.unlink(archivePath).catch(() => {});
     }
 
     // Verify binaries exist
-    await fsp.access(ffmpegBin());
-    await fsp.access(ffprobeBin());
+    await fsp.access(destFfmpeg);
+    await fsp.access(destFfprobe);
 
-    const { versionLine } = await getFfmpegVersion(ffmpegBin());
-    winston.info(`[ffmpeg-bootstrap] ffmpeg ready: ${versionLine || ffmpegBin()}`);
+    const { versionLine } = await getFfmpegVersion(destFfmpeg);
+    winston.info(`[ffmpeg-bootstrap] ffmpeg ready: ${versionLine || destFfmpeg}`);
     return true;
   } catch (e) {
     winston.error(`[ffmpeg-bootstrap] Download failed: ${e.message}`);
@@ -427,6 +433,28 @@ export async function ensureFfmpeg() {
 }
 
 /**
+ * Returns the source of the currently-resolved ffmpeg binaries.
+ * 'bundled' = downloaded/managed by us (in getFfmpegDir())
+ * 'system'  = system ffmpeg on PATH
+ * null      = not resolved yet (or nothing works)
+ */
+export function getResolvedSource() {
+  return _resolvedSource;
+}
+
+/**
+ * Reset all resolved state — used by transcode.reset() on soft reboot so that
+ * a changed ffmpegDirectory is picked up by the next ensureFfmpeg() call.
+ */
+export function reset() {
+  _resolvedFfmpegPath = null;
+  _resolvedFfprobePath = null;
+  _resolvedSource = null;
+  _initPromise = null;
+  stopAutoUpdate();
+}
+
+/**
  * Check for updates and re-download if a newer version is available.
  * Compares the checksum of the current archive against the remote.
  * No-ops when running off system binaries — those are managed by the OS
@@ -438,7 +466,7 @@ export async function checkForUpdate() {
   const info = releaseInfo();
   if (!info) return;
 
-  const bin = ffmpegBin();
+  const bin = path.join(getFfmpegDir(), `ffmpeg${binaryExt}`);
   try { await fsp.access(bin); } catch { return; } // no binary to update
 
   if (info.source === 'btbn') {
@@ -452,9 +480,10 @@ export async function checkForUpdate() {
 
     if (stored === expected) return; // already up to date
 
+    const probe = path.join(getFfmpegDir(), `ffprobe${binaryExt}`);
     winston.info(`[ffmpeg-bootstrap] New ffmpeg build available, updating...`);
     await fsp.unlink(bin).catch(() => {});
-    await fsp.unlink(ffprobeBin()).catch(() => {});
+    await fsp.unlink(probe).catch(() => {});
     _initPromise = null;
 
     const success = await downloadAndInstall();
@@ -465,9 +494,10 @@ export async function checkForUpdate() {
     // macOS (martin-riedl): no checksum file — check version instead
     const { major } = await getFfmpegVersion(bin);
     if (major < MIN_FFMPEG_MAJOR) {
+      const probe = path.join(getFfmpegDir(), `ffprobe${binaryExt}`);
       winston.info(`[ffmpeg-bootstrap] ffmpeg outdated, updating...`);
       await fsp.unlink(bin).catch(() => {});
-      await fsp.unlink(ffprobeBin()).catch(() => {});
+      await fsp.unlink(probe).catch(() => {});
       _initPromise = null;
       await downloadAndInstall();
     }

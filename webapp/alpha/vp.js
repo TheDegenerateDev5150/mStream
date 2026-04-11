@@ -10,7 +10,8 @@ const VUEPLAYERCORE = (() => {
     'audioBookCtrls': false,
     'flipPlayer': false,
     'compressArt': false,
-    'hideTopBar': false
+    'hideTopBar': false,
+    'waveformBar': true
   };
 
   try {
@@ -20,6 +21,7 @@ const VUEPLAYERCORE = (() => {
     mstreamModule.altLayout.moveMeta = typeof altLayout.moveMeta === 'boolean' ? altLayout.moveMeta : false;
     mstreamModule.altLayout.compressArt = typeof altLayout.compressArt === 'boolean' ? altLayout.compressArt : false;
     mstreamModule.altLayout.hideTopBar = typeof altLayout.hideTopBar === 'boolean' ? altLayout.hideTopBar : false;
+    mstreamModule.altLayout.waveformBar = typeof altLayout.waveformBar === 'boolean' ? altLayout.waveformBar : true;
 
     if (altLayout.flipPlayer === true) {
       document.getElementById('content').classList.add('col-rev');
@@ -369,7 +371,7 @@ const VUEPLAYERCORE = (() => {
     }
   });
 
-  new Vue({
+  const playerVue = new Vue({
     el: '#mstream-player',
     data: {
       playerStats: MSTREAMPLAYER.playerStats,
@@ -378,7 +380,29 @@ const VUEPLAYERCORE = (() => {
       meta: MSTREAMPLAYER.playerStats.metadata,
       lastVol: 100,
       replayGainToggle: false,
-      altLayout: mstreamModule.altLayout
+      altLayout: mstreamModule.altLayout,
+      waveformReady: false
+    },
+    watch: {
+      'meta.filepath': function(newPath) {
+        this.waveformReady = false;
+        if (this.altLayout.waveformBar) {
+          _fetchWaveform(newPath);
+        }
+      },
+      'playerStats.playing': function(isPlaying) {
+        if (!this.altLayout.waveformBar) return;
+        if (isPlaying) {
+          // If waveform not loaded yet (e.g. first play after page load), fetch it
+          if (!_waveformData && this.meta.filepath) {
+            _fetchWaveform(this.meta.filepath);
+          } else if (_waveformData) {
+            _startWaveformRaf();
+          }
+        } else {
+          if (_waveformData) _stopWaveformRaf();
+        }
+      }
     },
     created: function () {
       if (typeof(Storage) !== "undefined") {
@@ -633,6 +657,180 @@ const VUEPLAYERCORE = (() => {
       MSTREAMAPI.savePlaylist(mstreamModule.livePlaylist.name,songs, true);
     }
   }
+
+  // ── WAVEFORM ────────────────────────────────────────────────────────────────
+  // Fetches waveform data from the server, caches in localStorage + memory,
+  // and renders a two-pass canvas overlay on the progress bar.
+
+  let _waveformData = null;   // Array of 0-255 bar heights (800 entries)
+  let _waveformFp   = null;   // filepath of the currently loaded waveform
+  let _waveformRaf  = null;   // requestAnimationFrame handle
+  const _WF_LS_PREFIX = 'wf:';
+
+  function _wfLsGet(filepath) {
+    try {
+      const raw = localStorage.getItem(_WF_LS_PREFIX + filepath);
+      if (!raw) return null;
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) && arr.length > 0 ? arr : null;
+    } catch (_e) { return null; }
+  }
+
+  const _WF_LS_MAX = 500; // max cached waveforms in localStorage
+
+  function _wfLsSet(filepath, data) {
+    try {
+      localStorage.setItem(_WF_LS_PREFIX + filepath, JSON.stringify(data));
+    } catch (_e) {
+      // Quota exceeded — evict oldest wf:* entries and retry once
+      _wfLsEvict();
+      try { localStorage.setItem(_WF_LS_PREFIX + filepath, JSON.stringify(data)); }
+      catch (_e2) { /* still full — give up */ }
+    }
+  }
+
+  function _wfLsEvict() {
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(_WF_LS_PREFIX)) keys.push(k);
+    }
+    if (keys.length <= _WF_LS_MAX) return;
+    // Remove oldest half — localStorage has no insertion-order guarantee,
+    // so just remove an arbitrary batch to free space
+    const toRemove = keys.slice(0, Math.floor(keys.length / 2));
+    for (const k of toRemove) localStorage.removeItem(k);
+  }
+
+  function _setWaveformReady(val) {
+    if (playerVue) playerVue.waveformReady = val;
+  }
+
+  async function _fetchWaveform(filepath) {
+    // Skip radio/external streams and empty paths
+    if (!filepath || /^https?:\/\//i.test(filepath)) {
+      _waveformData = null;
+      _waveformFp = null;
+      _setWaveformReady(false);
+      _stopWaveformRaf();
+      _drawWaveform();
+      return;
+    }
+
+    // In-memory cache hit
+    if (_waveformFp === filepath && _waveformData) {
+      _setWaveformReady(true);
+      _drawWaveform();
+      if (MSTREAMPLAYER.playerStats.playing) _startWaveformRaf();
+      return;
+    }
+
+    // localStorage cache hit
+    const cached = _wfLsGet(filepath);
+    if (cached) {
+      _waveformData = cached;
+      _waveformFp   = filepath;
+      _setWaveformReady(true);
+      _drawWaveform();
+      if (MSTREAMPLAYER.playerStats.playing) _startWaveformRaf();
+      return;
+    }
+
+    // Clear while loading
+    _waveformData = null;
+    _waveformFp   = null;
+    _setWaveformReady(false);
+    _stopWaveformRaf();
+    _drawWaveform();
+
+    try {
+      const url = MSTREAMAPI.currentServer.host +
+        'api/v1/db/waveform?filepath=' + encodeURIComponent(filepath) +
+        '&token=' + MSTREAMAPI.currentServer.token;
+      const res = await fetch(url);
+      if (!res.ok) return;
+      const d = await res.json();
+      // Guard against track having changed during async fetch
+      if (MSTREAMPLAYER.playerStats.metadata.filepath !== filepath) return;
+      if (d.waveform && d.waveform.length > 0) {
+        _waveformData = d.waveform;
+        _waveformFp   = filepath;
+        _wfLsSet(filepath, d.waveform);
+        _setWaveformReady(true);
+        _drawWaveform();
+        if (MSTREAMPLAYER.playerStats.playing) _startWaveformRaf();
+      }
+    } catch (_e) { /* waveform unavailable — plain bar stays */ }
+  }
+
+  function _drawWaveform() {
+    const canvas = document.getElementById('waveform-canvas');
+    if (!canvas) return;
+    const W = canvas.offsetWidth;
+    const H = canvas.offsetHeight;
+    if (W <= 0 || H <= 0) return;
+
+    if (canvas.width !== W)  canvas.width  = W;
+    if (canvas.height !== H) canvas.height = H;
+
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, W, H);
+
+    if (!_waveformData || _waveformData.length === 0) return;
+
+    const data   = _waveformData;
+    const pct    = MSTREAMPLAYER.playerStats.duration > 0
+      ? MSTREAMPLAYER.playerStats.currentTime / MSTREAMPLAYER.playerStats.duration
+      : 0;
+    const splitX = pct * W;
+    const midY   = H / 2;
+    const barW   = W / data.length;
+    const drawW  = Math.max(1, barW > 2 ? barW - 1 : barW);
+
+    // Pass 1: played region (left of splitX) — orange
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, splitX, H);
+    ctx.clip();
+    ctx.fillStyle = '#fa832b';
+    for (let i = 0; i < data.length; i++) {
+      const x    = (i / data.length) * W;
+      const barH = Math.max(2, (data[i] / 255) * midY * 1.8);
+      ctx.fillRect(x, midY - barH / 2, drawW, barH);
+    }
+    ctx.restore();
+
+    // Pass 2: unplayed region (right of splitX) — dim
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(splitX, 0, W - splitX, H);
+    ctx.clip();
+    ctx.fillStyle = 'rgba(255,255,255,0.18)';
+    for (let i = 0; i < data.length; i++) {
+      const x    = (i / data.length) * W;
+      const barH = Math.max(2, (data[i] / 255) * midY * 1.8);
+      ctx.fillRect(x, midY - barH / 2, drawW, barH);
+    }
+    ctx.restore();
+  }
+
+  function _startWaveformRaf() {
+    if (_waveformRaf) return;
+    (function loop() {
+      _drawWaveform();
+      _waveformRaf = requestAnimationFrame(loop);
+    }());
+  }
+
+  function _stopWaveformRaf() {
+    if (_waveformRaf) { cancelAnimationFrame(_waveformRaf); _waveformRaf = null; }
+    _drawWaveform(); // final redraw at resting position
+  }
+
+  // Redraw on window resize so the canvas doesn't appear stretched while paused
+  window.addEventListener('resize', () => { if (_waveformData) _drawWaveform(); });
+
+  mstreamModule.triggerWaveformFetch = _fetchWaveform;
 
   return mstreamModule;
 })()

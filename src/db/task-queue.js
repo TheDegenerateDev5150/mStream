@@ -7,6 +7,7 @@ import * as config from '../state/config.js';
 import * as db from './manager.js';
 import { addToKillQueue } from '../state/kill-list.js';
 import { getDirname } from '../util/esm-helpers.js';
+import * as waveformGenerator from './waveform-generator.js';
 
 const __dirname = getDirname(import.meta.url);
 
@@ -148,6 +149,11 @@ function runScan(scanObj) {
     } catch (_) {}
 
     nextTask();
+
+    // When all scans are done, generate any missing waveforms
+    if (runningTasks.size === 0 && taskQueue.length === 0) {
+      waveformGenerator.run();
+    }
   });
 }
 

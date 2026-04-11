@@ -632,6 +632,7 @@ const MSTREAMPLAYER = (() => {
       "title": "",
       "year": "",
       "album-art": "",
+      "filepath": "",
     },
     replayGain: false,
     replayGainPreGainDb: 0

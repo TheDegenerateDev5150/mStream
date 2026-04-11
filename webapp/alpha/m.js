@@ -2316,6 +2316,14 @@ function setupLayoutPanel() {
         </label>
       </div>
       <br>
+      <div class="switch">
+        <label>
+          <input onchange="tglWaveformBar();" type="checkbox" ${VUEPLAYERCORE.altLayout.waveformBar === true ? 'checked' : ''}>
+          <span class="lever"></span>
+          Waveform Progress Bar
+        </label>
+      </div>
+      <br>
       <!-- <div class="switch">
         <label>
           <input type="checkbox">
@@ -2388,6 +2396,15 @@ function tglHideTopBar() {
   localStorage.setItem('altLayout', JSON.stringify(VUEPLAYERCORE.altLayout));
 }
 
+function tglWaveformBar() {
+  VUEPLAYERCORE.altLayout.waveformBar = !VUEPLAYERCORE.altLayout.waveformBar;
+  localStorage.setItem('altLayout', JSON.stringify(VUEPLAYERCORE.altLayout));
+  // If just enabled and a track is loaded but no waveform fetched yet, fetch now
+  if (VUEPLAYERCORE.altLayout.waveformBar && MSTREAMPLAYER.playerStats.metadata.filepath) {
+    VUEPLAYERCORE.triggerWaveformFetch(MSTREAMPLAYER.playerStats.metadata.filepath);
+  }
+}
+
 // Re-render the Layout panel when the language changes externally (via the
 // nav-bar dropdown, the sidenav-bottom dropdown, the admin panel, etc.).
 // setupLayoutPanel builds its content via ${t(...)} interpolation at render
@@ -2403,6 +2420,7 @@ I18N.onChange(() => {
     setupLayoutPanel();
   }
 });
+
 
 async function updateServer() {
   try {

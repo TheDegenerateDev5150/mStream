@@ -9,6 +9,7 @@ import * as admin from '../util/admin.js';
 import * as config from '../state/config.js';
 import * as dbQueue from '../db/task-queue.js';
 import * as imageCompress from '../db/image-compress-manager.js';
+import * as waveformGenerator from '../db/waveform-generator.js';
 import * as transcode from './transcode.js';
 import * as db from '../db/manager.js';
 import { joiValidate } from '../util/validation.js';
@@ -251,6 +252,10 @@ export function setup(mstream) {
 
   mstream.post("/api/v1/admin/db/force-compress-images", (req, res) => {
     res.json({ started: imageCompress.run() });
+  });
+
+  mstream.post("/api/v1/admin/db/generate-waveforms", (req, res) => {
+    res.json({ started: waveformGenerator.run() });
   });
 
   mstream.post("/api/v1/admin/db/scan/all", (req, res) => {

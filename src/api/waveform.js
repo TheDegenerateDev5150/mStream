@@ -6,9 +6,8 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import * as db from '../db/manager.js';
-import { ffmpegBin } from '../util/ffmpeg-bootstrap.js';
+import { ffmpegBin, getResolvedSource } from '../util/ffmpeg-bootstrap.js';
 import { getDirname } from '../util/esm-helpers.js';
 import { getVPathInfo } from '../util/vpath.js';
 
@@ -26,12 +25,8 @@ function ensureCacheDir() {
   }
 }
 
-function cacheKey(filepath) {
-  return crypto.createHash('md5').update(filepath).digest('hex');
-}
-
-function cachePath(key) {
-  return path.join(CACHE_DIR, key + '.json');
+function cachePath(fileHash) {
+  return path.join(CACHE_DIR, fileHash + '.json');
 }
 
 // Downsample raw PCM float32 peaks into NUM_BARS 0-255 values
@@ -131,7 +126,17 @@ export function setup(mstream) {
       return res.status(404).json({ error: 'file not found' });
     }
 
-    const key = cacheKey(filepath);
+    // Look up the track's content hash from the database
+    const lib = db.getLibraryByName(pathInfo.vpath);
+    const track = lib && db.getDB()?.prepare(
+      'SELECT file_hash FROM tracks WHERE filepath = ? AND library_id = ?'
+    ).get(pathInfo.relativePath, lib.id);
+
+    if (!track?.file_hash) {
+      return res.status(404).json({ error: 'track not in database' });
+    }
+
+    const key = track.file_hash;
 
     // Check memory cache
     if (memCache.has(key)) {
@@ -152,6 +157,10 @@ export function setup(mstream) {
       return res.json({ waveform });
     } catch (_) {
       // Not cached — generate
+    }
+
+    if (!getResolvedSource()) {
+      return res.status(503).json({ error: 'ffmpeg not ready' });
     }
 
     try {
