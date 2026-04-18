@@ -27,20 +27,32 @@ const prebuiltBin = path.join(__dirname, `../../bin/rust-parser/rust-parser-${pr
 const localBuildBin = path.join(rustParserDir, `target/release/rust-parser${ext}`);
 let rustParserBin = null;
 let rustBinaryReady = false;
+let rustParserDisabled = false;
 
 function findRustParser() {
+  if (rustParserDisabled) { return false; }
   if (rustBinaryReady) { return true; }
+
+  const markReady = (binPath) => {
+    rustParserBin = binPath;
+    // Docker / tarball extraction can strip the execute bit — restore it.
+    // No-op on Windows; if chmod fails (read-only volume etc.) the later
+    // spawn will fail and trigger the JS fallback in runScan().
+    try { fs.chmodSync(binPath, 0o755); } catch (_) {}
+    rustBinaryReady = true;
+    return true;
+  };
+
   // Check local build first (may be newer than prebuilt during development)
-  if (fs.existsSync(localBuildBin)) { rustParserBin = localBuildBin; rustBinaryReady = true; return true; }
-  if (fs.existsSync(prebuiltBin)) { rustParserBin = prebuiltBin; rustBinaryReady = true; return true; }
+  if (fs.existsSync(localBuildBin)) { return markReady(localBuildBin); }
+  if (fs.existsSync(prebuiltBin)) { return markReady(prebuiltBin); }
 
   // Try to build from source
   winston.info('Rust parser binary not found — building from source...');
   try {
     child.execSync('cargo build --release', { cwd: rustParserDir, stdio: 'pipe', timeout: 300000 });
     if (fs.existsSync(localBuildBin)) {
-      rustParserBin = localBuildBin;
-      rustBinaryReady = true;
+      markReady(localBuildBin);
       winston.info('Rust parser built successfully');
       return true;
     }
@@ -85,6 +97,48 @@ function nextTask() {
   }
 }
 
+function attachScanHandlers(forkedScan, scanObj) {
+  runningTasks.add(forkedScan);
+  vpathLimiter.add(scanObj.vpath);
+
+  // Ensure scanner is killed on server shutdown
+  addToKillQueue(() => { try { forkedScan.kill(); } catch (_) {} });
+
+  forkedScan.stdout.on('data', (data) => {
+    winston.info(data.toString().trim());
+  });
+
+  forkedScan.stderr.on('data', (data) => {
+    winston.error(`File scan error: ${data}`);
+  });
+}
+
+function onScanClose(forkedScan, scanObj, code) {
+  winston.info(`File scan completed with code ${code}`);
+  runningTasks.delete(forkedScan);
+  vpathLimiter.delete(scanObj.vpath);
+
+  // Clean up progress row (scanner should have deleted it, but handle crashes)
+  try {
+    db.getDB()?.prepare('DELETE FROM scan_progress WHERE scan_id = ?').run(scanObj.id);
+  } catch (_) {}
+
+  nextTask();
+
+  // When all scans are done, generate any missing waveforms
+  if (runningTasks.size === 0 && taskQueue.length === 0) {
+    waveformGenerator.run();
+  }
+}
+
+function launchJsScanner(scanObj, jsonLoad, library, { isFallback = false } = {}) {
+  const forkedScan = child.fork(path.join(__dirname, './scanner.mjs'), [JSON.stringify(jsonLoad)], { silent: true });
+  winston.info(`File scan started${isFallback ? ' (JS fallback)' : ''} on ${library.root_path}`);
+  attachScanHandlers(forkedScan, scanObj);
+  forkedScan.on('close', (code) => onScanClose(forkedScan, scanObj, code));
+  return forkedScan;
+}
+
 function runScan(scanObj) {
   const library = db.getLibraryByName(scanObj.vpath);
   if (!library) {
@@ -108,52 +162,31 @@ function runScan(scanObj) {
     forceRescan: scanObj.forceRescan || false
   };
 
-  let forkedScan;
-  const useRust = findRustParser();
-  if (useRust) {
-    forkedScan = child.spawn(rustParserBin, [JSON.stringify(jsonLoad)], { stdio: ['ignore', 'pipe', 'pipe'] });
-    winston.info(`File scan started (Rust) on ${library.root_path}`);
-    forkedScan.on('error', (err) => {
-      winston.error(`Rust parser failed to start: ${err.message}`);
-      runningTasks.delete(forkedScan);
-      vpathLimiter.delete(scanObj.vpath);
-      nextTask();
-    });
-  } else {
-    forkedScan = child.fork(path.join(__dirname, './scanner.mjs'), [JSON.stringify(jsonLoad)], { silent: true });
-    winston.info(`File scan started on ${library.root_path}`);
+  if (!findRustParser()) {
+    launchJsScanner(scanObj, jsonLoad, library);
+    return;
   }
 
-  runningTasks.add(forkedScan);
-  vpathLimiter.add(scanObj.vpath);
+  const rustScan = child.spawn(rustParserBin, [JSON.stringify(jsonLoad)], { stdio: ['ignore', 'pipe', 'pipe'] });
+  winston.info(`File scan started (Rust) on ${library.root_path}`);
 
-  // Ensure scanner is killed on server shutdown
-  addToKillQueue(() => { try { forkedScan.kill(); } catch (_) {} });
-
-  forkedScan.stdout.on('data', (data) => {
-    winston.info(data.toString().trim());
+  let fellBack = false;
+  rustScan.on('error', (err) => {
+    if (fellBack) { return; }
+    fellBack = true;
+    winston.warn(`Rust parser failed to start (${err.code || 'ERR'}), falling back to JS scanner: ${err.message}`);
+    // Permission / ABI / exec errors don't resolve themselves — disable Rust
+    // for the rest of this process lifetime so we don't retry every scan.
+    rustParserDisabled = true;
+    rustBinaryReady = false;
+    runningTasks.delete(rustScan);
+    launchJsScanner(scanObj, jsonLoad, library, { isFallback: true });
   });
 
-  forkedScan.stderr.on('data', (data) => {
-    winston.error(`File scan error: ${data}`);
-  });
-
-  forkedScan.on('close', (code) => {
-    winston.info(`File scan completed with code ${code}`);
-    runningTasks.delete(forkedScan);
-    vpathLimiter.delete(scanObj.vpath);
-
-    // Clean up progress row (scanner should have deleted it, but handle crashes)
-    try {
-      db.getDB()?.prepare('DELETE FROM scan_progress WHERE scan_id = ?').run(scanObj.id);
-    } catch (_) {}
-
-    nextTask();
-
-    // When all scans are done, generate any missing waveforms
-    if (runningTasks.size === 0 && taskQueue.length === 0) {
-      waveformGenerator.run();
-    }
+  attachScanHandlers(rustScan, scanObj);
+  rustScan.on('close', (code) => {
+    if (fellBack) { return; }
+    onScanClose(rustScan, scanObj, code);
   });
 }
 
