@@ -16,3 +16,10 @@ process.on('exit', _code => {
 export function addToKillQueue(func) {
   killThese.push(func);
 }
+
+export function removeFromKillQueue(func) {
+  const idx = killThese.indexOf(func);
+  if (idx !== -1) {
+    killThese.splice(idx, 1);
+  }
+}

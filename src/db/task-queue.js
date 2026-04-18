@@ -5,7 +5,7 @@ import winston from 'winston';
 import { nanoid } from 'nanoid';
 import * as config from '../state/config.js';
 import * as db from './manager.js';
-import { addToKillQueue } from '../state/kill-list.js';
+import { addToKillQueue, removeFromKillQueue } from '../state/kill-list.js';
 import { getDirname } from '../util/esm-helpers.js';
 import * as waveformGenerator from './waveform-generator.js';
 
@@ -15,6 +15,13 @@ const taskQueue = [];
 const runningTasks = new Set();
 const vpathLimiter = new Set();
 let scanIntervalTimer = null;
+// True when any scan in the current batch added, changed, or removed tracks.
+// Reset to false after the waveform post-processor runs.
+let anyScansChanged = false;
+// SQLite-format timestamp ("YYYY-MM-DD HH:MM:SS" UTC) captured when a new
+// batch starts. Passed to the waveform generator so it can query only
+// tracks created during this batch instead of the whole library.
+let batchStartTime = null;
 
 // ── Rust parser binary detection ────────────────────────────────────────────
 
@@ -97,15 +104,50 @@ function nextTask() {
   }
 }
 
+function handleScannerLine(line) {
+  if (!line) { return; }
+  // Structured events from the scanner are emitted as single-line JSON;
+  // see scanner.mjs and rust-parser/src/main.rs for the event shapes.
+  if (line[0] === '{') {
+    try {
+      const evt = JSON.parse(line);
+      if (evt?.event === 'scanComplete') {
+        winston.info(`Scan complete: ${evt.filesProcessed} files processed, ${evt.staleEntriesRemoved} stale entries removed`);
+        if (evt.filesProcessed > 0 || evt.staleEntriesRemoved > 0) {
+          anyScansChanged = true;
+        }
+        return;
+      }
+    } catch (_) { /* not a structured event — fall through and log as plain text */ }
+  }
+  winston.info(line);
+}
+
 function attachScanHandlers(forkedScan, scanObj) {
   runningTasks.add(forkedScan);
   vpathLimiter.add(scanObj.vpath);
 
-  // Ensure scanner is killed on server shutdown
-  addToKillQueue(() => { try { forkedScan.kill(); } catch (_) {} });
+  // Ensure scanner is killed on server shutdown; keep a handle so we can
+  // drop the entry from the kill queue when the process exits cleanly —
+  // otherwise the queue would grow unbounded across scheduled scans.
+  const killFn = () => { try { forkedScan.kill(); } catch (_) {} };
+  forkedScan._killFn = killFn;
+  addToKillQueue(killFn);
 
-  forkedScan.stdout.on('data', (data) => {
-    winston.info(data.toString().trim());
+  // Line-buffer stdout so structured JSON events parse cleanly regardless
+  // of how the OS chunks the pipe data.
+  let stdoutBuffer = '';
+  forkedScan.stdout.on('data', (chunk) => {
+    stdoutBuffer += chunk.toString();
+    const lines = stdoutBuffer.split(/\r?\n/);
+    stdoutBuffer = lines.pop() || '';
+    for (const line of lines) {
+      handleScannerLine(line.trim());
+    }
+  });
+  forkedScan.stdout.on('end', () => {
+    if (stdoutBuffer.trim()) { handleScannerLine(stdoutBuffer.trim()); }
+    stdoutBuffer = '';
   });
 
   forkedScan.stderr.on('data', (data) => {
@@ -117,6 +159,7 @@ function onScanClose(forkedScan, scanObj, code) {
   winston.info(`File scan completed with code ${code}`);
   runningTasks.delete(forkedScan);
   vpathLimiter.delete(scanObj.vpath);
+  if (forkedScan._killFn) { removeFromKillQueue(forkedScan._killFn); }
 
   // Clean up progress row (scanner should have deleted it, but handle crashes)
   try {
@@ -125,9 +168,14 @@ function onScanClose(forkedScan, scanObj, code) {
 
   nextTask();
 
-  // When all scans are done, generate any missing waveforms
-  if (runningTasks.size === 0 && taskQueue.length === 0) {
-    waveformGenerator.run();
+  // When all scans are done, run the waveform post-processor — but only if
+  // some scan actually changed the DB. A scheduled rescan over an unchanged
+  // library shouldn't fork a child just to SELECT and return "up to date".
+  if (runningTasks.size === 0 && taskQueue.length === 0 && anyScansChanged) {
+    const since = batchStartTime;
+    anyScansChanged = false;
+    batchStartTime = null;
+    waveformGenerator.run(since);
   }
 }
 
@@ -144,6 +192,15 @@ function runScan(scanObj) {
   if (!library) {
     winston.warn(`Library '${scanObj.vpath}' not found in database, skipping scan`);
     return;
+  }
+
+  // Stamp the start of the batch using SQLite's own clock so the string
+  // format ("YYYY-MM-DD HH:MM:SS") lines up with rows' created_at defaults
+  // and lexical comparison is valid.
+  if (batchStartTime === null) {
+    try {
+      batchStartTime = db.getDB()?.prepare("SELECT datetime('now') AS ts").get()?.ts || null;
+    } catch (_) { batchStartTime = null; }
   }
 
   const dbPath = path.join(config.program.storage.dbDirectory, 'mstream.db');
@@ -178,8 +235,8 @@ function runScan(scanObj) {
     // Permission / ABI / exec errors don't resolve themselves — disable Rust
     // for the rest of this process lifetime so we don't retry every scan.
     rustParserDisabled = true;
-    rustBinaryReady = false;
     runningTasks.delete(rustScan);
+    if (rustScan._killFn) { removeFromKillQueue(rustScan._killFn); }
     launchJsScanner(scanObj, jsonLoad, library, { isFallback: true });
   });
 

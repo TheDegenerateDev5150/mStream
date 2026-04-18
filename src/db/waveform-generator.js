@@ -11,10 +11,12 @@ let runningTask;
 
 /**
  * Spawn the waveform generator script as a child process.
- * Iterates all tracks in the DB and generates missing waveform cache files.
+ * If `sinceTimestamp` is provided, the script only considers tracks whose
+ * created_at is >= that timestamp (narrows the query to the current scan
+ * batch). Otherwise it scans the whole library.
  * Returns false if ffmpeg is not available or a task is already running.
  */
-export function run() {
+export function run(sinceTimestamp = null) {
   if (runningTask !== undefined) {
     return false;
   }
@@ -29,6 +31,7 @@ export function run() {
     dbPath: path.join(config.program.storage.dbDirectory, 'mstream.db'),
     ffmpegBin: ffmpegBin(),
     waveformCacheDir: path.join(__dirname, '../../waveform-cache'),
+    sinceTimestamp: sinceTimestamp,
   };
 
   const forkedTask = child.fork(

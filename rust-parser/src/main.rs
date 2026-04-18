@@ -164,7 +164,12 @@ fn run_scan(config: &ScanConfig) -> Result<(), Box<dyn std::error::Error>> {
          DELETE FROM genres WHERE id NOT IN (SELECT DISTINCT genre_id FROM track_genres);"
     )?;
 
-    println!("Scan complete: {} files processed, {} stale entries removed", file_count, deleted);
+    // Structured end-of-scan event — parsed by task-queue.js to decide whether
+    // to run the waveform post-processor. Integer fields only; no escaping needed.
+    println!(
+        "{{\"event\":\"scanComplete\",\"filesProcessed\":{},\"staleEntriesRemoved\":{}}}",
+        file_count, deleted
+    );
     Ok(())
 }
 

@@ -121,13 +121,21 @@ async function run() {
   // Open database (read-only — we never write to it)
   const db = new DatabaseSync(loadJson.dbPath, { readOnly: true });
 
-  // Get all tracks with their library root paths and content hashes
-  const tracks = db.prepare(`
+  // Get tracks with their library root paths and content hashes. When
+  // invoked after a scan, task-queue passes a sinceTimestamp so we only
+  // consider tracks added/modified in the current batch — rows
+  // representing unchanged files keep their original created_at.
+  let query = `
     SELECT t.filepath, t.file_hash, l.root_path
     FROM tracks t
     JOIN libraries l ON t.library_id = l.id
-    WHERE t.file_hash IS NOT NULL
-  `).all();
+    WHERE t.file_hash IS NOT NULL`;
+  const args = [];
+  if (loadJson.sinceTimestamp) {
+    query += ' AND t.created_at >= ?';
+    args.push(loadJson.sinceTimestamp);
+  }
+  const tracks = db.prepare(query).all(...args);
 
   db.close();
 
