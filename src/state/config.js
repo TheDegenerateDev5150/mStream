@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import Joi from 'joi';
 import winston from 'winston';
 import { getDirname } from '../util/esm-helpers.js';
-import { getTransAlgos, getTransCodecs, getTransBitrates } from '../api/transcode.js';
+import { getTransCodecs, getTransBitrates } from '../api/transcode.js';
 
 const __dirname = getDirname(import.meta.url);
 
@@ -35,8 +35,6 @@ const dbOptions = Joi.object({
 });
 
 const transcodeOptions = Joi.object({
-  algorithm: Joi.string().valid(...getTransAlgos()).optional(), // deprecated — kept for config compat
-  enabled: Joi.boolean().default(false),
   ffmpegDirectory: Joi.string().default(path.join(__dirname, '../../bin/ffmpeg')),
   defaultCodec: Joi.string().valid(...getTransCodecs()).default('opus'),
   defaultBitrate: Joi.string().valid(...getTransBitrates()).default('96k')

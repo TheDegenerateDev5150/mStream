@@ -50,11 +50,10 @@ const S = {
   canUpload: true,   // false when server has noUpload=true
   supportedAudioFiles: {},  // populated from ping
   // Transcode
-  transInfo:    null,  // { serverEnabled, defaultCodec, defaultBitrate, defaultAlgorithm }
+  transInfo:    null,  // { serverEnabled, defaultCodec, defaultBitrate }
   transEnabled: !!localStorage.getItem('ms2_trans_'          + _u),
   transCodec:   localStorage.getItem('ms2_trans_codec_'     + _u) || '',
   transBitrate: localStorage.getItem('ms2_trans_bitrate_'   + _u) || '',
-  transAlgo:    localStorage.getItem('ms2_trans_algo_'      + _u) || '',
   // Jukebox
   jukeWs:            null,
   jukeCode:          null,
@@ -223,7 +222,6 @@ function mediaUrl(fp) {
     const params = new URLSearchParams({ token: S.token });
     if (S.transCodec)   params.set('codec',   S.transCodec);
     if (S.transBitrate) params.set('bitrate', S.transBitrate);
-    if (S.transAlgo)    params.set('algo',    S.transAlgo);
     return `/transcode/${path}?${params}`;
   }
   return `/media/${path}?token=${S.token}`;
@@ -7576,7 +7574,7 @@ function viewTranscode() {
   setBody(`
     <div class="settings-panel">
       <div class="settings-section-title">Transcode Settings</div>
-      <p class="settings-desc">Stream audio converted on-the-fly to reduce bandwidth. Server default: <strong>${esc(info.defaultCodec || '—')} / ${esc(info.defaultBitrate || '—')} / ${esc(info.defaultAlgorithm || '—')}</strong>.</p>
+      <p class="settings-desc">Stream audio converted on-the-fly to reduce bandwidth. Server default: <strong>${esc(info.defaultCodec || '—')} / ${esc(info.defaultBitrate || '—')}</strong>.</p>
       <div class="settings-row settings-row-toggle">
         <span class="settings-label">Enable Transcoding</span>
         <label class="toggle-sw">
@@ -7602,14 +7600,6 @@ function viewTranscode() {
             <option value="96k"  ${S.transBitrate==='96k' ?'selected':''}>96 kbps</option>
             <option value="128k" ${S.transBitrate==='128k'?'selected':''}>128 kbps</option>
             <option value="192k" ${S.transBitrate==='192k'?'selected':''}>192 kbps</option>
-          </select>
-        </div>
-        <div class="settings-row">
-          <label class="settings-label" for="tc-algo">Algorithm</label>
-          <select class="settings-select" id="tc-algo">
-            <option value="">Default (${esc(info.defaultAlgorithm || 'server')})</option>
-            <option value="buffer" ${S.transAlgo==='buffer'?'selected':''}>Buffer</option>
-            <option value="stream" ${S.transAlgo==='stream'?'selected':''}>Stream</option>
           </select>
         </div>
       </div>
@@ -7640,11 +7630,8 @@ function viewTranscode() {
     e.target.value ? localStorage.setItem(_uKey('trans_bitrate'), e.target.value) : localStorage.removeItem(_uKey('trans_bitrate'));
     _syncPrefs();
   };
-  document.getElementById('tc-algo').onchange = e => {
-    S.transAlgo = e.target.value;
-    e.target.value ? localStorage.setItem(_uKey('trans_algo'), e.target.value) : localStorage.removeItem(_uKey('trans_algo'));
-    _syncPrefs();
-  };
+  // Clean up legacy algo key
+  localStorage.removeItem(_uKey('trans_algo'));
 }
 
 // ── JUKEBOX ───────────────────────────────────────────────────
@@ -11191,7 +11178,6 @@ function _collectPrefs() {
     eq:                localStorage.getItem('ms2_eq_'             + u),
     eq_on:             localStorage.getItem('ms2_eq_on_'          + u),
     trans:             localStorage.getItem('ms2_trans_'          + u),
-    trans_algo:        localStorage.getItem('ms2_trans_algo_'     + u),
     trans_bitrate:     localStorage.getItem('ms2_trans_bitrate_'  + u),
     trans_codec:       localStorage.getItem('ms2_trans_codec_'    + u),
     vu_mode:           localStorage.getItem('ms2_vu_mode_'        + u),
@@ -11280,7 +11266,6 @@ function _applyServerSettings(data) {
   if (prefs.eq            != null) ls('ms2_eq_' + u, prefs.eq);
   if (prefs.eq_on         != null) ls('ms2_eq_on_' + u, prefs.eq_on);
   if (prefs.trans         != null) { ls('ms2_trans_' + u, prefs.trans); S.transEnabled = !!prefs.trans; }
-  if (prefs.trans_algo    != null) { ls('ms2_trans_algo_' + u, prefs.trans_algo); S.transAlgo = prefs.trans_algo || ''; }
   if (prefs.trans_bitrate != null) { ls('ms2_trans_bitrate_' + u, prefs.trans_bitrate); S.transBitrate = prefs.trans_bitrate || ''; }
   if (prefs.trans_codec   != null) { ls('ms2_trans_codec_' + u, prefs.trans_codec); S.transCodec = prefs.trans_codec || ''; }
   if (prefs.vu_mode       != null) ls('ms2_vu_mode_' + u, prefs.vu_mode);
@@ -11699,7 +11684,6 @@ function showApp() {
         serverEnabled:    true,
         defaultCodec:     d.transcode.defaultCodec     || '',
         defaultBitrate:   d.transcode.defaultBitrate   || '',
-        defaultAlgorithm: d.transcode.defaultAlgorithm || '',
       };
     } else {
       S.transInfo = { serverEnabled: false };

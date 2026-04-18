@@ -6,10 +6,8 @@ const MSTREAMPLAYER = (() => {
     frontendEnabled: false,
     defaultBitrate: null,
     defaultCodec: null,
-    defaultAlgo: null,
     selectedBitrate: null,
     selectedCodec: null,
-    selectedAlgo: null,
   };
 
   // Playlist variables
@@ -693,9 +691,6 @@ const MSTREAMPLAYER = (() => {
       }
       if (mstreamModule.transcodeOptions.selectedCodec !== null) {
         url += `&codec=${mstreamModule.transcodeOptions.selectedCodec}`;
-      }
-      if (mstreamModule.transcodeOptions.selectedAlgo !== null) {
-        url += `&algo=${mstreamModule.transcodeOptions.selectedAlgo}`;
       }
     }
 

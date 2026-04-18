@@ -4,7 +4,15 @@ import winston from 'winston';
 import * as vpath from '../util/vpath.js';
 import * as config from '../state/config.js';
 import * as db from '../db/manager.js';
-import { ensureFfmpeg, ffmpegBin, startAutoUpdate, stopAutoUpdate } from '../util/ffmpeg-bootstrap.js';
+import path from 'node:path';
+import {
+  ensureFfmpeg,
+  ffmpegBin,
+  startAutoUpdate,
+  stopAutoUpdate,
+  getResolvedSource,
+  reset as resetBootstrap
+} from '../util/ffmpeg-bootstrap.js';
 
 const codecMap = {
   'mp3':  { codec: 'libmp3lame', format: 'mp3',  contentType: 'audio/mpeg' },
@@ -14,7 +22,6 @@ const codecMap = {
 
 const bitrateSet = new Set(['64k', '96k', '128k', '192k']);
 
-export function getTransAlgos() { return ['buffer', 'stream']; } // kept for config schema compat
 export function getTransBitrates() { return Array.from(bitrateSet); }
 export function getTransCodecs() { return Object.keys(codecMap); }
 
@@ -25,13 +32,27 @@ async function init() {
   winston.info('Checking ffmpeg...');
   await ensureFfmpeg();
 
+  // If the resolver found nothing (no bundled binary, no download, no system
+  // PATH fallback), leave lockInit false and return. Downstream consumers
+  // (transcode route, album-art embedding, waveforms, ytdl) will degrade
+  // gracefully. The resolver already logged a detailed error.
+  if (!getResolvedSource()) {
+    winston.warn('FFmpeg unavailable — transcoding, album-art embedding, waveforms, and yt-dlp will be disabled');
+    return;
+  }
+
   ffmpegPath = ffmpegBin();
 
-  const { access } = await import('node:fs/promises');
-  try {
-    await access(ffmpegPath);
-  } catch {
-    throw new Error(`FFmpeg binary not found at ${ffmpegPath}`);
+  // Only verify file existence when ffmpegBin() returned an absolute path
+  // (i.e. a binary we manage on disk). Bare command names like 'ffmpeg' are
+  // resolved by spawn() via PATH at call time, so we skip the access check.
+  if (path.isAbsolute(ffmpegPath)) {
+    const { access } = await import('node:fs/promises');
+    try {
+      await access(ffmpegPath);
+    } catch {
+      throw new Error(`FFmpeg binary not found at ${ffmpegPath}`);
+    }
   }
 
   lockInit = true;
@@ -43,10 +64,6 @@ export function reset() {
   lockInit = false;
   ffmpegPath = null;
   stopAutoUpdate();
-}
-
-export function isEnabled() {
-  return lockInit === true && config.program.transcode.enabled === true;
 }
 
 export function isDownloaded() {
@@ -110,16 +127,13 @@ function spawnTranscode(inputPath, codec, bitrate) {
 // ── Route ───────────────────────────────────────────────────────────────────
 
 export function setup(mstream) {
-  if (config.program.transcode.enabled === true) {
-    init().catch(err => {
-      winston.error('Failed to initialize FFmpeg', { stack: err });
-    });
-  }
+  // Always try to bootstrap ffmpeg — album-art embedding, waveform generation,
+  // and yt-dlp ingestion all use it independently of the old transcode toggle.
+  init().catch(err => {
+    winston.error('Failed to initialize FFmpeg', { stack: err });
+  });
 
   mstream.get("/transcode/{*filepath}", (req, res) => {
-    if (!config.program.transcode || config.program.transcode.enabled !== true) {
-      return res.status(500).json({ error: 'transcoding disabled' });
-    }
     if (lockInit !== true) {
       return res.status(500).json({ error: 'transcoding disabled' });
     }

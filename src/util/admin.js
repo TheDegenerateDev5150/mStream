@@ -300,14 +300,6 @@ export async function editWriteLogs(val) {
   else { logger.addFileLogger(config.program.storage.logsDirectory); }
 }
 
-export async function enableTranscode(val) {
-  const loadConfig = await loadFile(config.configFile);
-  if (!loadConfig.transcode) { loadConfig.transcode = {}; }
-  loadConfig.transcode.enabled = val;
-  await saveFile(loadConfig, config.configFile);
-  config.program.transcode.enabled = val;
-}
-
 export async function editDefaultCodec(val) {
   const loadConfig = await loadFile(config.configFile);
   if (!loadConfig.transcode) { loadConfig.transcode = {}; }
@@ -322,14 +314,6 @@ export async function editDefaultBitrate(val) {
   loadConfig.transcode.defaultBitrate = val;
   await saveFile(loadConfig, config.configFile);
   config.program.transcode.defaultBitrate = val;
-}
-
-export async function editDefaultAlgorithm(val) {
-  const loadConfig = await loadFile(config.configFile);
-  if (!loadConfig.transcode) { loadConfig.transcode = {}; }
-  loadConfig.transcode.algorithm = val;
-  await saveFile(loadConfig, config.configFile);
-  config.program.transcode.algorithm = val;
 }
 
 export async function lockAdminApi(val) {

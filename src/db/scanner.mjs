@@ -421,7 +421,13 @@ async function run() {
 
     // Remove tracks that weren't seen in this scan (deleted files)
     const deleted = stmts.deleteOldTracks.run(loadJson.libraryId, loadJson.scanId);
-    console.log(`Scan complete: ${fileCount} files processed, ${deleted.changes} stale entries removed`);
+    // Structured end-of-scan event — parsed by task-queue.js to decide whether
+    // to run the waveform post-processor.
+    console.log(JSON.stringify({
+      event: 'scanComplete',
+      filesProcessed: fileCount,
+      staleEntriesRemoved: deleted.changes
+    }));
 
     // Clean up orphaned artists, albums, and genres (no tracks reference them)
     db.exec('DELETE FROM albums WHERE id NOT IN (SELECT DISTINCT album_id FROM tracks WHERE album_id IS NOT NULL)');

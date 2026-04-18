@@ -628,7 +628,9 @@
         <div class="progress-wrapper">
           <div class="left">{{currentTime}}</div>
           <div class="right">{{durationTime}}</div>
-          <div v-on:click.stop="seekTo($event)" class="progress pointer" ref="progressWrapper">
+          <div v-on:click.stop="seekTo($event)" class="progress pointer" ref="progressWrapper"
+               v-bind:class="{ 'wf-active': altLayout.waveformBar && waveformReady }">
+            <canvas id="waveform-canvas" class="waveform-canvas"></canvas>
             <div class="determinate" :style="widthcss"></div>
           </div>
         </div>

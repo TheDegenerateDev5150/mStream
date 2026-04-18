@@ -9,12 +9,13 @@ import * as admin from '../util/admin.js';
 import * as config from '../state/config.js';
 import * as dbQueue from '../db/task-queue.js';
 import * as imageCompress from '../db/image-compress-manager.js';
+import * as waveformGenerator from '../db/waveform-generator.js';
 import * as transcode from './transcode.js';
 import * as db from '../db/manager.js';
 import { joiValidate } from '../util/validation.js';
 import { bootRustPlayer, killRustPlayer } from './server-playback.js';
 
-import { getTransAlgos, getTransCodecs, getTransBitrates } from '../api/transcode.js';
+import { getTransCodecs, getTransBitrates } from '../api/transcode.js';
 
 export function setup(mstream) {
   mstream.all('/api/v1/admin/{*path}', (req, res, next) => {
@@ -253,6 +254,10 @@ export function setup(mstream) {
     res.json({ started: imageCompress.run() });
   });
 
+  mstream.post("/api/v1/admin/db/generate-waveforms", (req, res) => {
+    res.json({ started: waveformGenerator.run() });
+  });
+
   mstream.post("/api/v1/admin/db/scan/all", (req, res) => {
     dbQueue.scanAll();
     res.json({});
@@ -468,16 +473,6 @@ export function setup(mstream) {
     const memClone = JSON.parse(JSON.stringify(config.program.transcode));
     memClone.downloaded = transcode.isDownloaded();
     res.json(memClone);
-  });
-
-  mstream.post("/api/v1/admin/transcode/enable", async (req, res) => {
-    const schema = Joi.object({
-      enable: Joi.boolean().required()
-    });
-    joiValidate(schema, req.body);
-
-    await admin.enableTranscode(req.body.enable);
-    res.json({});
   });
 
   mstream.post("/api/v1/admin/transcode/default-codec", async (req, res) => {

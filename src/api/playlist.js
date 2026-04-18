@@ -1,6 +1,7 @@
 import Joi from 'joi';
 import * as config from '../state/config.js';
 import * as db from '../db/manager.js';
+import * as transcode from './transcode.js';
 import { joiValidate, resolveId } from '../util/validation.js';
 
 export function setup(mstream) {
@@ -9,12 +10,13 @@ export function setup(mstream) {
   // ── Ping (initial app load) ─────────────────────────────────────────────
 
   mstream.get('/api/v1/ping', (req, res) => {
-    let transcode = false;
-    if (config.program.transcode && config.program.transcode.enabled) {
-      transcode = {
+    // Signal "transcoding available" only when ffmpeg actually resolved
+    // (bundled binaries ready OR system-PATH fallback succeeded).
+    let transcodeInfo = false;
+    if (transcode.isDownloaded() && config.program.transcode) {
+      transcodeInfo = {
         defaultCodec: config.program.transcode.defaultCodec,
-        defaultBitrate: config.program.transcode.defaultBitrate,
-        defaultAlgorithm: config.program.transcode.algorithm
+        defaultBitrate: config.program.transcode.defaultBitrate
       };
     }
 
@@ -24,7 +26,7 @@ export function setup(mstream) {
     const returnThis = {
       vpaths,
       playlists: getPlaylists(req.user.id),
-      transcode,
+      transcode: transcodeInfo,
       noMkdir: config.program.noMkdir || req.user.allow_mkdir === false || req.user.allow_mkdir === 0,
       noUpload: config.program.noUpload || req.user.allow_upload === false || req.user.allow_upload === 0,
       noFileModify: config.program.noFileModify || req.user.allow_file_modify === false || req.user.allow_file_modify === 0,
