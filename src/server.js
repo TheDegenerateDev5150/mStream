@@ -26,6 +26,9 @@ import * as syncthing from './state/syncthing.js';
 import * as federationApi from './api/federation.js';
 // scanner.js removed — parser now writes directly to SQLite
 import * as ytdlApi from './api/ytdl.js';
+import * as dlnaApi from './api/dlna.js';
+import * as dlnaSsdp from './dlna/ssdp.js';
+import * as dlnaServer from './dlna/dlna-server.js';
 import * as serverPlaybackApi from './api/server-playback.js';
 import * as albumArtApi from './api/album-art.js';
 import * as waveformApi from './api/waveform.js';
@@ -180,6 +183,8 @@ export async function serveIt(configFile) {
   // Public APIs
   remoteApi.setupBeforeAuth(mstream, server);
   await sharedApi.setupBeforeSecurity(mstream);
+  // DLNA routes must be before the auth wall — DLNA clients cannot do JWT auth
+  dlnaApi.setup(mstream);
 
   // Everything below this line requires authentication
   authApi.setup(mstream);
@@ -282,6 +287,13 @@ export async function serveIt(configFile) {
     const taskQueue = await import('./db/task-queue.js');
     taskQueue.runAfterBoot();
 
+    if (config.program.dlna.mode !== 'disabled') {
+      dlnaSsdp.start();
+    }
+    if (config.program.dlna.mode === 'separate-port') {
+      dlnaServer.start();
+    }
+
     // Auto-boot the Rust server audio player if configured
     serverPlaybackApi.bootRustPlayer();
   });
@@ -298,6 +310,8 @@ export function reboot() {
       syncthing.kill2();
     }
 
+    dlnaSsdp.stop();
+    dlnaServer.stop();
     serverPlaybackApi.killRustPlayer();
 
     // Close the server

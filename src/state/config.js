@@ -67,6 +67,13 @@ const federationOptions = Joi.object({
   federateUsersMode: Joi.boolean().default(false),
 });
 
+const dlnaOptions = Joi.object({
+  mode: Joi.string().valid('disabled', 'same-port', 'separate-port').default('disabled'),
+  name: Joi.string().default('mStream Music'),
+  uuid: Joi.string().optional(),
+  port: Joi.number().integer().min(1).max(65535).default(3011),
+});
+
 const schema = Joi.object({
   address: Joi.string().ip({ cidr: 'forbidden' }).default('::'),
   port: Joi.number().default(3000),
@@ -118,6 +125,7 @@ const schema = Joi.object({
     cert: Joi.string().allow('').optional()
   }).optional(),
   federation: federationOptions.default(federationOptions.validate({}).value),
+  dlna: dlnaOptions.default(dlnaOptions.validate({}).value),
   autoBootServerAudio: Joi.boolean().default(false),
   rustPlayerPort: Joi.number().integer().min(1).max(65535).default(3333),
 });
@@ -146,6 +154,13 @@ export async function setup(configFileArg) {
   const programData = JSON.parse(await fs.readFile(configFileArg, 'utf8'));
   configFile = configFileArg;
 
+  // Migrate: dlna.enabled (boolean) → dlna.mode (string)
+  if (programData.dlna && typeof programData.dlna.enabled === 'boolean') {
+    programData.dlna.mode = programData.dlna.enabled ? 'same-port' : 'disabled';
+    delete programData.dlna.enabled;
+    await fs.writeFile(configFileArg, JSON.stringify(programData, null, 2), 'utf8');
+  }
+
   // Verify paths are real
   for (const folder in programData.folders) {
     if (!(await fs.stat(programData.folders[folder].root)).isDirectory()) {
@@ -161,6 +176,15 @@ export async function setup(configFileArg) {
   }
 
   program = await schema.validateAsync(programData, { allowUnknown: true });
+
+  // Persist a stable DLNA UUID so renderers recognise the server across reboots
+  if (!program.dlna.uuid) {
+    program.dlna.uuid = crypto.randomUUID();
+    const rawConfig = JSON.parse(await fs.readFile(configFileArg, 'utf8'));
+    if (!rawConfig.dlna) { rawConfig.dlna = {}; }
+    rawConfig.dlna.uuid = program.dlna.uuid;
+    await fs.writeFile(configFileArg, JSON.stringify(rawConfig, null, 2), 'utf8');
+  }
 }
 
 export function getDefaults() {
