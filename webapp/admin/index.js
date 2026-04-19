@@ -2522,15 +2522,18 @@ const dlnaView = Vue.component('dlna-view', {
       params: ADMINDATA.dlnaParams,
       selectedMode: 'disabled',
       selectedPort: 3011,
+      selectedBrowse: 'dirs',
       applyPending: false,
+      browsePending: false,
     };
   },
   watch: {
     'paramsTS.ts': {
       immediate: true,
       handler: function() {
-        this.selectedMode = this.params.mode || 'disabled';
-        this.selectedPort = this.params.port || 3011;
+        this.selectedMode   = this.params.mode   || 'disabled';
+        this.selectedPort   = this.params.port   || 3011;
+        this.selectedBrowse = this.params.browse || 'dirs';
       }
     }
   },
@@ -2589,8 +2592,68 @@ const dlnaView = Vue.component('dlna-view', {
           </div>
         </div>
       </div>
+      <div class="row">
+        <div class="col s12">
+          <div class="card">
+            <div class="card-content">
+              <span class="card-title">Browse Mode</span>
+              <p>Controls how your library is presented to DLNA clients.</p>
+              <div style="margin-top:16px">
+                <p><b>Current:</b> {{params.browse || 'dirs'}}</p>
+              </div>
+              <div style="margin-top:16px">
+                <p>
+                  <label style="margin-right:20px">
+                    <input type="radio" v-model="selectedBrowse" value="dirs" />
+                    <span>Directory tree</span>
+                  </label>
+                  <label style="margin-right:20px">
+                    <input type="radio" v-model="selectedBrowse" value="artist" />
+                    <span>Artist → Album → Song</span>
+                  </label>
+                  <label style="margin-right:20px">
+                    <input type="radio" v-model="selectedBrowse" value="flat" />
+                    <span>Flat list</span>
+                  </label>
+                  <label style="margin-right:20px">
+                    <input type="radio" v-model="selectedBrowse" value="album" />
+                    <span>Album → Song</span>
+                  </label>
+                  <label>
+                    <input type="radio" v-model="selectedBrowse" value="genre" />
+                    <span>Genre → Artist → Album → Song</span>
+                  </label>
+                </p>
+              </div>
+            </div>
+            <div class="card-action flow-root">
+              <a v-on:click="applyBrowse()" :disabled="browsePending"
+                 class="waves-effect waves-light btn right">
+                Apply
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>`,
   methods: {
+    applyBrowse: async function() {
+      try {
+        this.browsePending = true;
+        await API.axios({
+          method: 'POST',
+          url: `${API.url()}/api/v1/admin/dlna/browse`,
+          data: { browse: this.selectedBrowse }
+        });
+        await ADMINDATA.getDlnaParams();
+        const labels = { dirs: 'Directory tree', artist: 'Artist → Album → Song', flat: 'Flat list', album: 'Album → Song', genre: 'Genre → Artist → Album → Song' };
+        iziToast.success({ title: `Browse mode set to: ${labels[this.selectedBrowse] || this.selectedBrowse}`, position: 'topCenter', timeout: 3500 });
+      } catch(err) {
+        iziToast.error({ title: 'Failed to update browse mode', position: 'topCenter', timeout: 3500 });
+      } finally {
+        this.browsePending = false;
+      }
+    },
     applyMode: async function() {
       const mode = this.selectedMode;
       const port = this.selectedPort;

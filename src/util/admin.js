@@ -325,6 +325,14 @@ export async function lockAdminApi(val) {
   config.program.lockAdmin = val;
 }
 
+export async function editDlnaBrowse(browse) {
+  const loadConfig = await loadFile(config.configFile);
+  if (!loadConfig.dlna) { loadConfig.dlna = {}; }
+  loadConfig.dlna.browse = browse;
+  await saveFile(loadConfig, config.configFile);
+  config.program.dlna.browse = browse;
+}
+
 export async function enableDlna(mode, port) {
   const effectivePort = port !== undefined ? port : config.program.dlna.port;
   if (mode === config.program.dlna.mode && effectivePort === config.program.dlna.port) { return; }

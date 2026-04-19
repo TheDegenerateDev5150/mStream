@@ -72,6 +72,7 @@ const dlnaOptions = Joi.object({
   name: Joi.string().default('mStream Music'),
   uuid: Joi.string().optional(),
   port: Joi.number().integer().min(1).max(65535).default(3011),
+  browse: Joi.string().valid('flat', 'dirs', 'artist', 'album', 'genre').default('dirs'),
 });
 
 const schema = Joi.object({

@@ -106,11 +106,52 @@ function didlWrapper(items) {
   xmlns:dlna="urn:schemas-dlna-org:metadata-1-0/">${items}</DIDL-Lite>`;
 }
 
-function libraryContainer(lib, parentId, trackCount) {
+function libraryContainer(lib, parentId, childCount) {
   return `
-  <container id="lib-${lib.id}" parentID="${parentId}" restricted="1" childCount="${trackCount}">
+  <container id="lib-${lib.id}" parentID="${parentId}" restricted="1" childCount="${childCount}">
     <dc:title>${xmlEscape(lib.name)}</dc:title>
     <upnp:class>object.container.storageFolder</upnp:class>
+  </container>`;
+}
+
+function dirContainer(libId, relPath, parentId, childCount) {
+  const name = relPath.split('/').pop();
+  return `
+  <container id="dir-${libId}-${encodeRelPath(relPath)}" parentID="${parentId}" restricted="1" childCount="${childCount}">
+    <dc:title>${xmlEscape(name)}</dc:title>
+    <upnp:class>object.container.storageFolder</upnp:class>
+  </container>`;
+}
+
+function artistContainer(libId, artist, parentId) {
+  return `
+  <container id="artist-${libId}-${artist.id}" parentID="${parentId}" restricted="1" childCount="${artist.album_count}">
+    <dc:title>${xmlEscape(artist.name)}</dc:title>
+    <upnp:class>object.container.person.musicArtist</upnp:class>
+  </container>`;
+}
+
+function albumContainer(libId, album, parentId) {
+  return `
+  <container id="album-${libId}-${album.id}" parentID="${parentId}" restricted="1" childCount="${album.track_count}">
+    <dc:title>${xmlEscape(album.name)}</dc:title>
+    <upnp:class>object.container.album.musicAlbum</upnp:class>
+  </container>`;
+}
+
+function genreContainer(libId, genre, parentId) {
+  return `
+  <container id="genre-${libId}-${encodeRelPath(genre.name)}" parentID="${parentId}" restricted="1" childCount="${genre.artist_count}">
+    <dc:title>${xmlEscape(genre.name)}</dc:title>
+    <upnp:class>object.container.genre.musicGenre</upnp:class>
+  </container>`;
+}
+
+function genreArtistContainer(libId, artist, parentId, genre) {
+  return `
+  <container id="gartist-${libId}-${artist.id}-${encodeRelPath(genre)}" parentID="${parentId}" restricted="1" childCount="${artist.album_count}">
+    <dc:title>${xmlEscape(artist.name)}</dc:title>
+    <upnp:class>object.container.person.musicArtist</upnp:class>
   </container>`;
 }
 
@@ -163,6 +204,170 @@ function getLibraryTracks(libraryId, start, count) {
   `).all(libraryId, limit, start);
 }
 
+function getAllLibraryTracks(libraryId) {
+  return db.getDB().prepare(`
+    SELECT t.id, t.filepath, t.title, t.track_number, t.duration, t.format,
+           t.file_size, t.genre, t.album_art_file,
+           a.name AS artist_name,
+           al.name AS album_name
+    FROM tracks t
+    LEFT JOIN artists a  ON t.artist_id = a.id
+    LEFT JOIN albums al  ON t.album_id  = al.id
+    WHERE t.library_id = ?
+    ORDER BY t.filepath
+  `).all(libraryId);
+}
+
+function getLibraryArtists(libraryId) {
+  return db.getDB().prepare(`
+    SELECT COALESCE(t.artist_id, 0) AS id,
+           COALESCE(a.name, 'Unknown Artist') AS name,
+           COUNT(DISTINCT COALESCE(t.album_id, 0)) AS album_count
+    FROM tracks t
+    LEFT JOIN artists a ON t.artist_id = a.id
+    WHERE t.library_id = ?
+    GROUP BY COALESCE(t.artist_id, 0)
+    ORDER BY COALESCE(a.name, '') COLLATE NOCASE
+  `).all(libraryId);
+}
+
+function getArtistAlbums(libraryId, artistId) {
+  if (artistId === 0) {
+    return db.getDB().prepare(`
+      SELECT COALESCE(t.album_id, 0) AS id,
+             COALESCE(al.name, 'Unknown Album') AS name,
+             COUNT(*) AS track_count
+      FROM tracks t
+      LEFT JOIN albums al ON t.album_id = al.id
+      WHERE t.library_id = ? AND t.artist_id IS NULL
+      GROUP BY COALESCE(t.album_id, 0)
+      ORDER BY COALESCE(al.name, '') COLLATE NOCASE
+    `).all(libraryId);
+  }
+  return db.getDB().prepare(`
+    SELECT COALESCE(t.album_id, 0) AS id,
+           COALESCE(al.name, 'Unknown Album') AS name,
+           COUNT(*) AS track_count
+    FROM tracks t
+    LEFT JOIN albums al ON t.album_id = al.id
+    WHERE t.library_id = ? AND t.artist_id = ?
+    GROUP BY COALESCE(t.album_id, 0)
+    ORDER BY COALESCE(al.name, '') COLLATE NOCASE
+  `).all(libraryId, artistId);
+}
+
+function getAlbumTracks(libraryId, albumId) {
+  if (albumId === 0) {
+    return db.getDB().prepare(`
+      SELECT t.id, t.filepath, t.title, t.track_number, t.duration, t.format,
+             t.file_size, t.genre, t.album_art_file,
+             a.name AS artist_name, al.name AS album_name
+      FROM tracks t
+      LEFT JOIN artists a  ON t.artist_id = a.id
+      LEFT JOIN albums  al ON t.album_id  = al.id
+      WHERE t.library_id = ? AND t.album_id IS NULL
+      ORDER BY t.disc_number, t.track_number, t.title
+    `).all(libraryId);
+  }
+  return db.getDB().prepare(`
+    SELECT t.id, t.filepath, t.title, t.track_number, t.duration, t.format,
+           t.file_size, t.genre, t.album_art_file,
+           a.name AS artist_name, al.name AS album_name
+    FROM tracks t
+    LEFT JOIN artists a  ON t.artist_id = a.id
+    LEFT JOIN albums  al ON t.album_id  = al.id
+    WHERE t.library_id = ? AND t.album_id = ?
+    ORDER BY t.disc_number, t.track_number, t.title
+  `).all(libraryId, albumId);
+}
+
+function getLibraryAlbums(libraryId) {
+  return db.getDB().prepare(`
+    SELECT COALESCE(t.album_id, 0) AS id,
+           COALESCE(al.name, 'Unknown Album') AS name,
+           COUNT(*) AS track_count
+    FROM tracks t
+    LEFT JOIN albums al ON t.album_id = al.id
+    WHERE t.library_id = ?
+    GROUP BY COALESCE(t.album_id, 0)
+    ORDER BY COALESCE(al.name, '') COLLATE NOCASE
+  `).all(libraryId);
+}
+
+function getLibraryGenres(libraryId) {
+  return db.getDB().prepare(`
+    SELECT COALESCE(genre, 'Unknown Genre') AS name,
+           COUNT(DISTINCT COALESCE(t.artist_id, 0)) AS artist_count
+    FROM tracks t
+    WHERE library_id = ?
+    GROUP BY COALESCE(genre, 'Unknown Genre')
+    ORDER BY COALESCE(genre, '') COLLATE NOCASE
+  `).all(libraryId);
+}
+
+function getGenreArtists(libraryId, genre) {
+  const isUnknown = genre === 'Unknown Genre';
+  return db.getDB().prepare(`
+    SELECT COALESCE(t.artist_id, 0) AS id,
+           COALESCE(a.name, 'Unknown Artist') AS name,
+           COUNT(DISTINCT COALESCE(t.album_id, 0)) AS album_count
+    FROM tracks t
+    LEFT JOIN artists a ON t.artist_id = a.id
+    WHERE t.library_id = ? AND ${isUnknown ? 't.genre IS NULL' : 't.genre = ?'}
+    GROUP BY COALESCE(t.artist_id, 0)
+    ORDER BY COALESCE(a.name, '') COLLATE NOCASE
+  `).all(...(isUnknown ? [libraryId] : [libraryId, genre]));
+}
+
+function getGenreArtistAlbums(libraryId, genre, artistId) {
+  const genreCond  = genre === 'Unknown Genre' ? 't.genre IS NULL'    : 't.genre = ?';
+  const artistCond = artistId === 0            ? 't.artist_id IS NULL' : 't.artist_id = ?';
+  const params = [libraryId];
+  if (genre !== 'Unknown Genre') params.push(genre);
+  if (artistId !== 0)            params.push(artistId);
+  return db.getDB().prepare(`
+    SELECT COALESCE(t.album_id, 0) AS id,
+           COALESCE(al.name, 'Unknown Album') AS name,
+           COUNT(*) AS track_count
+    FROM tracks t
+    LEFT JOIN albums al ON t.album_id = al.id
+    WHERE t.library_id = ? AND ${genreCond} AND ${artistCond}
+    GROUP BY COALESCE(t.album_id, 0)
+    ORDER BY COALESCE(al.name, '') COLLATE NOCASE
+  `).all(...params);
+}
+
+// ── Directory-tree helpers ───────────────────────────────────────────────────
+// filepath in DB is already relative to library root, forward-slash separated.
+
+function encodeRelPath(p) { return Buffer.from(p).toString('base64url'); }
+function decodeRelPath(s) { return Buffer.from(s, 'base64url').toString('utf8'); }
+
+// Returns immediate subdirectory names and direct-child track items for a given prefix.
+function dirChildren(tracks, prefix) {
+  const prefixSlash = prefix ? prefix + '/' : '';
+  const dirSet = new Set();
+  const items = [];
+  for (const t of tracks) {
+    if (prefixSlash && !t.filepath.startsWith(prefixSlash)) continue;
+    const remainder = t.filepath.slice(prefixSlash.length);
+    if (!remainder) continue;
+    const slash = remainder.indexOf('/');
+    if (slash === -1) items.push(t);
+    else dirSet.add(remainder.slice(0, slash));
+  }
+  return { dirs: [...dirSet].sort(), items };
+}
+
+function dirChildCount(tracks, prefix) {
+  const { dirs, items } = dirChildren(tracks, prefix);
+  return dirs.length + items.length;
+}
+
+function paginate(arr, start, count) {
+  return count > 0 ? arr.slice(start, start + count) : arr.slice(start);
+}
+
 // ── Browse handler ───────────────────────────────────────────────────────────
 
 const CDS_NS = 'urn:schemas-upnp-org:service:ContentDirectory:1';
@@ -185,10 +390,8 @@ function handleBrowse(body, res) {
   </container>`);
       return sendBrowseResponse(res, didl, 1, 1);
     }
-
-    // BrowseDirectChildren — list libraries with pagination
     const total = libraries.length;
-    const slice = reqCount > 0 ? libraries.slice(startIdx, startIdx + reqCount) : libraries.slice(startIdx);
+    const slice = paginate(libraries, startIdx, reqCount);
     const items = slice.map(lib => libraryContainer(lib, '0', getLibraryTrackCount(lib.id))).join('');
     return sendBrowseResponse(res, didlWrapper(items), slice.length, total);
   }
@@ -198,20 +401,151 @@ function handleBrowse(body, res) {
   if (libMatch) {
     const libId = parseInt(libMatch[1], 10);
     const lib = libraries.find(l => l.id === libId);
-    if (!lib) {
-      return sendXml(res, soapError('701', 'No Such Object'), 500);
-    }
+    if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     if (browseFlag === 'BrowseMetadata') {
       const count = getLibraryTrackCount(libId);
-      const didl = didlWrapper(libraryContainer(lib, '0', count));
-      return sendBrowseResponse(res, didl, 1, 1);
+      return sendBrowseResponse(res, didlWrapper(libraryContainer(lib, '0', count)), 1, 1);
     }
 
+    const browse = config.program.dlna.browse;
+    if (browse === 'dirs') {
+      const allTracks = getAllLibraryTracks(libId);
+      const { dirs, items } = dirChildren(allTracks, '');
+      const children = [
+        ...dirs.map(d => dirContainer(libId, d, objectId, dirChildCount(allTracks, d))),
+        ...items.map(t => trackItem(t, lib.name, objectId)),
+      ];
+      const slice = paginate(children, startIdx, reqCount);
+      return sendBrowseResponse(res, didlWrapper(slice.join('')), slice.length, children.length);
+    }
+    if (browse === 'artist') {
+      const artists = getLibraryArtists(libId);
+      const slice = paginate(artists, startIdx, reqCount);
+      return sendBrowseResponse(res, didlWrapper(slice.map(a => artistContainer(libId, a, objectId)).join('')), slice.length, artists.length);
+    }
+    if (browse === 'album') {
+      const albums = getLibraryAlbums(libId);
+      const slice = paginate(albums, startIdx, reqCount);
+      return sendBrowseResponse(res, didlWrapper(slice.map(al => albumContainer(libId, al, objectId)).join('')), slice.length, albums.length);
+    }
+    if (browse === 'genre') {
+      const genres = getLibraryGenres(libId);
+      const slice = paginate(genres, startIdx, reqCount);
+      return sendBrowseResponse(res, didlWrapper(slice.map(g => genreContainer(libId, g, objectId)).join('')), slice.length, genres.length);
+    }
+    // flat (default)
     const total = getLibraryTrackCount(libId);
     const tracks = getLibraryTracks(libId, startIdx, reqCount);
-    const items = tracks.map(t => trackItem(t, lib.name, objectId)).join('');
-    return sendBrowseResponse(res, didlWrapper(items), tracks.length, total);
+    return sendBrowseResponse(res, didlWrapper(tracks.map(t => trackItem(t, lib.name, objectId)).join('')), tracks.length, total);
+  }
+
+  // ── Directory container (dirs mode) ──────────────────────────────────────
+  const dirMatch = objectId.match(/^dir-(\d+)-(.+)$/);
+  if (dirMatch) {
+    const libId = parseInt(dirMatch[1], 10);
+    const relPath = decodeRelPath(dirMatch[2]);
+    const lib = libraries.find(l => l.id === libId);
+    if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+
+    const allTracks = getAllLibraryTracks(libId);
+    const { dirs, items } = dirChildren(allTracks, relPath);
+
+    if (browseFlag === 'BrowseMetadata') {
+      const lastSlash = relPath.lastIndexOf('/');
+      const parentRel = lastSlash === -1 ? '' : relPath.slice(0, lastSlash);
+      const parentId  = parentRel ? `dir-${libId}-${encodeRelPath(parentRel)}` : `lib-${libId}`;
+      return sendBrowseResponse(res, didlWrapper(dirContainer(libId, relPath, parentId, dirs.length + items.length)), 1, 1);
+    }
+
+    const children = [
+      ...dirs.map(d => {
+        const full = relPath + '/' + d;
+        return dirContainer(libId, full, objectId, dirChildCount(allTracks, full));
+      }),
+      ...items.map(t => trackItem(t, lib.name, objectId)),
+    ];
+    const slice = paginate(children, startIdx, reqCount);
+    return sendBrowseResponse(res, didlWrapper(slice.join('')), slice.length, children.length);
+  }
+
+  // ── Artist container (artist mode) ────────────────────────────────────────
+  const artistMatch = objectId.match(/^artist-(\d+)-(\d+)$/);
+  if (artistMatch) {
+    const libId    = parseInt(artistMatch[1], 10);
+    const artistId = parseInt(artistMatch[2], 10);
+    const lib = libraries.find(l => l.id === libId);
+    if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+
+    if (browseFlag === 'BrowseMetadata') {
+      const artist = getLibraryArtists(libId).find(a => a.id === artistId);
+      if (!artist) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+      return sendBrowseResponse(res, didlWrapper(artistContainer(libId, artist, `lib-${libId}`)), 1, 1);
+    }
+
+    const albums = getArtistAlbums(libId, artistId);
+    const slice = paginate(albums, startIdx, reqCount);
+    return sendBrowseResponse(res, didlWrapper(slice.map(al => albumContainer(libId, al, objectId)).join('')), slice.length, albums.length);
+  }
+
+  // ── Album container (artist mode) ─────────────────────────────────────────
+  const albumMatch = objectId.match(/^album-(\d+)-(\d+)$/);
+  if (albumMatch) {
+    const libId   = parseInt(albumMatch[1], 10);
+    const albumId = parseInt(albumMatch[2], 10);
+    const lib = libraries.find(l => l.id === libId);
+    if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+
+    const tracks = getAlbumTracks(libId, albumId);
+
+    if (browseFlag === 'BrowseMetadata') {
+      if (!tracks.length) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+      const album = { id: albumId, name: tracks[0].album_name || 'Unknown Album', track_count: tracks.length };
+      return sendBrowseResponse(res, didlWrapper(albumContainer(libId, album, `lib-${libId}`)), 1, 1);
+    }
+
+    const slice = paginate(tracks, startIdx, reqCount);
+    return sendBrowseResponse(res, didlWrapper(slice.map(t => trackItem(t, lib.name, objectId)).join('')), slice.length, tracks.length);
+  }
+
+  // ── Genre container (genre mode) ─────────────────────────────────────────
+  const genreMatch = objectId.match(/^genre-(\d+)-(.+)$/);
+  if (genreMatch) {
+    const libId = parseInt(genreMatch[1], 10);
+    const genre = decodeRelPath(genreMatch[2]);
+    const lib = libraries.find(l => l.id === libId);
+    if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+
+    if (browseFlag === 'BrowseMetadata') {
+      const genres = getLibraryGenres(libId);
+      const g = genres.find(x => x.name === genre);
+      if (!g) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+      return sendBrowseResponse(res, didlWrapper(genreContainer(libId, g, `lib-${libId}`)), 1, 1);
+    }
+
+    const artists = getGenreArtists(libId, genre);
+    const slice = paginate(artists, startIdx, reqCount);
+    return sendBrowseResponse(res, didlWrapper(slice.map(a => genreArtistContainer(libId, a, objectId, genre)).join('')), slice.length, artists.length);
+  }
+
+  // ── Genre-scoped artist container (genre mode) ────────────────────────────
+  const gartistMatch = objectId.match(/^gartist-(\d+)-(\d+)-(.+)$/);
+  if (gartistMatch) {
+    const libId    = parseInt(gartistMatch[1], 10);
+    const artistId = parseInt(gartistMatch[2], 10);
+    const genre    = decodeRelPath(gartistMatch[3]);
+    const lib = libraries.find(l => l.id === libId);
+    if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+
+    if (browseFlag === 'BrowseMetadata') {
+      const artist = getGenreArtists(libId, genre).find(a => a.id === artistId);
+      if (!artist) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+      return sendBrowseResponse(res, didlWrapper(genreArtistContainer(libId, artist, `genre-${libId}-${encodeRelPath(genre)}`, genre)), 1, 1);
+    }
+
+    const albums = getGenreArtistAlbums(libId, genre, artistId);
+    const slice = paginate(albums, startIdx, reqCount);
+    return sendBrowseResponse(res, didlWrapper(slice.map(al => albumContainer(libId, al, objectId)).join('')), slice.length, albums.length);
   }
 
   // ── Track item ────────────────────────────────────────────────────────────
@@ -235,8 +569,7 @@ function handleBrowse(body, res) {
     if (browseFlag === 'BrowseDirectChildren') {
       return sendBrowseResponse(res, didlWrapper(''), 0, 0);
     }
-    const didl = didlWrapper(trackItem(row, lib.name, `lib-${lib.id}`));
-    return sendBrowseResponse(res, didl, 1, 1);
+    return sendBrowseResponse(res, didlWrapper(trackItem(row, lib.name, `lib-${lib.id}`)), 1, 1);
   }
 
   sendXml(res, soapError('701', 'No Such Object'), 500);
