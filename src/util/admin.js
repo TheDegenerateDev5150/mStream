@@ -329,6 +329,8 @@ export async function enableDlna(mode, port) {
   const effectivePort = port !== undefined ? port : config.program.dlna.port;
   if (mode === config.program.dlna.mode && effectivePort === config.program.dlna.port) { return; }
 
+  const prevMode = config.program.dlna.mode;
+
   const loadConfig = await loadFile(config.configFile);
   if (!loadConfig.dlna) { loadConfig.dlna = {}; }
   loadConfig.dlna.mode = mode;
@@ -337,7 +339,14 @@ export async function enableDlna(mode, port) {
   config.program.dlna.mode = mode;
   if (port !== undefined) { config.program.dlna.port = port; }
 
-  // Stop everything, then start what the new mode requires
+  // same-port registers routes on the main Express app, which requires a full
+  // reboot — Express doesn't support adding/removing middleware dynamically.
+  if (mode === 'same-port' || prevMode === 'same-port') {
+    mStreamServer.reboot();
+    return;
+  }
+
+  // disabled ↔ separate-port: just manage SSDP and the separate server directly
   dlnaSsdp.stop();
   dlnaServer.stop();
   if (mode !== 'disabled') { dlnaSsdp.start(); }

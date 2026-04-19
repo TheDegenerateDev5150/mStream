@@ -154,13 +154,6 @@ export async function setup(configFileArg) {
   const programData = JSON.parse(await fs.readFile(configFileArg, 'utf8'));
   configFile = configFileArg;
 
-  // Migrate: dlna.enabled (boolean) → dlna.mode (string)
-  if (programData.dlna && typeof programData.dlna.enabled === 'boolean') {
-    programData.dlna.mode = programData.dlna.enabled ? 'same-port' : 'disabled';
-    delete programData.dlna.enabled;
-    await fs.writeFile(configFileArg, JSON.stringify(programData, null, 2), 'utf8');
-  }
-
   // Verify paths are real
   for (const folder in programData.folders) {
     if (!(await fs.stat(programData.folders[folder].root)).isDirectory()) {

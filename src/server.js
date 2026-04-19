@@ -183,8 +183,8 @@ export async function serveIt(configFile) {
   // Public APIs
   remoteApi.setupBeforeAuth(mstream, server);
   await sharedApi.setupBeforeSecurity(mstream);
-  // DLNA routes must be before the auth wall — DLNA clients cannot do JWT auth
-  dlnaApi.setup(mstream);
+  // DLNA routes must be before the auth wall — only needed in same-port mode
+  if (config.program.dlna.mode === 'same-port') { dlnaApi.setup(mstream); }
 
   // Everything below this line requires authentication
   authApi.setup(mstream);
