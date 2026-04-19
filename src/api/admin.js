@@ -563,6 +563,32 @@ export function setup(mstream) {
     res.json({});
   });
 
+  mstream.get('/api/v1/admin/dlna', (req, res) => {
+    res.json({
+      mode: config.program.dlna.mode,
+      port: config.program.dlna.port,
+      name: config.program.dlna.name,
+      uuid: config.program.dlna.uuid,
+    });
+  });
+
+  let dlnaDebouncer = false;
+  mstream.post('/api/v1/admin/dlna/mode', async (req, res) => {
+    const schema = Joi.object({
+      mode: Joi.string().valid('disabled', 'same-port', 'separate-port').required(),
+      port: Joi.number().integer().min(1).max(65535).optional(),
+    });
+    const input = joiValidate(schema, req.body);
+
+    if (dlnaDebouncer === true) { throw new Error('Debouncer Enabled'); }
+    await admin.enableDlna(input.value.mode, input.value.port);
+
+    dlnaDebouncer = true;
+    setTimeout(() => { dlnaDebouncer = false; }, 2000);
+
+    res.json({});
+  });
+
   mstream.post("/api/v1/admin/ssl", async (req, res) => {
     const schema = Joi.object({
       cert: Joi.string().required(),

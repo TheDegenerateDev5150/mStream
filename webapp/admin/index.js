@@ -37,6 +37,9 @@ const ADMINDATA = (() => {
   module.federationParams = {};
   module.federationParamsUpdated = { ts: 0 };
   module.federationInviteToken = { val: null };
+  // dlna
+  module.dlnaParams = {};
+  module.dlnaParamsUpdated = { ts: 0 };
 
   module.getSharedPlaylists = async () => {
     const res = await API.axios({
@@ -171,6 +174,17 @@ const ADMINDATA = (() => {
     module.federationParamsUpdated.ts = Date.now();
   }
 
+  module.getDlnaParams = async () => {
+    try {
+      const res = await API.axios({
+        method: 'GET',
+        url: `${API.url()}/api/v1/admin/dlna`
+      });
+      Object.keys(res.data).forEach(key => { module.dlnaParams[key] = res.data[key]; });
+    } catch (err) {}
+    module.dlnaParamsUpdated.ts = Date.now();
+  }
+
   module.getVersion = async () => {
     try {
       const res = await API.axios({
@@ -208,6 +222,7 @@ ADMINDATA.getUsers();
 ADMINDATA.getDbParams();
 ADMINDATA.getServerParams();
 ADMINDATA.getFederationParams();
+ADMINDATA.getDlnaParams();
 ADMINDATA.getVersion();
 ADMINDATA.getWinDrives();
 
@@ -2500,6 +2515,131 @@ const lockView = Vue.component('lock-view', {
     }
 });
 
+const dlnaView = Vue.component('dlna-view', {
+  data() {
+    return {
+      paramsTS: ADMINDATA.dlnaParamsUpdated,
+      params: ADMINDATA.dlnaParams,
+      selectedMode: 'disabled',
+      selectedPort: 3011,
+      applyPending: false,
+    };
+  },
+  watch: {
+    'paramsTS.ts': {
+      immediate: true,
+      handler: function() {
+        this.selectedMode = this.params.mode || 'disabled';
+        this.selectedPort = this.params.port || 3011;
+      }
+    }
+  },
+  template: `
+    <div v-if="paramsTS.ts === 0" class="row">
+      <svg class="spinner" width="65px" height="65px" viewBox="0 0 66 66" xmlns="http://www.w3.org/2000/svg"><circle class="spinner-path" fill="none" stroke-width="6" stroke-linecap="round" cx="33" cy="33" r="30"></circle></svg>
+    </div>
+    <div v-else class="container">
+      <div class="row" style="margin-top:24px">
+        <div class="col s12">
+          <div class="card">
+            <div class="card-content">
+              <span class="card-title">DLNA Media Server</span>
+              <p>DLNA lets smart TVs, receivers, and other devices on your local network discover and play music from mStream without needing to log in.</p>
+              <div style="margin-top:16px">
+                <p><b>Current mode:</b> {{params.mode || 'disabled'}}</p>
+                <p v-if="params.mode !== 'disabled'"><b>Server name:</b> {{params.name}}</p>
+                <p v-if="params.mode !== 'disabled'"><b>UUID:</b> {{params.uuid}}</p>
+                <p v-if="params.mode === 'separate-port'"><b>DLNA port:</b> {{params.port}}</p>
+              </div>
+              <div style="margin-top:20px">
+                <p><b>Change mode:</b></p>
+                <p>
+                  <label style="margin-right:20px">
+                    <input type="radio" v-model="selectedMode" value="disabled" />
+                    <span>Disabled</span>
+                  </label>
+                  <label style="margin-right:20px">
+                    <input type="radio" v-model="selectedMode" value="same-port" />
+                    <span>Same port as mStream</span>
+                  </label>
+                  <label>
+                    <input type="radio" v-model="selectedMode" value="separate-port" />
+                    <span>Separate port (recommended)</span>
+                  </label>
+                </p>
+                <div v-if="selectedMode === 'separate-port'" style="margin-top:12px">
+                  <div class="input-field" style="max-width:200px">
+                    <input id="dlna-port" type="number" v-model.number="selectedPort" min="1" max="65535" />
+                    <label for="dlna-port" class="active">DLNA Port</label>
+                  </div>
+                </div>
+              </div>
+              <div v-if="selectedMode !== 'disabled'" class="card-panel orange lighten-4" style="margin-top:16px">
+                <p><b>Security notice:</b> DLNA exposes your music library to anyone on the local network without authentication.</p>
+                <p v-if="selectedMode === 'same-port'" style="margin-top:8px"><b>Note:</b> In same-port mode, media streaming may be blocked for password-protected libraries. Use separate-port mode for full compatibility.</p>
+                <p v-if="selectedMode === 'same-port'" style="margin-top:8px"><b>HTTPS notice:</b> DLNA is not compatible with self-signed HTTPS certificates. Most DLNA renderers will refuse the connection.</p>
+              </div>
+            </div>
+            <div class="card-action flow-root">
+              <a v-on:click="applyMode()" :disabled="applyPending"
+                 class="waves-effect waves-light btn right">
+                Apply
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>`,
+  methods: {
+    applyMode: async function() {
+      const mode = this.selectedMode;
+      const port = this.selectedPort;
+      const modeLabels = { disabled: 'Disabled', 'same-port': 'Same Port', 'separate-port': 'Separate Port' };
+      iziToast.question({
+        timeout: 20000,
+        close: false,
+        overlayClose: true,
+        overlay: true,
+        displayMode: 'once',
+        id: 'dlna-question',
+        zindex: 99999,
+        layout: 2,
+        maxWidth: 600,
+        title: `Set DLNA mode to "${modeLabels[mode] || mode}"?`,
+        position: 'center',
+        buttons: [
+          [`<button><b>Apply</b></button>`, async (instance, toast) => {
+            try {
+              this.applyPending = true;
+              const data = { mode };
+              if (mode === 'separate-port') { data.port = port; }
+              await API.axios({
+                method: 'POST',
+                url: `${API.url()}/api/v1/admin/dlna/mode`,
+                data
+              });
+              await ADMINDATA.getDlnaParams();
+              instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
+              iziToast.success({
+                title: `DLNA mode set to ${modeLabels[mode] || mode}`,
+                position: 'topCenter',
+                timeout: 3500
+              });
+            } catch(err) {
+              iziToast.error({ title: 'Failed to update DLNA setting', position: 'topCenter', timeout: 3500 });
+            } finally {
+              this.applyPending = false;
+            }
+          }, true],
+          [`<button>Cancel</button>`, (instance, toast) => {
+            instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
+          }],
+        ]
+      });
+    }
+  }
+});
+
 const vm = new Vue({
   el: '#content',
   components: {
@@ -2510,6 +2650,7 @@ const vm = new Vue({
     'info-view': infoView,
     'transcode-view': transcodeView,
     'federation-view': federationView,
+    'dlna-view': dlnaView,
     'logs-view': logsView,
     'rpn-view': rpnView,
     'lock-view': lockView,

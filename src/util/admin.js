@@ -9,6 +9,8 @@ import * as dbQueue from '../db/task-queue.js';
 import * as logger from '../logger.js';
 import * as db from '../db/manager.js';
 import * as syncthing from '../state/syncthing.js';
+import * as dlnaSsdp from '../dlna/ssdp.js';
+import * as dlnaServer from '../dlna/dlna-server.js';
 import { getDirname } from './esm-helpers.js';
 
 const __dirname = getDirname(import.meta.url);
@@ -321,6 +323,34 @@ export async function lockAdminApi(val) {
   loadConfig.lockAdmin = val;
   await saveFile(loadConfig, config.configFile);
   config.program.lockAdmin = val;
+}
+
+export async function enableDlna(mode, port) {
+  const effectivePort = port !== undefined ? port : config.program.dlna.port;
+  if (mode === config.program.dlna.mode && effectivePort === config.program.dlna.port) { return; }
+
+  const prevMode = config.program.dlna.mode;
+
+  const loadConfig = await loadFile(config.configFile);
+  if (!loadConfig.dlna) { loadConfig.dlna = {}; }
+  loadConfig.dlna.mode = mode;
+  if (port !== undefined) { loadConfig.dlna.port = port; }
+  await saveFile(loadConfig, config.configFile);
+  config.program.dlna.mode = mode;
+  if (port !== undefined) { config.program.dlna.port = port; }
+
+  // same-port registers routes on the main Express app, which requires a full
+  // reboot — Express doesn't support adding/removing middleware dynamically.
+  if (mode === 'same-port' || prevMode === 'same-port') {
+    mStreamServer.reboot();
+    return;
+  }
+
+  // disabled ↔ separate-port: just manage SSDP and the separate server directly
+  dlnaSsdp.stop();
+  dlnaServer.stop();
+  if (mode !== 'disabled') { dlnaSsdp.start(); }
+  if (mode === 'separate-port') { dlnaServer.start(); }
 }
 
 export async function enableFederation(val) {
