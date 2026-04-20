@@ -6,6 +6,7 @@ import * as config from '../state/config.js';
 import * as db from '../db/manager.js';
 import * as dlnaApi from '../api/dlna.js';
 import { serveAlbumArtFile } from '../api/album-art.js';
+import { timeSeekMiddleware } from './time-seek.js';
 
 let dlnaServer = null;
 
@@ -13,6 +14,10 @@ export function start() {
   if (dlnaServer) { return; }
 
   const app = express();
+
+  // Time-seek (TimeSeekRange.dlna.org) handler runs first; it calls next()
+  // when the client is making a plain byte-range request.
+  app.use('/media', timeSeekMiddleware);
 
   // Serve media files directly from library roots — no auth, no static mount.
   // Reads library list from DB at request time so additions/removals are live.

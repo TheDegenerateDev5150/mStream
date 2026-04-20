@@ -6,6 +6,7 @@ import winston from 'winston';
 import * as config from '../state/config.js';
 import * as db from '../db/manager.js';
 import { getBaseUrl } from '../dlna/ssdp.js';
+import { timeSeekMiddleware } from '../dlna/time-seek.js';
 
 // ── Mutable state ────────────────────────────────────────────────────────────
 
@@ -17,11 +18,30 @@ let systemUpdateID = 1;
 // to, its callback URLs, expiry, and a per-subscription event sequence number.
 const subscribers = new Map();
 
+// Hard upper bound on RequestedCount for Browse/Search. DIDL responses grow
+// roughly linearly in number of items; this keeps a single response from
+// consuming excessive memory (~5MB at 512 bytes/item and this cap).
+const MAX_BROWSE_COUNT = 10000;
+
+// Hard cap on concurrent GENA subscribers. Each entry is tiny but we still
+// don't want a malicious client to grow the Map without bound by SUBSCRIBEing
+// repeatedly without UNSUBSCRIBEing.
+const MAX_SUBSCRIBERS = 256;
+
+// Build a Map<library_id, library> for O(1) lookups inside track loops.
+function libraryIndex(libraries) {
+  const m = new Map();
+  for (const lib of libraries) { m.set(lib.id, lib); }
+  return m;
+}
+
 // ── XML / SOAP helpers ───────────────────────────────────────────────────────
 
 // Characters forbidden in XML 1.0 content: C0 control chars except TAB, LF, CR.
 // Sloppy ID3 tags sometimes include stray bytes here; stripping them keeps the
-// DIDL well-formed for strict renderers.
+// DIDL well-formed for strict renderers. Control chars in the regex are
+// intentional (that's what we're filtering).
+// eslint-disable-next-line no-control-regex
 const XML_INVALID_CTRL = /[\x00-\x08\x0B\x0C\x0E-\x1F]/g;
 
 function xmlEscape(str) {
@@ -35,9 +55,20 @@ function xmlEscape(str) {
     .replace(/'/g, '&apos;');
 }
 
+// Reverse of xmlEscape — converts XML entities back to raw characters so
+// field values (especially SearchCriteria) reflect what the client meant.
+function xmlUnescape(str) {
+  return str
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
 function extractSoapField(body, field) {
   const m = body.match(new RegExp(`<(?:[^:>]+:)?${field}[^>]*>([\\s\\S]*?)<\\/(?:[^:>]+:)?${field}>`, 'i'));
-  return m ? m[1].trim() : '';
+  return m ? xmlUnescape(m[1].trim()) : '';
 }
 
 function soapEnvelope(serviceNs, actionName, innerXml) {
@@ -109,7 +140,10 @@ const DLNA_FLAGS = '01500000000000000000000000000000';
 
 function protocolInfo(format) {
   const info = MIME_MAP[(format || '').toLowerCase()] || DEFAULT_MIME;
-  const parts = ['DLNA.ORG_OP=01', 'DLNA.ORG_CI=0', `DLNA.ORG_FLAGS=${DLNA_FLAGS}`];
+  // DLNA.ORG_OP=11: bit 0 (range/byte-seek) + bit 1 (time-seek) both set.
+  // Byte-seek is served by express.static; time-seek via the TimeSeekRange
+  // middleware that transcodes from the requested offset using ffmpeg.
+  const parts = ['DLNA.ORG_OP=11', 'DLNA.ORG_CI=0', `DLNA.ORG_FLAGS=${DLNA_FLAGS}`];
   if (info.dlnaProfile) { parts.unshift(`DLNA.ORG_PN=${info.dlnaProfile}`); }
   return `http-get:*:${info.mime}:${parts.join(';')}`;
 }
@@ -205,30 +239,32 @@ function recentContainer(parentId, childCount) {
   </container>`;
 }
 
-// Standard DLNA-style multi-view layout: each library exposes five sibling
-// sub-containers (Folders, Artists, Albums, Genres, All Tracks) simultaneously.
-// The `dlna.browse` config picks which one is listed first — clients that
-// auto-drill into the first child respect the user's preference.
+// Standard DLNA-style multi-view layout: each library exposes six sibling
+// sub-containers (Folders, Artists, Album Artists, Albums, Genres, All Tracks)
+// simultaneously. The `dlna.browse` config picks which one is listed first —
+// clients that auto-drill into the first child respect the user's preference.
 const VIEW_ORDER_BY_MODE = {
-  dirs:   ['folders', 'artists', 'albums', 'genres', 'tracks'],
-  artist: ['artists', 'albums', 'genres', 'folders', 'tracks'],
-  album:  ['albums', 'artists', 'genres', 'folders', 'tracks'],
-  genre:  ['genres', 'artists', 'albums', 'folders', 'tracks'],
-  flat:   ['tracks', 'folders', 'artists', 'albums', 'genres'],
+  dirs:   ['folders', 'artists', 'albumartists', 'albums', 'genres', 'tracks'],
+  artist: ['artists', 'albumartists', 'albums', 'genres', 'folders', 'tracks'],
+  album:  ['albums', 'albumartists', 'artists', 'genres', 'folders', 'tracks'],
+  genre:  ['genres', 'artists', 'albumartists', 'albums', 'folders', 'tracks'],
+  flat:   ['tracks', 'folders', 'artists', 'albumartists', 'albums', 'genres'],
 };
 const VIEW_TITLES = {
-  folders: 'Folders',
-  artists: 'Artists',
-  albums:  'Albums',
-  genres:  'Genres',
-  tracks:  'All Tracks',
+  folders:      'Folders',
+  artists:      'Artists',
+  albumartists: 'Album Artists',
+  albums:       'Albums',
+  genres:       'Genres',
+  tracks:       'All Tracks',
 };
 const VIEW_UPNP_CLASS = {
-  folders: 'object.container.storageFolder',
-  artists: 'object.container',
-  albums:  'object.container',
-  genres:  'object.container',
-  tracks:  'object.container',
+  folders:      'object.container.storageFolder',
+  artists:      'object.container',
+  albumartists: 'object.container',
+  albums:       'object.container',
+  genres:       'object.container',
+  tracks:       'object.container',
 };
 
 function viewContainer(libId, view, childCount) {
@@ -247,13 +283,34 @@ function libraryViewContainers(libId) {
   const allTracks = getAllLibraryTracks(libId);
   const { dirs: rootDirs, items: rootItems } = dirChildren(allTracks, '');
   const counts = {
-    folders: rootDirs.length + rootItems.length,
-    artists: getLibraryArtists(libId).length,
-    albums:  getLibraryAlbums(libId).length,
-    genres:  getLibraryGenres(libId).length,
-    tracks:  allTracks.length,
+    folders:      rootDirs.length + rootItems.length,
+    artists:      getLibraryArtists(libId).length,
+    albumartists: getLibraryAlbumArtists(libId).length,
+    albums:       getLibraryAlbums(libId).length,
+    genres:       getLibraryGenres(libId).length,
+    tracks:       allTracks.length,
   };
   return order.map(v => viewContainer(libId, v, counts[v]));
+}
+
+// ── Music root & smart containers ────────────────────────────────────────────
+
+const SMART_LIMIT = 200;
+
+function simpleContainer(id, parentId, title, childCount, cls = 'object.container') {
+  return `
+  <container id="${xmlEscape(id)}" parentID="${xmlEscape(parentId)}" restricted="1" childCount="${childCount}">
+    <dc:title>${xmlEscape(title)}</dc:title>
+    <upnp:class>${cls}</upnp:class>
+  </container>`;
+}
+
+function yearContainer(year, childCount) {
+  return `
+  <container id="year-${year}" parentID="years" restricted="1" childCount="${childCount}">
+    <dc:title>${year}</dc:title>
+    <upnp:class>object.container</upnp:class>
+  </container>`;
 }
 
 function trackItem(track, libName, parentId) {
@@ -269,12 +326,18 @@ function trackItem(track, libName, parentId) {
   const durationAttr = duration ? ` duration="${duration}"` : '';
   const sizeAttr = track.file_size ? ` size="${track.file_size}"` : '';
 
+  // dc:date: renderers use this for display and sort-by-date. upnp:originalYear
+  // is the Samsung/LG variant that a few clients prefer — emitting both is safe.
+  const yearXml = track.year
+    ? `\n    <dc:date>${track.year}-01-01</dc:date>\n    <upnp:originalYear>${track.year}</upnp:originalYear>`
+    : '';
+
   return `
   <item id="track-${track.id}" parentID="${xmlEscape(parentId)}" restricted="1">
     <dc:title>${xmlEscape(track.title || path.basename(track.filepath))}</dc:title>
     <dc:creator>${xmlEscape(track.artist_name)}</dc:creator>
     <upnp:artist>${xmlEscape(track.artist_name)}</upnp:artist>
-    <upnp:album>${xmlEscape(track.album_name)}</upnp:album>${track.track_number ? `\n    <upnp:originalTrackNumber>${track.track_number}</upnp:originalTrackNumber>` : ''}${track.genre ? `\n    <upnp:genre>${xmlEscape(track.genre)}</upnp:genre>` : ''}${artXml}
+    <upnp:album>${xmlEscape(track.album_name)}</upnp:album>${track.track_number ? `\n    <upnp:originalTrackNumber>${track.track_number}</upnp:originalTrackNumber>` : ''}${track.genre ? `\n    <upnp:genre>${xmlEscape(track.genre)}</upnp:genre>` : ''}${yearXml}${artXml}
     <upnp:class>object.item.audioItem.musicTrack</upnp:class>
     <res protocolInfo="${xmlEscape(protocolInfo(track.format))}"${durationAttr}${sizeAttr}>${xmlEscape(mediaUrl)}</res>
   </item>`;
@@ -293,7 +356,7 @@ function getLibraryTracks(libraryId, start, count, orderBy = 'al.name, t.disc_nu
   const limit = count > 0 ? count : -1; // SQLite: -1 = no limit
   return db.getDB().prepare(`
     SELECT t.id, t.filepath, t.title, t.track_number, t.duration, t.format,
-           t.file_size, t.genre, t.album_art_file,
+           t.file_size, t.genre, t.album_art_file, t.year,
            a.name AS artist_name,
            al.name AS album_name
     FROM tracks t
@@ -308,7 +371,7 @@ function getLibraryTracks(libraryId, start, count, orderBy = 'al.name, t.disc_nu
 function getAllLibraryTracks(libraryId) {
   return db.getDB().prepare(`
     SELECT t.id, t.filepath, t.title, t.track_number, t.duration, t.format,
-           t.file_size, t.genre, t.album_art_file,
+           t.file_size, t.genre, t.album_art_file, t.year,
            a.name AS artist_name,
            al.name AS album_name
     FROM tracks t
@@ -386,7 +449,7 @@ function getAlbumTracks(libraryId, albumId) {
   if (albumId === 0) {
     return db.getDB().prepare(`
       SELECT t.id, t.filepath, t.title, t.track_number, t.duration, t.format,
-             t.file_size, t.genre, t.album_art_file,
+             t.file_size, t.genre, t.album_art_file, t.year,
              a.name AS artist_name, al.name AS album_name
       FROM tracks t
       LEFT JOIN artists a  ON t.artist_id = a.id
@@ -397,7 +460,7 @@ function getAlbumTracks(libraryId, albumId) {
   }
   return db.getDB().prepare(`
     SELECT t.id, t.filepath, t.title, t.track_number, t.duration, t.format,
-           t.file_size, t.genre, t.album_art_file,
+           t.file_size, t.genre, t.album_art_file, t.year,
            a.name AS artist_name, al.name AS album_name
     FROM tracks t
     LEFT JOIN artists a  ON t.artist_id = a.id
@@ -505,6 +568,196 @@ function getGenreArtistAlbums(libraryId, genre, artistId) {
   `).all(...params);
 }
 
+// ── Album-artist queries ────────────────────────────────────────────────────
+// Uses albums.artist_id (the album-level artist) rather than tracks.artist_id,
+// so compilation albums don't explode into dozens of single-album entries.
+
+function getLibraryAlbumArtists(libraryId) {
+  return db.getDB().prepare(`
+    SELECT COALESCE(a.id, 0) AS id,
+           COALESCE(a.name, 'Unknown Artist') AS name,
+           COUNT(DISTINCT al.id) AS album_count,
+           MIN(al.album_art_file) AS album_art_file
+    FROM albums al
+    LEFT JOIN artists a ON al.artist_id = a.id
+    WHERE EXISTS (SELECT 1 FROM tracks t WHERE t.album_id = al.id AND t.library_id = ?)
+    GROUP BY COALESCE(a.id, 0)
+    ORDER BY COALESCE(a.name, '') COLLATE NOCASE
+  `).all(libraryId);
+}
+
+function getAlbumArtistById(libraryId, artistId) {
+  const row = db.getDB().prepare(`
+    SELECT COALESCE(a.id, 0) AS id,
+           COALESCE(a.name, 'Unknown Artist') AS name,
+           COUNT(DISTINCT al.id) AS album_count,
+           MIN(al.album_art_file) AS album_art_file,
+           COUNT(*) AS _n
+    FROM albums al
+    LEFT JOIN artists a ON al.artist_id = a.id
+    WHERE EXISTS (SELECT 1 FROM tracks t WHERE t.album_id = al.id AND t.library_id = ?)
+      AND COALESCE(al.artist_id, 0) = ?
+  `).get(libraryId, artistId);
+  if (!row || row._n === 0) return null;
+  delete row._n;
+  return row;
+}
+
+function getAlbumArtistAlbums(libraryId, artistId) {
+  return db.getDB().prepare(`
+    SELECT al.id,
+           COALESCE(al.name, 'Unknown Album') AS name,
+           COUNT(t.id) AS track_count,
+           COALESCE(al.album_art_file, MIN(t.album_art_file)) AS album_art_file
+    FROM albums al
+    JOIN tracks t ON t.album_id = al.id
+    WHERE t.library_id = ? AND COALESCE(al.artist_id, 0) = ?
+    GROUP BY al.id
+    ORDER BY al.year, COALESCE(al.name, '') COLLATE NOCASE
+  `).all(libraryId, artistId);
+}
+
+// ── Smart-container queries ─────────────────────────────────────────────────
+// These aggregate across all users/libraries since DLNA has no auth context.
+
+const SMART_TRACK_COLS = `
+  t.id, t.filepath, t.title, t.track_number, t.duration, t.format,
+  t.file_size, t.genre, t.album_art_file, t.year, t.library_id,
+  a.name AS artist_name, al.name AS album_name
+`;
+
+function getRecentPlayedCount() {
+  const row = db.getDB().prepare(`
+    SELECT COUNT(DISTINCT t.id) AS n
+    FROM tracks t
+    JOIN user_metadata um ON um.track_hash = t.file_hash
+    WHERE um.last_played IS NOT NULL
+  `).get();
+  return Math.min(row?.n || 0, SMART_LIMIT);
+}
+
+function getRecentPlayedTracks(start, count) {
+  const available = Math.max(0, SMART_LIMIT - start);
+  const limit = count > 0 ? Math.min(count, available) : available;
+  if (limit <= 0) return [];
+  return db.getDB().prepare(`
+    SELECT ${SMART_TRACK_COLS}, MAX(um.last_played) AS sort_key
+    FROM tracks t
+    JOIN user_metadata um ON um.track_hash = t.file_hash
+    LEFT JOIN artists a  ON t.artist_id = a.id
+    LEFT JOIN albums  al ON t.album_id  = al.id
+    WHERE um.last_played IS NOT NULL
+    GROUP BY t.id
+    ORDER BY sort_key DESC
+    LIMIT ? OFFSET ?
+  `).all(limit, start);
+}
+
+function getMostPlayedCount() {
+  const row = db.getDB().prepare(`
+    SELECT COUNT(*) AS n FROM (
+      SELECT t.id FROM tracks t
+      JOIN user_metadata um ON um.track_hash = t.file_hash
+      GROUP BY t.id
+      HAVING SUM(um.play_count) > 0
+    )
+  `).get();
+  return Math.min(row?.n || 0, SMART_LIMIT);
+}
+
+function getMostPlayedTracks(start, count) {
+  const available = Math.max(0, SMART_LIMIT - start);
+  const limit = count > 0 ? Math.min(count, available) : available;
+  if (limit <= 0) return [];
+  return db.getDB().prepare(`
+    SELECT ${SMART_TRACK_COLS}, SUM(um.play_count) AS total_plays
+    FROM tracks t
+    JOIN user_metadata um ON um.track_hash = t.file_hash
+    LEFT JOIN artists a  ON t.artist_id = a.id
+    LEFT JOIN albums  al ON t.album_id  = al.id
+    GROUP BY t.id
+    HAVING total_plays > 0
+    ORDER BY total_plays DESC, t.title
+    LIMIT ? OFFSET ?
+  `).all(limit, start);
+}
+
+function getFavoriteCount() {
+  const row = db.getDB().prepare(`
+    SELECT COUNT(*) AS n FROM (
+      SELECT t.id FROM tracks t
+      JOIN user_metadata um ON um.track_hash = t.file_hash
+      GROUP BY t.id
+      HAVING MAX(um.rating) >= 4
+    )
+  `).get();
+  return row?.n || 0;
+}
+
+function getFavoriteTracks(start, count) {
+  const limit = count > 0 ? count : -1;
+  return db.getDB().prepare(`
+    SELECT ${SMART_TRACK_COLS}, MAX(um.rating) AS top_rating
+    FROM tracks t
+    JOIN user_metadata um ON um.track_hash = t.file_hash
+    LEFT JOIN artists a  ON t.artist_id = a.id
+    LEFT JOIN albums  al ON t.album_id  = al.id
+    GROUP BY t.id
+    HAVING top_rating >= 4
+    ORDER BY top_rating DESC, a.name, al.name, t.disc_number, t.track_number
+    LIMIT ? OFFSET ?
+  `).all(limit, start);
+}
+
+function getShuffleCount() {
+  const row = db.getDB().prepare('SELECT COUNT(*) AS n FROM tracks').get();
+  return Math.min(row?.n || 0, SMART_LIMIT);
+}
+
+// Shuffle is re-rolled per request — no pagination semantics beyond "give me a
+// random N tracks". Clients that browse page 2 get a different random slice;
+// DLNA renderers typically ask for all at once with RequestedCount=0 so this
+// works out in practice.
+function getShuffleTracks(count) {
+  const limit = Math.min(count > 0 ? count : SMART_LIMIT, SMART_LIMIT);
+  return db.getDB().prepare(`
+    SELECT ${SMART_TRACK_COLS}
+    FROM tracks t
+    LEFT JOIN artists a  ON t.artist_id = a.id
+    LEFT JOIN albums  al ON t.album_id  = al.id
+    ORDER BY RANDOM()
+    LIMIT ?
+  `).all(limit);
+}
+
+function getYears() {
+  return db.getDB().prepare(`
+    SELECT t.year AS year, COUNT(*) AS track_count
+    FROM tracks t
+    WHERE t.year IS NOT NULL AND t.year > 0
+    GROUP BY t.year
+    ORDER BY t.year DESC
+  `).all();
+}
+
+function getYearTrackCount(year) {
+  const row = db.getDB().prepare('SELECT COUNT(*) AS n FROM tracks WHERE year = ?').get(year);
+  return row?.n || 0;
+}
+
+function getYearTracks(year, start, count) {
+  const limit = count > 0 ? count : -1;
+  return db.getDB().prepare(`
+    SELECT ${SMART_TRACK_COLS}
+    FROM tracks t
+    LEFT JOIN artists a  ON t.artist_id = a.id
+    LEFT JOIN albums  al ON t.album_id  = al.id
+    WHERE t.year = ?
+    ORDER BY a.name COLLATE NOCASE, al.name COLLATE NOCASE, t.disc_number, t.track_number, t.title
+    LIMIT ? OFFSET ?
+  `).all(year, limit, start);
+}
+
 function getAllPlaylists() {
   return db.getDB().prepare(`
     SELECT p.id, p.name, u.username, COUNT(pt.id) AS track_count
@@ -535,7 +788,7 @@ function getPlaylistTracks(playlistId) {
                 THEN SUBSTR(pt.filepath, INSTR(pt.filepath, '/') + 1)
                 ELSE '' END AS rel_filepath,
            t.title, t.track_number, t.duration, t.format, t.file_size,
-           t.genre, t.album_art_file,
+           t.genre, t.album_art_file, t.year,
            a.name AS artist_name, al.name AS album_name,
            l.name AS library_name
     FROM playlist_tracks pt
@@ -565,7 +818,7 @@ function getRecentTracks(start, count) {
   if (limit <= 0) return [];
   return db.getDB().prepare(`
     SELECT t.id, t.filepath, t.title, t.track_number, t.duration, t.format,
-           t.file_size, t.genre, t.album_art_file, t.library_id,
+           t.file_size, t.genre, t.album_art_file, t.year, t.library_id,
            a.name AS artist_name, al.name AS album_name
     FROM tracks t
     LEFT JOIN artists a  ON t.artist_id = a.id
@@ -617,6 +870,11 @@ const SORT_PROP_MAP = {
   'upnp:album':               'al.name',
   'upnp:originalTrackNumber': 't.track_number',
   'upnp:genre':               't.genre',
+  'dc:date':                  't.year',
+  'upnp:originalYear':        't.year',
+  'res@duration':             't.duration',
+  'res@size':                 't.file_size',
+  '@refID':                   't.id',
 };
 
 function parseSortCriteria(sortStr) {
@@ -645,31 +903,53 @@ function handleBrowse(body, res) {
   const objectId   = extractSoapField(body, 'ObjectID');
   const browseFlag = extractSoapField(body, 'BrowseFlag');
   const startIdx   = Math.max(0, parseInt(extractSoapField(body, 'StartingIndex') || '0', 10) || 0);
-  const reqCount   = Math.max(0, parseInt(extractSoapField(body, 'RequestedCount') || '0', 10) || 0);
+  // UPnP: RequestedCount=0 means "as many as the server wants to return".
+  // We treat that as MAX_BROWSE_COUNT so one request can't generate an
+  // unbounded response. Explicit counts are likewise capped.
+  const rawCount   = Math.max(0, parseInt(extractSoapField(body, 'RequestedCount') || '0', 10) || 0);
+  const reqCount   = rawCount === 0 ? MAX_BROWSE_COUNT : Math.min(rawCount, MAX_BROWSE_COUNT);
   const sortTerms  = parseSortCriteria(extractSoapField(body, 'SortCriteria'));
 
   const libraries = db.getAllLibraries();
+  const libById = libraryIndex(libraries);
 
-  // ── Root container ────────────────────────────────────────────────────────
+  // ── Root container — wraps everything in a single "Music" child ──────────
+  // Matches the layout of MiniDLNA / Plex / Jellyfin: renderers expect a
+  // top-level category folder, not libraries scattered at root.
   if (objectId === '0') {
-    const playlists = getAllPlaylists();
-    const recentCount = getRecentCount();
-    const rootTotal = libraries.length + 2; // + Playlists + Recently Added
     if (browseFlag === 'BrowseMetadata') {
       const didl = didlWrapper(`
-  <container id="0" parentID="-1" restricted="1" childCount="${rootTotal}">
+  <container id="0" parentID="-1" restricted="1" childCount="1">
     <dc:title>${xmlEscape(config.program.dlna.name)}</dc:title>
     <upnp:class>object.container</upnp:class>
   </container>`);
       return sendBrowseResponse(res, didl, 1, 1);
     }
-    const rootChildren = [
-      ...libraries.map(lib => libraryContainer(lib, '0', getLibraryTrackCount(lib.id))),
-      recentContainer('0', recentCount),
-      playlistsContainer('0', playlists.length),
+    const music = simpleContainer('music', '0', 'Music', libraries.length + 7);
+    const slice = paginate([music], startIdx, reqCount);
+    return sendBrowseResponse(res, didlWrapper(slice.join('')), slice.length, 1);
+  }
+
+  // ── Music container — libraries + virtual "Recently Added/Played/..." ────
+  if (objectId === 'music') {
+    // N libraries + 7 fixed virtual containers (Recently Added, Recently
+    // Played, Most Played, Favorites, Shuffle, By Year, Playlists).
+    const musicTotal = libraries.length + 7;
+    if (browseFlag === 'BrowseMetadata') {
+      return sendBrowseResponse(res, didlWrapper(simpleContainer('music', '0', 'Music', musicTotal)), 1, 1);
+    }
+    const musicChildren = [
+      ...libraries.map(lib => libraryContainer(lib, 'music', getLibraryTrackCount(lib.id))),
+      recentContainer('music', getRecentCount()),
+      simpleContainer('recentplayed', 'music', 'Recently Played', getRecentPlayedCount()),
+      simpleContainer('mostplayed',   'music', 'Most Played',     getMostPlayedCount()),
+      simpleContainer('favorites',    'music', 'Favorites',       getFavoriteCount()),
+      simpleContainer('shuffle',      'music', 'Shuffle',         getShuffleCount()),
+      simpleContainer('years',        'music', 'By Year',         getYears().length),
+      playlistsContainer('music', getAllPlaylists().length),
     ];
-    const slice = paginate(rootChildren, startIdx, reqCount);
-    return sendBrowseResponse(res, didlWrapper(slice.join('')), slice.length, rootTotal);
+    const slice = paginate(musicChildren, startIdx, reqCount);
+    return sendBrowseResponse(res, didlWrapper(slice.join('')), slice.length, musicTotal);
   }
 
   // ── Samsung BASICVIEW audio root ──────────────────────────────────────────
@@ -693,7 +973,7 @@ function handleBrowse(body, res) {
   if (objectId === 'playlists') {
     const playlists = getAllPlaylists();
     if (browseFlag === 'BrowseMetadata') {
-      return sendBrowseResponse(res, didlWrapper(playlistsContainer('0', playlists.length)), 1, 1);
+      return sendBrowseResponse(res, didlWrapper(playlistsContainer('music', playlists.length)), 1, 1);
     }
     const slice = paginate(playlists, startIdx, reqCount);
     return sendBrowseResponse(res, didlWrapper(slice.map(p => playlistContainer(p, 'playlists')).join('')), slice.length, playlists.length);
@@ -703,25 +983,71 @@ function handleBrowse(body, res) {
   if (objectId === 'recent') {
     const totalRecent = getRecentCount();
     if (browseFlag === 'BrowseMetadata') {
-      return sendBrowseResponse(res, didlWrapper(recentContainer('0', totalRecent)), 1, 1);
+      return sendBrowseResponse(res, didlWrapper(recentContainer('music', totalRecent)), 1, 1);
     }
     const tracks = getRecentTracks(startIdx, reqCount);
     const items = tracks.map(t => {
-      const lib = libraries.find(l => l.id === t.library_id);
+      const lib = libById.get(t.library_id);
       return lib ? trackItem(t, lib.name, 'recent') : '';
     }).filter(Boolean);
     return sendBrowseResponse(res, didlWrapper(items.join('')), items.length, totalRecent);
   }
 
-  // ── Library container — lists the five view sub-containers ───────────────
+  // ── Smart containers under Music ─────────────────────────────────────────
+
+  function smartTrackHandler(id, title, getTotal, getRows) {
+    const total = getTotal();
+    if (browseFlag === 'BrowseMetadata') {
+      return sendBrowseResponse(res, didlWrapper(simpleContainer(id, 'music', title, total)), 1, 1);
+    }
+    const rows = getRows(startIdx, reqCount);
+    const items = rows.map(t => {
+      const lib = libById.get(t.library_id);
+      return lib ? trackItem(t, lib.name, id) : '';
+    }).filter(Boolean);
+    return sendBrowseResponse(res, didlWrapper(items.join('')), items.length, total);
+  }
+
+  if (objectId === 'recentplayed') { return smartTrackHandler('recentplayed', 'Recently Played', getRecentPlayedCount, getRecentPlayedTracks); }
+  if (objectId === 'mostplayed')   { return smartTrackHandler('mostplayed',   'Most Played',     getMostPlayedCount,   getMostPlayedTracks); }
+  if (objectId === 'favorites')    { return smartTrackHandler('favorites',    'Favorites',       getFavoriteCount,     getFavoriteTracks); }
+  if (objectId === 'shuffle')      { return smartTrackHandler('shuffle',      'Shuffle',         getShuffleCount,      (s, c) => getShuffleTracks(c || SMART_LIMIT)); }
+
+  // ── Years index and per-year track list ─────────────────────────────────
+  if (objectId === 'years') {
+    const years = getYears();
+    if (browseFlag === 'BrowseMetadata') {
+      return sendBrowseResponse(res, didlWrapper(simpleContainer('years', 'music', 'By Year', years.length)), 1, 1);
+    }
+    const slice = paginate(years, startIdx, reqCount);
+    return sendBrowseResponse(res, didlWrapper(slice.map(y => yearContainer(y.year, y.track_count)).join('')), slice.length, years.length);
+  }
+
+  const yearMatch = objectId.match(/^year-(\d{1,4})$/);
+  if (yearMatch) {
+    const year = parseInt(yearMatch[1], 10);
+    const total = getYearTrackCount(year);
+    if (total === 0) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+    if (browseFlag === 'BrowseMetadata') {
+      return sendBrowseResponse(res, didlWrapper(yearContainer(year, total)), 1, 1);
+    }
+    const tracks = getYearTracks(year, startIdx, reqCount);
+    const items = tracks.map(t => {
+      const lib = libById.get(t.library_id);
+      return lib ? trackItem(t, lib.name, objectId) : '';
+    }).filter(Boolean);
+    return sendBrowseResponse(res, didlWrapper(items.join('')), items.length, total);
+  }
+
+  // ── Library container — lists the six view sub-containers ────────────────
   const libMatch = objectId.match(/^lib-(\d+)$/);
   if (libMatch) {
     const libId = parseInt(libMatch[1], 10);
-    const lib = libraries.find(l => l.id === libId);
+    const lib = libById.get(libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     if (browseFlag === 'BrowseMetadata') {
-      return sendBrowseResponse(res, didlWrapper(libraryContainer(lib, '0', 5)), 1, 1);
+      return sendBrowseResponse(res, didlWrapper(libraryContainer(lib, 'music', 6)), 1, 1);
     }
 
     const children = libraryViewContainers(libId);
@@ -733,7 +1059,7 @@ function handleBrowse(body, res) {
   const foldersMatch = objectId.match(/^folders-(\d+)$/);
   if (foldersMatch) {
     const libId = parseInt(foldersMatch[1], 10);
-    const lib = libraries.find(l => l.id === libId);
+    const lib = libById.get(libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     const allTracks = getAllLibraryTracks(libId);
@@ -755,7 +1081,7 @@ function handleBrowse(body, res) {
   const artistsMatch = objectId.match(/^artists-(\d+)$/);
   if (artistsMatch) {
     const libId = parseInt(artistsMatch[1], 10);
-    const lib = libraries.find(l => l.id === libId);
+    const lib = libById.get(libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     const artists = getLibraryArtists(libId);
@@ -768,11 +1094,59 @@ function handleBrowse(body, res) {
     return sendBrowseResponse(res, didlWrapper(slice.map(a => artistContainer(libId, a, objectId)).join('')), slice.length, artists.length);
   }
 
+  // ── Album-Artists view — all album-artists in a library ─────────────────
+  const albumArtistsMatch = objectId.match(/^albumartists-(\d+)$/);
+  if (albumArtistsMatch) {
+    const libId = parseInt(albumArtistsMatch[1], 10);
+    const lib = libById.get(libId);
+    if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+
+    const albumArtists = getLibraryAlbumArtists(libId);
+
+    if (browseFlag === 'BrowseMetadata') {
+      return sendBrowseResponse(res, didlWrapper(viewContainer(libId, 'albumartists', albumArtists.length)), 1, 1);
+    }
+
+    const slice = paginate(albumArtists, startIdx, reqCount);
+    // Reuse artistContainer shape but with the "aartist-" prefix so the drill
+    // hits getAlbumArtistAlbums (filtered by albums.artist_id) rather than
+    // getArtistAlbums (filtered by tracks.artist_id).
+    const didl = slice.map(a => `
+  <container id="aartist-${libId}-${a.id}" parentID="${xmlEscape(objectId)}" restricted="1" childCount="${a.album_count}">${containerArtXml(a.album_art_file)}
+    <dc:title>${xmlEscape(a.name)}</dc:title>
+    <upnp:class>object.container.person.musicArtist</upnp:class>
+  </container>`).join('');
+    return sendBrowseResponse(res, didlWrapper(didl), slice.length, albumArtists.length);
+  }
+
+  // ── Album-Artist drill — albums by this album-artist ────────────────────
+  const aartistMatch = objectId.match(/^aartist-(\d+)-(\d+)$/);
+  if (aartistMatch) {
+    const libId    = parseInt(aartistMatch[1], 10);
+    const artistId = parseInt(aartistMatch[2], 10);
+    const lib = libById.get(libId);
+    if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+
+    if (browseFlag === 'BrowseMetadata') {
+      const artist = getAlbumArtistById(libId, artistId);
+      if (!artist) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+      return sendBrowseResponse(res, didlWrapper(`
+  <container id="${objectId}" parentID="albumartists-${libId}" restricted="1" childCount="${artist.album_count}">${containerArtXml(artist.album_art_file)}
+    <dc:title>${xmlEscape(artist.name)}</dc:title>
+    <upnp:class>object.container.person.musicArtist</upnp:class>
+  </container>`), 1, 1);
+    }
+
+    const albums = getAlbumArtistAlbums(libId, artistId);
+    const slice = paginate(albums, startIdx, reqCount);
+    return sendBrowseResponse(res, didlWrapper(slice.map(al => albumContainer(libId, al, objectId)).join('')), slice.length, albums.length);
+  }
+
   // ── Albums view — all albums in a library ────────────────────────────────
   const albumsMatch = objectId.match(/^albums-(\d+)$/);
   if (albumsMatch) {
     const libId = parseInt(albumsMatch[1], 10);
-    const lib = libraries.find(l => l.id === libId);
+    const lib = libById.get(libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     const albums = getLibraryAlbums(libId);
@@ -789,7 +1163,7 @@ function handleBrowse(body, res) {
   const genresMatch = objectId.match(/^genres-(\d+)$/);
   if (genresMatch) {
     const libId = parseInt(genresMatch[1], 10);
-    const lib = libraries.find(l => l.id === libId);
+    const lib = libById.get(libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     const genres = getLibraryGenres(libId);
@@ -806,7 +1180,7 @@ function handleBrowse(body, res) {
   const tracksMatch = objectId.match(/^tracks-(\d+)$/);
   if (tracksMatch) {
     const libId = parseInt(tracksMatch[1], 10);
-    const lib = libraries.find(l => l.id === libId);
+    const lib = libById.get(libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     const total = getLibraryTrackCount(libId);
@@ -825,7 +1199,7 @@ function handleBrowse(body, res) {
   if (dirMatch) {
     const libId = parseInt(dirMatch[1], 10);
     const relPath = decodeRelPath(dirMatch[2]);
-    const lib = libraries.find(l => l.id === libId);
+    const lib = libById.get(libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     const allTracks = getAllLibraryTracks(libId);
@@ -854,7 +1228,7 @@ function handleBrowse(body, res) {
   if (artistMatch) {
     const libId    = parseInt(artistMatch[1], 10);
     const artistId = parseInt(artistMatch[2], 10);
-    const lib = libraries.find(l => l.id === libId);
+    const lib = libById.get(libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     if (browseFlag === 'BrowseMetadata') {
@@ -873,7 +1247,7 @@ function handleBrowse(body, res) {
   if (albumMatch) {
     const libId   = parseInt(albumMatch[1], 10);
     const albumId = parseInt(albumMatch[2], 10);
-    const lib = libraries.find(l => l.id === libId);
+    const lib = libById.get(libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     const tracks = getAlbumTracks(libId, albumId);
@@ -893,7 +1267,7 @@ function handleBrowse(body, res) {
   if (genreMatch) {
     const libId = parseInt(genreMatch[1], 10);
     const genre = decodeRelPath(genreMatch[2]);
-    const lib = libraries.find(l => l.id === libId);
+    const lib = libById.get(libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     if (browseFlag === 'BrowseMetadata') {
@@ -913,7 +1287,7 @@ function handleBrowse(body, res) {
     const libId    = parseInt(gartistMatch[1], 10);
     const artistId = parseInt(gartistMatch[2], 10);
     const genre    = decodeRelPath(gartistMatch[3]);
-    const lib = libraries.find(l => l.id === libId);
+    const lib = libById.get(libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     if (browseFlag === 'BrowseMetadata') {
@@ -956,7 +1330,7 @@ function handleBrowse(body, res) {
     const trackId = parseInt(trackMatch[1], 10);
     const row = db.getDB().prepare(`
       SELECT t.id, t.filepath, t.title, t.track_number, t.duration, t.format,
-             t.file_size, t.genre, t.album_art_file, t.library_id,
+             t.file_size, t.genre, t.album_art_file, t.year, t.library_id,
              a.name AS artist_name, al.name AS album_name
       FROM tracks t
       LEFT JOIN artists a  ON t.artist_id = a.id
@@ -965,7 +1339,7 @@ function handleBrowse(body, res) {
     `).get(trackId);
     if (!row) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
-    const lib = libraries.find(l => l.id === row.library_id);
+    const lib = libById.get(row.library_id);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     if (browseFlag === 'BrowseDirectChildren') {
@@ -1067,10 +1441,12 @@ function handleSearch(body, res) {
   const objectId  = extractSoapField(body, 'ContainerID') || extractSoapField(body, 'ObjectID') || '0';
   const criteria  = extractSoapField(body, 'SearchCriteria');
   const startIdx  = Math.max(0, parseInt(extractSoapField(body, 'StartingIndex') || '0', 10) || 0);
-  const reqCount  = Math.max(0, parseInt(extractSoapField(body, 'RequestedCount') || '0', 10) || 0);
+  const rawCount  = Math.max(0, parseInt(extractSoapField(body, 'RequestedCount') || '0', 10) || 0);
+  const reqCount  = rawCount === 0 ? MAX_BROWSE_COUNT : Math.min(rawCount, MAX_BROWSE_COUNT);
   const sortTerms = parseSortCriteria(extractSoapField(body, 'SortCriteria'));
 
   const libraries = db.getAllLibraries();
+  const libById = libraryIndex(libraries);
 
   const libParams = [];
   let libFilter = '';
@@ -1101,7 +1477,7 @@ function handleSearch(body, res) {
   const limit = reqCount > 0 ? reqCount : -1;
   const rows = d.prepare(`
     SELECT t.id, t.filepath, t.title, t.track_number, t.duration, t.format,
-           t.file_size, t.genre, t.album_art_file, t.library_id,
+           t.file_size, t.genre, t.album_art_file, t.year, t.library_id,
            a.name AS artist_name, al.name AS album_name
     FROM tracks t
     LEFT JOIN artists a  ON t.artist_id = a.id
@@ -1112,7 +1488,7 @@ function handleSearch(body, res) {
   `).all(...whereParams, ...libParams, limit, startIdx);
 
   const items = rows.map(row => {
-    const lib = libraries.find(l => l.id === row.library_id);
+    const lib = libById.get(row.library_id);
     return lib ? trackItem(row, lib.name, objectId) : '';
   }).filter(Boolean).join('');
 
@@ -1300,12 +1676,12 @@ const CONNECTION_MANAGER_SCPD = `<?xml version="1.0" encoding="utf-8"?>
 // ── Source protocol info list for ConnectionManager ──────────────────────────
 
 const SOURCE_PROTOCOL_INFO = [
-  `http-get:*:audio/mpeg:DLNA.ORG_PN=MP3;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=${DLNA_FLAGS}`,
-  `http-get:*:audio/flac:DLNA.ORG_PN=FLAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=${DLNA_FLAGS}`,
-  `http-get:*:audio/wav:DLNA.ORG_PN=WAV;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=${DLNA_FLAGS}`,
-  `http-get:*:audio/mp4:DLNA.ORG_PN=AAC_ISO;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=${DLNA_FLAGS}`,
-  `http-get:*:audio/ogg:DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=${DLNA_FLAGS}`,
-  `http-get:*:audio/opus:DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=${DLNA_FLAGS}`,
+  `http-get:*:audio/mpeg:DLNA.ORG_PN=MP3;DLNA.ORG_OP=11;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=${DLNA_FLAGS}`,
+  `http-get:*:audio/flac:DLNA.ORG_PN=FLAC;DLNA.ORG_OP=11;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=${DLNA_FLAGS}`,
+  `http-get:*:audio/wav:DLNA.ORG_PN=WAV;DLNA.ORG_OP=11;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=${DLNA_FLAGS}`,
+  `http-get:*:audio/mp4:DLNA.ORG_PN=AAC_ISO;DLNA.ORG_OP=11;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=${DLNA_FLAGS}`,
+  `http-get:*:audio/ogg:DLNA.ORG_OP=11;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=${DLNA_FLAGS}`,
+  `http-get:*:audio/opus:DLNA.ORG_OP=11;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=${DLNA_FLAGS}`,
 ].join(',');
 
 // ── Samsung X_GetFeatureList ─────────────────────────────────────────────────
@@ -1346,6 +1722,11 @@ function cleanExpiredSubscribers() {
     if (sub.expiresAt < now) { subscribers.delete(sid); }
   }
 }
+
+// Periodic cleanup in case no one is bumping SystemUpdateID or subscribing —
+// otherwise expired subscribers could linger in the Map indefinitely. unref()
+// so this timer doesn't keep the process alive on shutdown.
+setInterval(cleanExpiredSubscribers, 60_000).unref();
 
 function cdsPropertySet() {
   // ContainerUpdateIDs would list specific changed containers; we don't track
@@ -1427,6 +1808,12 @@ function handleSubscribe(req, res, service) {
     return res.status(412).end();
   }
 
+  // Defence against a client churning new subscriptions without renewing or
+  // unsubscribing. 503 "Service Unavailable" per UPnP 1.0 §4.1.2.
+  if (subscribers.size >= MAX_SUBSCRIBERS) {
+    return res.status(503).end();
+  }
+
   const sid = `uuid:${crypto.randomUUID()}`;
   const sub = { service, callbacks, expiresAt: Date.now() + timeout * 1000, seq: 0 };
   subscribers.set(sid, sub);
@@ -1461,6 +1848,18 @@ export function setup(mstream, { checkMode = true } = {}) {
 
   // All DLNA routes check mode inline — they're registered unconditionally
   // so they sit before the auth wall but silently 503 when disabled/wrong-mode.
+
+  // Time-seek support: intercept /media requests with TimeSeekRange headers
+  // BEFORE the auth wall and the express.static mounts. Without a header the
+  // middleware just calls next() and the normal static handler takes over.
+  // Only mount on the main app — dlna-server.js mounts its own copy for the
+  // separate-port server, so registering here too would double-invoke it.
+  if (checkMode) {
+    mstream.use('/media', (req, res, next) => {
+      if (!modeOk()) { return next(); }
+      timeSeekMiddleware(req, res, next);
+    });
+  }
 
   // Device description
   mstream.get('/dlna/device.xml', (req, res) => {
@@ -1505,7 +1904,7 @@ export function setup(mstream, { checkMode = true } = {}) {
 
           case 'GetSortCapabilities':
             return sendXml(res, soapEnvelope(CDS_NS, 'GetSortCapabilitiesResponse',
-              '<SortCaps>dc:title,dc:creator,upnp:artist,upnp:album,upnp:originalTrackNumber,upnp:genre</SortCaps>'));
+              '<SortCaps>dc:title,dc:creator,upnp:artist,upnp:album,upnp:originalTrackNumber,upnp:genre,dc:date,upnp:originalYear,res@duration,res@size,@refID</SortCaps>'));
 
           case 'GetSystemUpdateID':
             return sendXml(res, soapEnvelope(CDS_NS, 'GetSystemUpdateIDResponse',
