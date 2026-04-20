@@ -40,6 +40,9 @@ const ADMINDATA = (() => {
   // dlna
   module.dlnaParams = {};
   module.dlnaParamsUpdated = { ts: 0 };
+  // subsonic
+  module.subsonicParams = {};
+  module.subsonicParamsUpdated = { ts: 0 };
 
   module.getSharedPlaylists = async () => {
     const res = await API.axios({
@@ -185,6 +188,17 @@ const ADMINDATA = (() => {
     module.dlnaParamsUpdated.ts = Date.now();
   }
 
+  module.getSubsonicParams = async () => {
+    try {
+      const res = await API.axios({
+        method: 'GET',
+        url: `${API.url()}/api/v1/admin/subsonic`
+      });
+      Object.keys(res.data).forEach(key => { module.subsonicParams[key] = res.data[key]; });
+    } catch (err) {}
+    module.subsonicParamsUpdated.ts = Date.now();
+  }
+
   module.getVersion = async () => {
     try {
       const res = await API.axios({
@@ -223,6 +237,7 @@ ADMINDATA.getDbParams();
 ADMINDATA.getServerParams();
 ADMINDATA.getFederationParams();
 ADMINDATA.getDlnaParams();
+ADMINDATA.getSubsonicParams();
 ADMINDATA.getVersion();
 ADMINDATA.getWinDrives();
 
@@ -2756,6 +2771,131 @@ const dlnaView = Vue.component('dlna-view', {
   }
 });
 
+const subsonicView = Vue.component('subsonic-view', {
+  data() {
+    return {
+      paramsTS: ADMINDATA.subsonicParamsUpdated,
+      params: ADMINDATA.subsonicParams,
+      selectedMode: 'disabled',
+      selectedPort: 3012,
+      applyPending: false,
+    };
+  },
+  watch: {
+    'paramsTS.ts': {
+      immediate: true,
+      handler: function() {
+        this.selectedMode = this.params.mode || 'disabled';
+        this.selectedPort = this.params.port || 3012;
+      }
+    }
+  },
+  template: `
+    <div v-if="paramsTS.ts === 0" class="row">
+      <svg class="spinner" width="65px" height="65px" viewBox="0 0 66 66" xmlns="http://www.w3.org/2000/svg"><circle class="spinner-path" fill="none" stroke-width="6" stroke-linecap="round" cx="33" cy="33" r="30"></circle></svg>
+    </div>
+    <div v-else class="container">
+      <div class="row" style="margin-top:24px">
+        <div class="col s12">
+          <div class="card">
+            <div class="card-content">
+              <span class="card-title">Subsonic REST API</span>
+              <p>The Subsonic API lets you use third-party music apps &mdash; DSub, Symfonium, Substreamer, play:Sub, Feishin, Sonixd, and many others &mdash; as clients for your mStream library. Each user signs in with their mStream username and password (or an API key they generate on their profile) from inside the client app.</p>
+              <div style="margin-top:16px">
+                <p><b>Current mode:</b> {{params.mode || 'disabled'}}</p>
+                <p v-if="params.mode === 'separate-port'"><b>Subsonic port:</b> {{params.port}}</p>
+              </div>
+              <div style="margin-top:20px">
+                <p><b>Change mode:</b></p>
+                <p>
+                  <label style="margin-right:20px">
+                    <input type="radio" v-model="selectedMode" value="disabled" />
+                    <span>Disabled</span>
+                  </label>
+                  <label style="margin-right:20px">
+                    <input type="radio" v-model="selectedMode" value="same-port" />
+                    <span>Same port as mStream</span>
+                  </label>
+                  <label>
+                    <input type="radio" v-model="selectedMode" value="separate-port" />
+                    <span>Separate port</span>
+                  </label>
+                </p>
+                <div v-if="selectedMode === 'separate-port'" style="margin-top:12px">
+                  <div class="input-field" style="max-width:200px">
+                    <input id="subsonic-port" type="number" v-model.number="selectedPort" min="1" max="65535" />
+                    <label for="subsonic-port" class="active">Subsonic Port</label>
+                  </div>
+                </div>
+              </div>
+              <div v-if="selectedMode !== 'disabled'" class="card-panel orange lighten-4" style="margin-top:16px">
+                <p><b>Security notice:</b> Subsonic clients authenticate with your mStream user credentials. For best security, enable HTTPS before exposing the Subsonic API to untrusted networks, and have each user generate their own API key instead of sharing passwords.</p>
+                <p style="margin-top:8px">Users generate their own API keys via the mStream API: <code>POST /api/v1/user/api-keys</code>. Token-style auth (<code>t=</code>, <code>s=</code>) is not supported &mdash; use plaintext over HTTPS, or an API key.</p>
+              </div>
+            </div>
+            <div class="card-action flow-root">
+              <a v-on:click="applyMode()" :disabled="applyPending"
+                 class="waves-effect waves-light btn right">
+                Apply
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>`,
+  methods: {
+    applyMode: async function() {
+      const mode = this.selectedMode;
+      const port = this.selectedPort;
+      const modeLabels = { disabled: 'Disabled', 'same-port': 'Same Port', 'separate-port': 'Separate Port' };
+      iziToast.question({
+        timeout: 20000,
+        close: false,
+        overlayClose: true,
+        overlay: true,
+        displayMode: 'once',
+        id: 'subsonic-question',
+        zindex: 99999,
+        layout: 2,
+        maxWidth: 600,
+        title: `Set Subsonic mode to "${modeLabels[mode] || mode}"?`,
+        message: mode === 'same-port' || this.params.mode === 'same-port'
+          ? 'This will restart the mStream server.'
+          : '',
+        position: 'center',
+        buttons: [
+          [`<button><b>Apply</b></button>`, async (instance, toast) => {
+            try {
+              this.applyPending = true;
+              const data = { mode };
+              if (mode === 'separate-port') { data.port = port; }
+              await API.axios({
+                method: 'POST',
+                url: `${API.url()}/api/v1/admin/subsonic/mode`,
+                data
+              });
+              await ADMINDATA.getSubsonicParams();
+              instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
+              iziToast.success({
+                title: `Subsonic mode set to ${modeLabels[mode] || mode}`,
+                position: 'topCenter',
+                timeout: 3500
+              });
+            } catch(err) {
+              iziToast.error({ title: 'Failed to update Subsonic setting', position: 'topCenter', timeout: 3500 });
+            } finally {
+              this.applyPending = false;
+            }
+          }, true],
+          [`<button>Cancel</button>`, (instance, toast) => {
+            instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
+          }],
+        ]
+      });
+    }
+  }
+});
+
 const vm = new Vue({
   el: '#content',
   components: {
@@ -2767,6 +2907,7 @@ const vm = new Vue({
     'transcode-view': transcodeView,
     'federation-view': federationView,
     'dlna-view': dlnaView,
+    'subsonic-view': subsonicView,
     'logs-view': logsView,
     'rpn-view': rpnView,
     'lock-view': lockView,

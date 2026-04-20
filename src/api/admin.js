@@ -619,6 +619,32 @@ export function setup(mstream) {
     res.json({});
   });
 
+  // ── Subsonic ────────────────────────────────────────────────────────────
+
+  mstream.get('/api/v1/admin/subsonic', (req, res) => {
+    res.json({
+      mode: config.program.subsonic.mode,
+      port: config.program.subsonic.port,
+    });
+  });
+
+  let subsonicDebouncer = false;
+  mstream.post('/api/v1/admin/subsonic/mode', async (req, res) => {
+    const schema = Joi.object({
+      mode: Joi.string().valid('disabled', 'same-port', 'separate-port').required(),
+      port: Joi.number().integer().min(1).max(65535).optional(),
+    });
+    const input = joiValidate(schema, req.body);
+
+    if (subsonicDebouncer === true) { throw new Error('Debouncer Enabled'); }
+    await admin.enableSubsonic(input.value.mode, input.value.port);
+
+    subsonicDebouncer = true;
+    setTimeout(() => { subsonicDebouncer = false; }, 2000);
+
+    res.json({});
+  });
+
   mstream.post("/api/v1/admin/ssl", async (req, res) => {
     const schema = Joi.object({
       cert: Joi.string().required(),

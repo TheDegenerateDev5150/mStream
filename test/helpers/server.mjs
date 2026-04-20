@@ -63,26 +63,35 @@ async function waitForScanComplete(baseUrl, timeoutMs = 30_000) {
  * Start an mStream instance. Returns { baseUrl, port, stop }.
  *
  * @param {Object} opts
- * @param {string} [opts.dlnaMode='same-port']  DLNA mode to configure
- * @param {string} [opts.browseMode='dirs']     `dlna.browse` default-view setting
- * @param {boolean} [opts.waitForScan=true]     Block until the initial scan finishes
- * @param {boolean} [opts.captureLogs=false]    Pipe stdout/stderr to the test process
- * @param {Object[]} [opts.users]               Users to create after boot (PUT
+ * @param {string} [opts.dlnaMode='same-port']     DLNA mode to configure
+ * @param {string} [opts.browseMode='dirs']        `dlna.browse` default-view setting
+ * @param {string} [opts.subsonicMode='same-port'] Subsonic API mode to configure
+ * @param {number} [opts.subsonicPort]             Port for Subsonic separate-port mode
+ * @param {boolean} [opts.waitForScan=true]        Block until the initial scan finishes
+ * @param {boolean} [opts.captureLogs=false]       Pipe stdout/stderr to the test process
+ * @param {Object[]} [opts.users]                  Users to create after boot (PUT
  *   /api/v1/admin/users while the server is still in public-access mode).
  *   Each entry: { username, password, admin?, vpaths? }.
  */
 export async function startServer(opts = {}) {
   const {
-    dlnaMode     = 'same-port',
-    browseMode   = 'dirs',
-    waitForScan  = true,
-    captureLogs  = false,
-    users        = [],
+    dlnaMode      = 'same-port',
+    browseMode    = 'dirs',
+    subsonicMode  = 'same-port',
+    subsonicPort,
+    waitForScan   = true,
+    captureLogs   = false,
+    users         = [],
   } = opts;
 
   const musicDir = await ensureFixtures();
   const tmpDir   = await fs.mkdtemp(path.join(os.tmpdir(), 'mstream-test-'));
   const port     = await findFreePort();
+
+  // Separate-port Subsonic needs its own free port if the caller didn't pick one.
+  const sPort = subsonicMode === 'separate-port'
+    ? (subsonicPort ?? await findFreePort())
+    : 3012;
 
   const config = {
     port,
@@ -91,6 +100,10 @@ export async function startServer(opts = {}) {
       mode: dlnaMode,
       name: 'mStream Test',
       browse: browseMode,
+    },
+    subsonic: {
+      mode: subsonicMode,
+      port: sPort,
     },
     folders: { testlib: { root: musicDir } },
     storage: {
@@ -162,7 +175,7 @@ export async function startServer(opts = {}) {
     // pre-user public path: add them in a loop while at least one survives
     // as a singleton is incorrect, so we create the first admin, then log in
     // and reuse that token for the rest.
-    let headers = { 'Content-Type': 'application/json' };
+    const headers = { 'Content-Type': 'application/json' };
     if (i > 0) {
       const loginR = await fetch(`${baseUrl}/api/v1/auth/login`, {
         method: 'POST', headers,
@@ -190,5 +203,11 @@ export async function startServer(opts = {}) {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 
-  return { baseUrl, port, tmpDir, musicDir, stop };
+  // When Subsonic runs on a separate port, expose its base URL too — tests
+  // that want to hit /rest on the secondary port use this directly.
+  const subsonicBaseUrl = subsonicMode === 'separate-port'
+    ? `http://127.0.0.1:${sPort}`
+    : baseUrl;
+
+  return { baseUrl, port, tmpDir, musicDir, subsonicBaseUrl, subsonicPort: sPort, stop };
 }

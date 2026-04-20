@@ -18,11 +18,15 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "build-rust": "cd rust-parser && cargo build --release",
+<<<<<<< HEAD
     "docs:api": "redocly build-docs docs/openapi.yaml -o docs/api.html",
     "docs:api:validate": "redocly lint docs/openapi.yaml",
     "test": "node --test --test-reporter=spec test/dlna.test.mjs test/subsonic.test.mjs",
+=======
+    "test": "node --test --test-reporter=spec test/dlna.test.mjs test/subsonic.test.mjs test/subsonic-modes.test.mjs",
+>>>>>>> 23e0141 (Subsonic API: configurable mode + admin panel tab)
     "test:dlna": "node --test --test-reporter=spec test/dlna.test.mjs",
-    "test:subsonic": "node --test --test-reporter=spec test/subsonic.test.mjs"
+    "test:subsonic": "node --test --test-reporter=spec test/subsonic.test.mjs test/subsonic-modes.test.mjs"
   },
   "repository": {
     "type": "git",

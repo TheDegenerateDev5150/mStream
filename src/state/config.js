@@ -87,6 +87,11 @@ const dlnaOptions = Joi.object({
   browse: Joi.string().valid('flat', 'dirs', 'artist', 'album', 'genre').default('dirs'),
 });
 
+const subsonicOptions = Joi.object({
+  mode: Joi.string().valid('disabled', 'same-port', 'separate-port').default('disabled'),
+  port: Joi.number().integer().min(1).max(65535).default(3012),
+});
+
 const schema = Joi.object({
   address: Joi.string().ip({ cidr: 'forbidden' }).default('::'),
   port: Joi.number().default(3000),
@@ -139,6 +144,7 @@ const schema = Joi.object({
   }).optional(),
   federation: federationOptions.default(federationOptions.validate({}).value),
   dlna: dlnaOptions.default(dlnaOptions.validate({}).value),
+  subsonic: subsonicOptions.default(subsonicOptions.validate({}).value),
   autoBootServerAudio: Joi.boolean().default(false),
   rustPlayerPort: Joi.number().integer().min(1).max(65535).default(3333),
 });

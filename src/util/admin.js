@@ -11,6 +11,7 @@ import * as db from '../db/manager.js';
 import * as syncthing from '../state/syncthing.js';
 import * as dlnaSsdp from '../dlna/ssdp.js';
 import * as dlnaServer from '../dlna/dlna-server.js';
+import * as subsonicServer from '../subsonic/subsonic-server.js';
 import { getDirname } from './esm-helpers.js';
 
 const __dirname = getDirname(import.meta.url);
@@ -375,6 +376,33 @@ export async function enableDlna(mode, port) {
   dlnaServer.stop();
   if (mode !== 'disabled') { dlnaSsdp.start(); }
   if (mode === 'separate-port') { dlnaServer.start(); }
+}
+
+export async function enableSubsonic(mode, port) {
+  const effectivePort = port !== undefined ? port : config.program.subsonic.port;
+  if (mode === config.program.subsonic.mode && effectivePort === config.program.subsonic.port) { return; }
+
+  const prevMode = config.program.subsonic.mode;
+
+  const loadConfig = await loadFile(config.configFile);
+  if (!loadConfig.subsonic) { loadConfig.subsonic = {}; }
+  loadConfig.subsonic.mode = mode;
+  if (port !== undefined) { loadConfig.subsonic.port = port; }
+  await saveFile(loadConfig, config.configFile);
+  config.program.subsonic.mode = mode;
+  if (port !== undefined) { config.program.subsonic.port = port; }
+
+  // same-port registers /rest/* routes on the main Express app, which needs a
+  // full reboot to take effect or be removed. Express doesn't support
+  // dynamic middleware removal.
+  if (mode === 'same-port' || prevMode === 'same-port') {
+    mStreamServer.reboot();
+    return;
+  }
+
+  // disabled ↔ separate-port: hot-swap the secondary server in place.
+  subsonicServer.stop();
+  if (mode === 'separate-port') { subsonicServer.start(); }
 }
 
 export async function enableFederation(val) {

@@ -30,6 +30,7 @@ import * as dlnaApi from './api/dlna.js';
 import * as dlnaSsdp from './dlna/ssdp.js';
 import * as dlnaServer from './dlna/dlna-server.js';
 import * as subsonicApi from './api/subsonic/index.js';
+import * as subsonicServer from './subsonic/subsonic-server.js';
 import * as userApiKeysApi from './api/user-api-keys.js';
 import * as serverPlaybackApi from './api/server-playback.js';
 import * as albumArtApi from './api/album-art.js';
@@ -189,7 +190,9 @@ export async function serveIt(configFile) {
 
   // Subsonic REST API — sits before the auth wall because it carries its own
   // credentials (u/p query string or apiKey) and populates req.user itself.
-  subsonicApi.setup(mstream);
+  // Only mount when configured for same-port; separate-port uses its own
+  // http.Server started in the post-boot hook below.
+  if (config.program.subsonic.mode === 'same-port') { subsonicApi.setup(mstream); }
 
   // Everything below this line requires authentication
   authApi.setup(mstream);
@@ -285,6 +288,9 @@ export async function serveIt(configFile) {
     if (config.program.dlna.mode === 'separate-port') {
       dlnaServer.start();
     }
+    if (config.program.subsonic.mode === 'separate-port') {
+      subsonicServer.start();
+    }
 
     // Auto-boot the Rust server audio player if configured
     serverPlaybackApi.bootRustPlayer();
@@ -304,6 +310,7 @@ export function reboot() {
 
     dlnaSsdp.stop();
     dlnaServer.stop();
+    subsonicServer.stop();
     serverPlaybackApi.killRustPlayer();
 
     // Close the server
