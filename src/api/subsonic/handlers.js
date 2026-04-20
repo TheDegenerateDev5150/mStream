@@ -611,9 +611,11 @@ function streamTranscoded(req, res, track, codec, bitrateK, timeOffsetSec, estim
   const spec = TRANSCODE_CODECS[codec];
   const args = ['-nostdin'];
   // `-ss` before `-i` uses input-seek (fast, keyframe-aligned) — good enough
-  // for lossy sources where sample-accurate seek doesn't matter.
+  // for lossy sources where sample-accurate seek doesn't matter. ffmpeg
+  // accepts fractional seconds, so keep the raw value — just clamp to a
+  // safe precision.
   if (Number.isFinite(timeOffsetSec) && timeOffsetSec > 0) {
-    args.push('-ss', String(Math.floor(timeOffsetSec)));
+    args.push('-ss', timeOffsetSec.toFixed(3));
   }
   args.push(
     '-i', track.absPath,
@@ -647,13 +649,23 @@ function streamTranscoded(req, res, track, codec, bitrateK, timeOffsetSec, estim
     winston.error('[subsonic] stream: ffmpeg spawn failed', { stack: err });
     return res.status(500).end();
   }
+  // spawn() returns an object even for paths that don't exist on disk —
+  // the ENOENT surfaces on the 'error' event. If that fires before we
+  // write headers, respond with 500 so the caller knows something broke
+  // rather than receiving a silent 0-byte 200.
+  let headersSent = false;
+  ff.once('error', err => {
+    winston.error('[subsonic] ffmpeg error', { stack: err });
+    if (!headersSent && !res.headersSent) {
+      try { res.status(500).end(); } catch { /* already closed */ }
+    } else {
+      try { res.end(); } catch { /* already closed */ }
+    }
+  });
   res.status(200).set(headers);
+  headersSent = true;
   ff.stdout.pipe(res);
   ff.stderr.on('data', d => winston.debug(`[subsonic stream] ${d.toString().trim()}`));
-  ff.on('error', err => {
-    winston.error('[subsonic] ffmpeg error', { stack: err });
-    try { res.end(); } catch { /* already closed */ }
-  });
   const cleanup = () => { try { ff.kill('SIGKILL'); } catch { /* exited */ } };
   req.on('close', cleanup);
   res.on('close', cleanup);

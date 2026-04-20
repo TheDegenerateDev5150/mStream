@@ -134,6 +134,20 @@ export function timeSeekMiddleware(req, res, next) {
 
   const end = duration ? formatNpt(duration) : '';
   const durStr = duration ? formatNpt(duration) : '';
+
+  // ENOENT from spawn surfaces on the 'error' event, not synchronously.
+  // Attach the error handler before writing headers so a missing binary
+  // yields a 500 the caller can act on, rather than a silent 0-byte 200.
+  let headersSent = false;
+  ff.once('error', err => {
+    winston.error(`[dlna time-seek] ffmpeg error: ${err.message}`);
+    if (!headersSent && !res.headersSent) {
+      try { res.status(500).end(); } catch (_) { /* already closed */ }
+    } else {
+      try { res.end(); } catch (_) { /* already closed */ }
+    }
+  });
+
   res.status(200).set({
     'Content-Type': 'audio/mpeg',
     'TimeSeekRange.dlna.org': `npt=${formatNpt(start)}-${end}/${durStr}`,
@@ -141,13 +155,10 @@ export function timeSeekMiddleware(req, res, next) {
     'transferMode.dlna.org': 'Streaming',
     'Connection': 'close',
   });
+  headersSent = true;
 
   ff.stdout.pipe(res);
   ff.stderr.on('data', d => winston.debug(`[dlna time-seek] ${d.toString().trim()}`));
-  ff.on('error', err => {
-    winston.error(`[dlna time-seek] ffmpeg error: ${err.message}`);
-    try { res.end(); } catch (_) { /* response already closed */ }
-  });
 
   // Kill ffmpeg if the client disconnects mid-stream — otherwise it keeps
   // encoding to a dead pipe until the input file is exhausted.

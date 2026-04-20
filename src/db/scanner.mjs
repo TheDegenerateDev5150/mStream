@@ -10,6 +10,7 @@ import crypto from 'crypto';
 import Joi from 'joi';
 import { Jimp } from 'jimp';
 import mime from 'mime-types';
+import { migrateHashReferences as migrateHashRefsShared } from './hash-migration.js';
 
 // ── Parse CLI input ─────────────────────────────────────────────────────────
 
@@ -58,7 +59,7 @@ db.exec('PRAGMA busy_timeout = 5000');
 
 const stmts = {
   getTrack: db.prepare(
-    'SELECT id, modified FROM tracks WHERE filepath = ? AND library_id = ?'
+    'SELECT id, modified, file_hash FROM tracks WHERE filepath = ? AND library_id = ?'
   ),
   updateScanId: db.prepare(
     'UPDATE tracks SET scan_id = ? WHERE id = ?'
@@ -97,6 +98,14 @@ const stmts = {
     'INSERT OR IGNORE INTO track_genres (track_id, genre_id) VALUES (?, ?)'
   ),
 };
+
+// ── User-data hash migration ───────────────────────────────────────────────
+// Delegates to the shared helper in ./hash-migration.js so the same logic
+// is exercised by the unit test there without needing a scanner subprocess.
+// See that file for the rationale.
+function migrateHashReferences(oldHash, newHash) {
+  migrateHashRefsShared(db, oldHash, newHash);
+}
 
 // ── Artist / Album helpers ──────────────────────────────────────────────────
 
@@ -376,12 +385,21 @@ async function recursiveScan(dir) {
           stmts.updateScanId.run(loadJson.scanId, existing.id);
         } else {
           // New or modified file — parse and insert
+          const oldHash = existing ? existing.file_hash : null;
           if (existing) {
             // Delete old record (will be re-inserted with fresh metadata)
             db.prepare('DELETE FROM tracks WHERE id = ?').run(existing.id);
           }
           const songInfo = await parseMyFile(filepath, stat.mtime.getTime());
           insertTrack(songInfo);
+          // If the file's content hash changed (typical trigger: an external
+          // ID3 tag editor rewriting the frames), the existing user_metadata /
+          // user_bookmarks / user_play_queue rows still reference the old
+          // hash. Migrate them so stars, ratings, play counts, bookmarks, and
+          // queue entries follow the file's new content identity.
+          if (oldHash && songInfo.hash && oldHash !== songInfo.hash) {
+            migrateHashReferences(oldHash, songInfo.hash);
+          }
           fileCount++;
         }
 

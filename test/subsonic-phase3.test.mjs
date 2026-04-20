@@ -203,10 +203,14 @@ describe('Stream polish (HEAD, timeOffset, estimateContentLength)', () => {
   });
 
   test('timeOffset triggers transcoding path (non-zero body, still succeeds)', async () => {
-    const r = await fetch(url('stream', { id: songId, timeOffset: 1 }));
+    // Fixtures are 1s long; seek well inside the file so ffmpeg still has
+    // audio to emit after the -ss point. Request mp3 explicitly so the
+    // transcoder path is deterministic regardless of server's default
+    // codec (which varies between test configs).
+    const r = await fetch(url('stream', { id: songId, timeOffset: 0.3, format: 'mp3', maxBitRate: 64 }));
     assert.equal(r.status, 200);
     const buf = await r.arrayBuffer();
-    assert.ok(buf.byteLength > 0);
+    assert.ok(buf.byteLength > 0, `expected non-empty transcoded body, got ${buf.byteLength} bytes`);
   });
 });
 

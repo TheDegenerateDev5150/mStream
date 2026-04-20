@@ -196,23 +196,31 @@ fn process_one(
         .to_string_lossy()
         .replace('\\', "/");
 
-    // Check if file exists and is unchanged
-    let existing: Option<(i64, i64)> = conn.prepare_cached(
-        "SELECT id, modified FROM tracks WHERE filepath = ? AND library_id = ?"
+    // Check if file exists and is unchanged. We also read the existing
+    // file_hash so we can migrate user-facing rows (stars, ratings, play
+    // counts, bookmarks, play queue) if the content hash changes on
+    // re-parse — typical trigger is an external ID3 tag editor rewriting
+    // the file bytes.
+    let existing: Option<(i64, i64, String)> = conn.prepare_cached(
+        "SELECT id, modified, file_hash FROM tracks WHERE filepath = ? AND library_id = ?"
     )?.query_row(rusqlite::params![rel_path, config.library_id], |row| {
-        Ok((row.get(0)?, row.get(1)?))
+        Ok((row.get(0)?, row.get(1)?, row.get::<_, Option<String>>(2)?.unwrap_or_default()))
     }).ok();
 
-    if let Some((id, existing_mod)) = existing {
-        if existing_mod == mod_time && !config.force_rescan {
+    let old_hash: Option<String> = if let Some((id, existing_mod, old_hash)) = &existing {
+        if *existing_mod == mod_time && !config.force_rescan {
             // Unchanged — just update scan_id
             conn.execute("UPDATE tracks SET scan_id = ? WHERE id = ?",
                 rusqlite::params![config.scan_id, id])?;
             return Ok(false);
         }
-        // Modified — delete old record
+        // Modified — delete old record; remember the prior hash so we can
+        // migrate user_* rows if the content hash changes.
         conn.execute("DELETE FROM tracks WHERE id = ?", rusqlite::params![id])?;
-    }
+        if old_hash.is_empty() { None } else { Some(old_hash.clone()) }
+    } else {
+        None
+    };
 
     // Parse metadata
     let mut title = None;
@@ -304,7 +312,75 @@ fn process_one(
     let track_id = conn.last_insert_rowid();
     set_track_genres(conn, track_id, genre.as_deref())?;
 
+    // If the file's content hash changed (vs. the row we deleted above),
+    // migrate user_metadata / user_bookmarks / user_play_queue so stars,
+    // bookmarks, and queue entries follow the file's new identity.
+    if let Some(old) = &old_hash {
+        if old != &hash {
+            migrate_hash_references(conn, old, &hash)?;
+        }
+    }
+
     Ok(true)
+}
+
+/// Update user-facing rows that key off `file_hash` when a file's content
+/// hash changes without a path change. Mirrors `migrateHashReferences` in
+/// src/db/scanner.mjs — see the comment there for the rationale.
+fn migrate_hash_references(
+    conn: &Connection, old_hash: &str, new_hash: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    conn.execute(
+        "UPDATE user_metadata SET track_hash = ? WHERE track_hash = ?",
+        rusqlite::params![new_hash, old_hash],
+    )?;
+    conn.execute(
+        "UPDATE user_bookmarks SET track_hash = ? WHERE track_hash = ?",
+        rusqlite::params![new_hash, old_hash],
+    )?;
+
+    // user_play_queue stores the queue as a JSON array of hashes. Pull
+    // affected rows, rewrite in place, write back. Quoted match on the
+    // JSON text prevents false positives from substring overlap between
+    // MD5 hex values.
+    let quoted = format!("\"{}\"", old_hash);
+    let mut stmt = conn.prepare_cached(
+        "SELECT user_id, current_track_hash, track_hashes_json
+           FROM user_play_queue
+          WHERE current_track_hash = ?
+             OR instr(track_hashes_json, ?) > 0",
+    )?;
+    let rows: Vec<(i64, Option<String>, String)> = stmt
+        .query_map(rusqlite::params![old_hash, quoted], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    for (user_id, current_hash, queue_json) in rows {
+        // Parse the JSON array, swap occurrences, serialize back. If the
+        // row's JSON is corrupt we skip it rather than blowing up a scan.
+        let hashes: Vec<String> = match serde_json::from_str(&queue_json) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let migrated: Vec<String> = hashes.into_iter()
+            .map(|h| if h == old_hash { new_hash.to_string() } else { h })
+            .collect();
+        let new_json = serde_json::to_string(&migrated)?;
+        let new_current = match current_hash {
+            Some(c) if c == old_hash => Some(new_hash.to_string()),
+            other => other,
+        };
+        conn.execute(
+            "UPDATE user_play_queue
+                SET current_track_hash = ?, track_hashes_json = ?
+              WHERE user_id = ?",
+            rusqlite::params![new_current, new_json, user_id],
+        )?;
+    }
+
+    Ok(())
 }
 
 // ── Artist / Album helpers ──────────────────────────────────────────────────

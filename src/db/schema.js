@@ -66,6 +66,16 @@ export const SCHEMA_V1 = `
     bitrate INTEGER,
     format TEXT,
     file_size INTEGER,
+    -- file_hash is a content MD5 (hex, lowercase). It is the stable per-file
+    -- identity used by every user-facing table (user_metadata, user_bookmarks,
+    -- user_play_queue): stable across file renames, moves between libraries,
+    -- and mtime-only touches. It changes *only* when the file's bytes change
+    -- (e.g. an external ID3 tag editor rewriting frames). The scanner
+    -- migrates affected user_* rows from the old hash to the new one on
+    -- content change — see migrateHashReferences in src/db/scanner.mjs and
+    -- migrate_hash_references in rust-parser/src/main.rs. Do not change this
+    -- semantics in future migrations without also updating the migration
+    -- logic in both scanners.
     file_hash TEXT,
     album_art_file TEXT,
     genre TEXT,
