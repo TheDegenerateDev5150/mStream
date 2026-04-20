@@ -46,7 +46,15 @@ after(async () => { if (server) { await server.stop(); } });
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function subsonicUrl(method, params = {}) {
-  const q = new URLSearchParams({ f: 'json', ...params });
+  // Serialize arrays as repeated params (`id=1&id=2`) — URLSearchParams's
+  // object-constructor joins arrays with commas, which every Subsonic client
+  // would get wrong.
+  const q = new URLSearchParams();
+  q.set('f', 'json');
+  for (const [k, v] of Object.entries(params)) {
+    if (Array.isArray(v)) { for (const item of v) { q.append(k, item); } }
+    else if (v != null)   { q.set(k, v); }
+  }
   return `${server.baseUrl}/rest/${method}?${q}`;
 }
 
@@ -384,5 +392,204 @@ describe('API key management', () => {
     const envBlocked = (await blocked.json())['subsonic-response'];
     assert.equal(envBlocked.status, 'failed');
     assert.equal(envBlocked.error.code, 40);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// Phase 2 — scrobble / favourites / lists / playlists
+// ══════════════════════════════════════════════════════════════════════════
+
+// Helper: pull one song id from the library so the phase-2 tests can work
+// against real rows.
+async function oneSongId() {
+  const env = await call('search3', { query: 'Be Somebody' });
+  return env.searchResult3.song[0].id;
+}
+
+describe('scrobble + setRating + star (mutations)', () => {
+  let songId;
+  before(async () => { songId = await oneSongId(); });
+
+  test('scrobble with submission=true bumps play count', async () => {
+    const env1 = await call('scrobble', { id: songId, submission: 'true' });
+    assert.equal(env1.status, 'ok');
+    const { song } = await call('getSong', { id: songId });
+    assert.ok(song.playCount >= 1, `expected playCount >= 1, got ${song.playCount}`);
+
+    const before = song.playCount;
+    await call('scrobble', { id: songId, submission: 'true' });
+    const { song: after } = await call('getSong', { id: songId });
+    assert.equal(after.playCount, before + 1);
+  });
+
+  test('scrobble with submission=false does NOT bump', async () => {
+    const { song: before } = await call('getSong', { id: songId });
+    await call('scrobble', { id: songId, submission: 'false' });
+    const { song: after } = await call('getSong', { id: songId });
+    assert.equal(after.playCount, before.playCount);
+  });
+
+  test('setRating sets, 0 clears', async () => {
+    await call('setRating', { id: songId, rating: 4 });
+    const { song: s1 } = await call('getSong', { id: songId });
+    assert.equal(s1.userRating, 4);
+
+    await call('setRating', { id: songId, rating: 0 });
+    const { song: s2 } = await call('getSong', { id: songId });
+    assert.equal(s2.userRating, undefined);
+  });
+
+  test('invalid rating → error 0', async () => {
+    const env = await call('setRating', { id: songId, rating: 99 });
+    assert.equal(env.status, 'failed');
+  });
+
+  test('star / unstar / getStarred2 round-trip', async () => {
+    await call('star', { id: songId });
+    const starredEnv = await call('getStarred2');
+    const starredIds = (starredEnv.starred2.song || []).map(s => s.id);
+    assert.ok(starredIds.includes(songId), `expected ${songId} in starred list`);
+
+    const { song: starredSong } = await call('getSong', { id: songId });
+    assert.ok(starredSong.starred, 'song.starred should be an ISO timestamp');
+
+    await call('unstar', { id: songId });
+    const after = await call('getStarred2');
+    const afterIds = (after.starred2.song || []).map(s => s.id);
+    assert.ok(!afterIds.includes(songId));
+  });
+});
+
+// ── Album lists ────────────────────────────────────────────────────────────
+
+describe('getAlbumList2', () => {
+  test('alphabeticalByName returns ordered albums', async () => {
+    const env = await call('getAlbumList2', { type: 'alphabeticalByName', size: 50 });
+    const names = env.albumList2.album.map(a => a.name);
+    assert.deepEqual([...names].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })), names);
+  });
+
+  test('newest sorts by created_at DESC', async () => {
+    const env = await call('getAlbumList2', { type: 'newest', size: 50 });
+    assert.ok(env.albumList2.album.length > 0);
+  });
+
+  test('random returns up to `size` albums', async () => {
+    const env = await call('getAlbumList2', { type: 'random', size: 2 });
+    assert.ok(env.albumList2.album.length <= 2);
+  });
+
+  test('byYear requires fromYear/toYear', async () => {
+    const missing = await call('getAlbumList2', { type: 'byYear' });
+    assert.equal(missing.status, 'failed');
+    assert.equal(missing.error.code, 10);
+
+    const env = await call('getAlbumList2', { type: 'byYear', fromYear: 2018, toYear: 2020 });
+    assert.equal(env.status, 'ok');
+    const years = env.albumList2.album.map(a => a.year);
+    assert.ok(years.every(y => y >= 2018 && y <= 2020));
+  });
+
+  test('byGenre filters', async () => {
+    const env = await call('getAlbumList2', { type: 'byGenre', genre: 'Electronic' });
+    assert.ok(env.albumList2.album.length > 0);
+  });
+
+  test('getAlbumList (v1) returns same shape under v1 tag', async () => {
+    const env = await call('getAlbumList', { type: 'alphabeticalByName' });
+    assert.ok(Array.isArray(env.albumList.album));
+  });
+
+  test('frequent/highest/recent default to empty when no plays', async () => {
+    for (const type of ['frequent', 'highest', 'recent']) {
+      const env = await call('getAlbumList2', { type });
+      assert.equal(env.status, 'ok');
+    }
+  });
+});
+
+describe('getRandomSongs + getSongsByGenre', () => {
+  test('getRandomSongs respects size', async () => {
+    const env = await call('getRandomSongs', { size: 3 });
+    assert.ok((env.randomSongs.song || []).length <= 3);
+  });
+
+  test('getRandomSongs with genre filter', async () => {
+    const env = await call('getRandomSongs', { size: 10, genre: 'Electronic' });
+    assert.ok(env.randomSongs.song.every(s => s.genre === 'Electronic'));
+  });
+
+  test('getSongsByGenre requires genre', async () => {
+    const env = await call('getSongsByGenre');
+    assert.equal(env.status, 'failed');
+    assert.equal(env.error.code, 10);
+  });
+
+  test('getSongsByGenre returns matching tracks', async () => {
+    const env = await call('getSongsByGenre', { genre: 'Ambient', count: 10 });
+    assert.ok(env.songsByGenre.song.every(s => s.genre === 'Ambient'));
+  });
+});
+
+// ── Playlists ──────────────────────────────────────────────────────────────
+
+describe('Playlists CRUD', () => {
+  let songIds;
+  let playlistId;
+
+  before(async () => {
+    const env = await call('search3', { query: 'e', songCount: 3 });
+    songIds = env.searchResult3.song.map(s => s.id);
+    assert.ok(songIds.length >= 2, 'need at least 2 songs for playlist tests');
+  });
+
+  test('createPlaylist with a name + songs', async () => {
+    const env = await call('createPlaylist', { name: 'Test Playlist', songId: songIds });
+    assert.equal(env.status, 'ok');
+    assert.equal(env.playlist.name, 'Test Playlist');
+    assert.equal(env.playlist.songCount, songIds.length);
+    assert.equal(env.playlist.entry.length, songIds.length);
+    playlistId = env.playlist.id;
+  });
+
+  test('getPlaylists lists the new playlist', async () => {
+    const env = await call('getPlaylists');
+    assert.ok(env.playlists.playlist.some(p => p.id === playlistId));
+  });
+
+  test('getPlaylist returns songs in order', async () => {
+    const env = await call('getPlaylist', { id: playlistId });
+    const ids = env.playlist.entry.map(e => e.id);
+    assert.deepEqual(ids, songIds);
+  });
+
+  test('updatePlaylist renames, appends, removes', async () => {
+    // Rename
+    await call('updatePlaylist', { playlistId, name: 'Renamed' });
+    let env = await call('getPlaylist', { id: playlistId });
+    assert.equal(env.playlist.name, 'Renamed');
+
+    // Append the first song again to the end
+    await call('updatePlaylist', { playlistId, songIdToAdd: songIds[0] });
+    env = await call('getPlaylist', { id: playlistId });
+    assert.equal(env.playlist.songCount, songIds.length + 1);
+
+    // Remove the first entry (index 0)
+    await call('updatePlaylist', { playlistId, songIndexToRemove: 0 });
+    env = await call('getPlaylist', { id: playlistId });
+    assert.equal(env.playlist.songCount, songIds.length);
+  });
+
+  test('deletePlaylist removes it', async () => {
+    const env = await call('deletePlaylist', { id: playlistId });
+    assert.equal(env.status, 'ok');
+    const after = await call('getPlaylists');
+    assert.ok(!after.playlists.playlist.some(p => p.id === playlistId));
+  });
+
+  test('createPlaylist with no name returns error 10', async () => {
+    const env = await call('createPlaylist');
+    assert.equal(env.status, 'failed');
+    assert.equal(env.error.code, 10);
   });
 });

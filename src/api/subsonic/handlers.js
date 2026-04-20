@@ -96,6 +96,69 @@ function libraryScope(req) {
   return { clause: `t.library_id IN (${placeholders})`, params: libs.map(l => l.id) };
 }
 
+// Look up a user's metadata row for a given track. Used by star/rating/
+// scrobble handlers. Returns the row (possibly with NULL fields) or null if
+// we can't even find the track.
+function trackFileHash(trackId) {
+  return db.getDB().prepare('SELECT file_hash FROM tracks WHERE id = ?')
+    .get(trackId)?.file_hash;
+}
+
+// Upsert a user_metadata row, setting the supplied fields. Leaves other
+// fields untouched — clients that only call setRating shouldn't clobber
+// starred_at, and vice versa.
+function upsertUserMeta(userId, trackHash, fields) {
+  if (!trackHash) { return false; }
+  const d = db.getDB();
+  // Insert if the row doesn't exist yet; caller's SET block runs either way.
+  d.prepare('INSERT OR IGNORE INTO user_metadata (user_id, track_hash) VALUES (?, ?)').run(userId, trackHash);
+  const keys = Object.keys(fields);
+  if (keys.length === 0) { return true; }
+  const setClause = keys.map(k => `${k} = ?`).join(', ');
+  const vals = keys.map(k => fields[k]);
+  d.prepare(`UPDATE user_metadata SET ${setClause} WHERE user_id = ? AND track_hash = ?`)
+    .run(...vals, userId, trackHash);
+  return true;
+}
+
+// Bulk-annotate Subsonic song objects with the current user's starred /
+// rating / play-count state. Cheaper than joining user_metadata into every
+// base query.
+function enrichSongsWithUserMeta(req, songs) {
+  if (!songs.length) { return songs; }
+  const trackIds = songs
+    .map(s => parseInt(s.id, 10))
+    .filter(Number.isFinite);
+  if (!trackIds.length) { return songs; }
+
+  const placeholders = trackIds.map(() => '?').join(',');
+  const rows = db.getDB().prepare(`
+    SELECT t.id, um.starred_at, um.rating, um.play_count
+    FROM tracks t
+    LEFT JOIN user_metadata um
+      ON um.track_hash = t.file_hash AND um.user_id = ?
+    WHERE t.id IN (${placeholders})
+  `).all(req.user.id, ...trackIds);
+
+  const meta = new Map(rows.map(r => [r.id, r]));
+  for (const song of songs) {
+    const m = meta.get(parseInt(song.id, 10));
+    if (!m) { continue; }
+    if (m.starred_at)               { song.starred    = isoUtc(m.starred_at); }
+    if (m.rating && m.rating > 0)   { song.userRating = m.rating; }
+    if (m.play_count && m.play_count > 0) { song.playCount = m.play_count; }
+  }
+  return songs;
+}
+
+// Normalise a repeated query param — Express gives us an Array when it's
+// passed multiple times (`id=1&id=2`) or a string when it's passed once.
+// Always returns an Array (possibly empty).
+function arrayParam(v) {
+  if (v == null) { return []; }
+  return Array.isArray(v) ? v : [v];
+}
+
 // Build a Subsonic Song object from a DB row. The query supplying `row` must
 // include at minimum: t.id, t.filepath, t.title, t.track_number, t.disc_number,
 // t.duration, t.format, t.file_size, t.bitrate, t.year, t.genre,
@@ -297,7 +360,7 @@ export function getAlbum(req, res) {
       coverArt:  album.album_art_file ? encAlbum(album.id) : undefined,
       songCount: songs.length,
       duration:  Math.round(songs.reduce((s, r) => s + (r.duration || 0), 0)),
-      song:      songs.map(songFromRow),
+      song:      enrichSongsWithUserMeta(req, songs.map(songFromRow)),
     },
   });
 }
@@ -319,7 +382,8 @@ export function getSong(req, res) {
     WHERE t.id = ? AND ${clause}
   `).get(id, ...params);
   if (!row) { return SubErr.NOT_FOUND(req, res, 'Song'); }
-  sendOk(req, res, { song: songFromRow(row) });
+  const [song] = enrichSongsWithUserMeta(req, [songFromRow(row)]);
+  sendOk(req, res, { song });
 }
 
 export function getGenres(req, res) {
@@ -430,7 +494,7 @@ export function getMusicDirectory(req, res) {
         id:     encAlbum(album.id),
         parent: album.artist_id != null ? encArtist(album.artist_id) : undefined,
         name:   album.name,
-        child:  songs.map(songFromRow),
+        child:  enrichSongsWithUserMeta(req, songs.map(songFromRow)),
       },
     });
   }
@@ -639,7 +703,7 @@ export function search3(req, res) {
         year:     al.year || undefined,
         coverArt: al.album_art_file ? encAlbum(al.id) : undefined,
       })),
-      song: songs.map(songFromRow),
+      song: enrichSongsWithUserMeta(req, songs.map(songFromRow)),
     },
   });
 }
@@ -647,3 +711,476 @@ export function search3(req, res) {
 // Legacy search + search2 are thin wrappers around search3 for old clients.
 export function search(req, res)  { search3(req, res); }
 export function search2(req, res) { search3(req, res); }
+
+// ════════════════════════════════════════════════════════════════════════════
+// Phase 2 — scrobble, favourites, playlists, album lists
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── Scrobble ────────────────────────────────────────────────────────────────
+
+// Subsonic `scrobble` is called in two modes:
+//   submission=false → "now playing" (we're about to/just started playing)
+//   submission=true  → "completed play" (update stats)
+// We only increment counts on submission=true.
+export function scrobble(req, res) {
+  const parsed = decodeId(req.query.id, 'song');
+  if (!parsed) { return SubErr.MISSING_PARAM(req, res, 'id'); }
+  const submission = req.query.submission !== 'false'; // default true per spec
+  if (!submission) { return sendOk(req, res); }
+
+  const hash = trackFileHash(parsed.id);
+  if (!hash) { return SubErr.NOT_FOUND(req, res, 'Song'); }
+
+  // Subsonic passes milliseconds since epoch; we store an ISO-ish datetime.
+  const ms = parseInt(req.query.time, 10);
+  const when = Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 19) : null;
+
+  // Bump play_count; set last_played to the supplied time or now.
+  const d = db.getDB();
+  d.prepare('INSERT OR IGNORE INTO user_metadata (user_id, track_hash) VALUES (?, ?)')
+    .run(req.user.id, hash);
+  d.prepare(`
+    UPDATE user_metadata
+    SET play_count = COALESCE(play_count, 0) + 1,
+        last_played = COALESCE(?, datetime('now'))
+    WHERE user_id = ? AND track_hash = ?
+  `).run(when, req.user.id, hash);
+
+  sendOk(req, res);
+}
+
+// ── Star / unstar / setRating / getStarred2 ────────────────────────────────
+
+// `star`/`unstar` accept `id` (songs), `albumId`, and `artistId` params, each
+// repeatable. Phase 2 tracks star state only for songs; albums/artists are
+// accepted silently so clients don't error out, and we record the star by
+// flagging *any one* track under that album/artist so the UI reflects a
+// star. Proper per-album/artist star tables are a future improvement.
+
+function markStarred(req, trackIds, nowIso) {
+  for (const id of trackIds) {
+    const hash = trackFileHash(id);
+    if (hash) { upsertUserMeta(req.user.id, hash, { starred_at: nowIso }); }
+  }
+}
+
+function tracksUnderAlbum(albumIds) {
+  if (!albumIds.length) { return []; }
+  const ph = albumIds.map(() => '?').join(',');
+  return db.getDB().prepare(`SELECT id FROM tracks WHERE album_id IN (${ph})`)
+    .all(...albumIds).map(r => r.id);
+}
+function tracksUnderArtist(artistIds) {
+  if (!artistIds.length) { return []; }
+  const ph = artistIds.map(() => '?').join(',');
+  return db.getDB().prepare(`SELECT id FROM tracks WHERE artist_id IN (${ph})`)
+    .all(...artistIds).map(r => r.id);
+}
+
+function collectStarTargets(req) {
+  const songIds = arrayParam(req.query.id).map(v => decodeId(v, 'song')?.id).filter(Number.isFinite);
+  const albumIds = arrayParam(req.query.albumId).map(v => decodeId(v, 'album')?.id).filter(Number.isFinite);
+  const artistIds = arrayParam(req.query.artistId).map(v => decodeId(v, 'artist')?.id).filter(Number.isFinite);
+  return [...songIds, ...tracksUnderAlbum(albumIds), ...tracksUnderArtist(artistIds)];
+}
+
+export function star(req, res) {
+  const targets = collectStarTargets(req);
+  if (!targets.length) { return SubErr.MISSING_PARAM(req, res, 'id / albumId / artistId'); }
+  const nowIso = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  markStarred(req, targets, nowIso);
+  sendOk(req, res);
+}
+
+export function unstar(req, res) {
+  const targets = collectStarTargets(req);
+  if (!targets.length) { return SubErr.MISSING_PARAM(req, res, 'id / albumId / artistId'); }
+  for (const id of targets) {
+    const hash = trackFileHash(id);
+    if (hash) { upsertUserMeta(req.user.id, hash, { starred_at: null }); }
+  }
+  sendOk(req, res);
+}
+
+export function setRating(req, res) {
+  const parsed = decodeId(req.query.id, 'song');
+  if (!parsed) { return SubErr.MISSING_PARAM(req, res, 'id'); }
+  const rating = parseInt(req.query.rating, 10);
+  if (!Number.isFinite(rating) || rating < 0 || rating > 5) {
+    return SubErr.GENERIC(req, res, 'rating must be 0..5');
+  }
+  const hash = trackFileHash(parsed.id);
+  if (!hash) { return SubErr.NOT_FOUND(req, res, 'Song'); }
+  upsertUserMeta(req.user.id, hash, { rating: rating === 0 ? null : rating });
+  sendOk(req, res);
+}
+
+export function getStarred2(req, res) {
+  const { clause, params } = libraryScope(req);
+  const rows = db.getDB().prepare(`
+    SELECT t.id, t.filepath, t.title, t.track_number, t.disc_number, t.duration,
+           t.format, t.file_size, t.bitrate, t.year, t.genre, t.album_art_file,
+           t.created_at, t.library_id,
+           a.id AS artist_id, a.name AS artist_name,
+           al.id AS album_id, al.name AS album_name
+    FROM tracks t
+    LEFT JOIN artists a  ON a.id = t.artist_id
+    LEFT JOIN albums  al ON al.id = t.album_id
+    JOIN user_metadata um ON um.track_hash = t.file_hash AND um.user_id = ?
+    WHERE ${clause} AND um.starred_at IS NOT NULL
+    ORDER BY um.starred_at DESC
+  `).all(req.user.id, ...params);
+  const songs = enrichSongsWithUserMeta(req, rows.map(songFromRow));
+  sendOk(req, res, {
+    starred2: {
+      // Phase 2 only stars songs; artist/album arrays are empty but present
+      // so clients that look for them don't choke.
+      artist: [],
+      album:  [],
+      song:   songs,
+    },
+  });
+}
+
+// ── Album lists ────────────────────────────────────────────────────────────
+
+// Shared album-list query: returns albums ordered by the given SQL tail
+// (ORDER BY + LIMIT/OFFSET), scoped to the caller's libraries. `type` decides
+// which ordering we synthesize.
+function buildAlbumListQuery(req, type, params = {}) {
+  const size   = Math.min(Math.max(parseInt(params.size, 10) || 10, 1), 500);
+  const offset = Math.max(0, parseInt(params.offset, 10) || 0);
+  const { clause, params: libParams } = libraryScope(req);
+
+  // Base select + join schema used by every type.
+  const base = `
+    SELECT al.id, al.name, al.year, al.album_art_file, al.artist_id,
+           a.name AS artist_name,
+           COUNT(t.id) AS songCount, SUM(t.duration) AS duration,
+           MIN(t.genre) AS genre, MIN(t.created_at) AS created_at,
+           MAX(um.starred_at) AS starred_at,
+           MAX(um.rating) AS rating_max,
+           SUM(COALESCE(um.play_count, 0)) AS plays,
+           MAX(um.last_played) AS last_played
+    FROM albums al
+    LEFT JOIN artists a ON a.id = al.artist_id
+    JOIN tracks t ON t.album_id = al.id
+    LEFT JOIN user_metadata um ON um.track_hash = t.file_hash AND um.user_id = ?
+    WHERE ${clause}
+  `;
+  const tailParams = [req.user.id, ...libParams];
+
+  let where   = '';           // row-level filter (WHERE clause tail)
+  let having  = 'songCount > 0'; // group-level filter (HAVING clause)
+  let order   = 'al.name COLLATE NOCASE';
+
+  switch (type) {
+    case 'newest':    order = 'MIN(t.created_at) DESC'; break;
+    case 'recent':    having += ' AND MAX(um.last_played) IS NOT NULL'; order = 'MAX(um.last_played) DESC'; break;
+    case 'frequent':  having += ' AND plays > 0';                        order = 'plays DESC'; break;
+    case 'highest':   having += ' AND rating_max IS NOT NULL';           order = 'rating_max DESC'; break;
+    case 'starred':   having += ' AND starred_at IS NOT NULL';           order = 'starred_at DESC'; break;
+    case 'random':    order = 'RANDOM()'; break;
+    case 'byYear': {
+      const from = parseInt(params.fromYear, 10);
+      const to   = parseInt(params.toYear, 10);
+      if (!Number.isFinite(from) || !Number.isFinite(to)) { return null; }
+      where = 'AND al.year BETWEEN ? AND ?';
+      tailParams.push(Math.min(from, to), Math.max(from, to));
+      order = from <= to ? 'al.year ASC' : 'al.year DESC';
+      break;
+    }
+    case 'byGenre': {
+      if (!params.genre) { return null; }
+      where = 'AND t.genre = ?';
+      tailParams.push(params.genre);
+      // order stays at the default alphabetical
+      break;
+    }
+    case 'alphabeticalByArtist': order = 'a.name COLLATE NOCASE, al.name COLLATE NOCASE'; break;
+    case 'alphabeticalByName':
+    default:
+      order = 'al.name COLLATE NOCASE';
+  }
+
+  tailParams.push(size, offset);
+  return {
+    sql: `${base} ${where} GROUP BY al.id HAVING ${having} ORDER BY ${order} LIMIT ? OFFSET ?`,
+    params: tailParams,
+  };
+}
+
+function albumFromListRow(al) {
+  return {
+    id:        encAlbum(al.id),
+    parent:    al.artist_id != null ? encArtist(al.artist_id) : undefined,
+    isDir:     true,
+    name:      al.name,
+    title:     al.name,
+    album:     al.name,
+    artist:    al.artist_name || undefined,
+    artistId:  al.artist_id != null ? encArtist(al.artist_id) : undefined,
+    year:      al.year || undefined,
+    genre:     al.genre || undefined,
+    coverArt:  al.album_art_file ? encAlbum(al.id) : undefined,
+    songCount: al.songCount,
+    duration:  al.duration != null ? Math.round(al.duration) : undefined,
+    created:   isoUtc(al.created_at),
+    starred:   al.starred_at ? isoUtc(al.starred_at) : undefined,
+    playCount: al.plays > 0 ? al.plays : undefined,
+  };
+}
+
+export function getAlbumList2(req, res) {
+  const type = String(req.query.type || 'alphabeticalByName');
+  const query = buildAlbumListQuery(req, type, req.query);
+  if (!query) { return SubErr.MISSING_PARAM(req, res, type === 'byYear' ? 'fromYear/toYear' : 'genre'); }
+  const rows = db.getDB().prepare(query.sql).all(...query.params);
+  sendOk(req, res, { albumList2: { album: rows.map(albumFromListRow) } });
+}
+
+// v1 client path. Same payload under the older tag.
+export function getAlbumList(req, res) {
+  const type = String(req.query.type || 'alphabeticalByName');
+  const query = buildAlbumListQuery(req, type, req.query);
+  if (!query) { return SubErr.MISSING_PARAM(req, res, type === 'byYear' ? 'fromYear/toYear' : 'genre'); }
+  const rows = db.getDB().prepare(query.sql).all(...query.params);
+  sendOk(req, res, { albumList: { album: rows.map(albumFromListRow) } });
+}
+
+// ── Random songs / songs by genre ──────────────────────────────────────────
+
+export function getRandomSongs(req, res) {
+  const size   = Math.min(Math.max(parseInt(req.query.size, 10) || 10, 1), 500);
+  const fromY  = parseInt(req.query.fromYear, 10);
+  const toY    = parseInt(req.query.toYear, 10);
+  const genre  = req.query.genre || null;
+  const folder = decodeId(req.query.musicFolderId, 'folder');
+
+  const { clause, params } = libraryScope(req);
+  const where = [clause];
+  const args  = [...params];
+  if (genre)                    { where.push('t.genre = ?'); args.push(genre); }
+  if (Number.isFinite(fromY))   { where.push('t.year >= ?'); args.push(fromY); }
+  if (Number.isFinite(toY))     { where.push('t.year <= ?'); args.push(toY); }
+  if (folder)                   { where.push('t.library_id = ?'); args.push(folder.id); }
+
+  const rows = db.getDB().prepare(`
+    SELECT t.id, t.filepath, t.title, t.track_number, t.disc_number, t.duration,
+           t.format, t.file_size, t.bitrate, t.year, t.genre, t.album_art_file,
+           t.created_at, t.library_id,
+           a.id AS artist_id, a.name AS artist_name,
+           al.id AS album_id, al.name AS album_name
+    FROM tracks t
+    LEFT JOIN artists a  ON a.id = t.artist_id
+    LEFT JOIN albums  al ON al.id = t.album_id
+    WHERE ${where.join(' AND ')}
+    ORDER BY RANDOM()
+    LIMIT ?
+  `).all(...args, size);
+
+  sendOk(req, res, {
+    randomSongs: { song: enrichSongsWithUserMeta(req, rows.map(songFromRow)) },
+  });
+}
+
+export function getSongsByGenre(req, res) {
+  const genre  = req.query.genre;
+  if (!genre) { return SubErr.MISSING_PARAM(req, res, 'genre'); }
+  const count  = Math.min(Math.max(parseInt(req.query.count,  10) || 10, 1), 500);
+  const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
+  const folder = decodeId(req.query.musicFolderId, 'folder');
+
+  const { clause, params } = libraryScope(req);
+  const where = [clause, 't.genre = ?'];
+  const args  = [...params, genre];
+  if (folder) { where.push('t.library_id = ?'); args.push(folder.id); }
+
+  const rows = db.getDB().prepare(`
+    SELECT t.id, t.filepath, t.title, t.track_number, t.disc_number, t.duration,
+           t.format, t.file_size, t.bitrate, t.year, t.genre, t.album_art_file,
+           t.created_at, t.library_id,
+           a.id AS artist_id, a.name AS artist_name,
+           al.id AS album_id, al.name AS album_name
+    FROM tracks t
+    LEFT JOIN artists a  ON a.id = t.artist_id
+    LEFT JOIN albums  al ON al.id = t.album_id
+    WHERE ${where.join(' AND ')}
+    ORDER BY a.name COLLATE NOCASE, al.name COLLATE NOCASE, t.disc_number, t.track_number
+    LIMIT ? OFFSET ?
+  `).all(...args, count, offset);
+
+  sendOk(req, res, {
+    songsByGenre: { song: enrichSongsWithUserMeta(req, rows.map(songFromRow)) },
+  });
+}
+
+// ── Playlists ──────────────────────────────────────────────────────────────
+// mStream stores playlist_tracks.filepath as "<vpath>/<relpath>". Subsonic
+// clients pass song IDs; we translate between the two on insert/retrieval.
+
+function filepathForSong(trackId) {
+  const row = db.getDB().prepare(`
+    SELECT t.filepath AS rel, l.name AS vpath
+    FROM tracks t JOIN libraries l ON l.id = t.library_id
+    WHERE t.id = ?
+  `).get(trackId);
+  return row ? `${row.vpath}/${row.rel}` : null;
+}
+
+function playlistMeta(playlistId, userId) {
+  return db.getDB().prepare(`
+    SELECT p.id, p.name, p.created_at, p.user_id, u.username,
+           (SELECT COUNT(*) FROM playlist_tracks WHERE playlist_id = p.id) AS songCount,
+           (SELECT COALESCE(SUM(t.duration), 0) FROM playlist_tracks pt
+              JOIN libraries l ON l.name =
+                CASE WHEN INSTR(pt.filepath, '/') > 0
+                     THEN SUBSTR(pt.filepath, 1, INSTR(pt.filepath, '/') - 1)
+                     ELSE pt.filepath END
+              JOIN tracks t ON t.library_id = l.id AND t.filepath =
+                CASE WHEN INSTR(pt.filepath, '/') > 0
+                     THEN SUBSTR(pt.filepath, INSTR(pt.filepath, '/') + 1)
+                     ELSE '' END
+              WHERE pt.playlist_id = p.id) AS duration
+    FROM playlists p JOIN users u ON u.id = p.user_id
+    WHERE p.id = ? AND p.user_id = ?
+  `).get(playlistId, userId);
+}
+
+function playlistSummary(row) {
+  return {
+    id:        `pl-${row.id}`,
+    name:      row.name,
+    owner:     row.username,
+    public:    false, // mStream has no public-flag concept yet
+    songCount: row.songCount,
+    duration:  Math.round(row.duration || 0),
+    created:   isoUtc(row.created_at),
+    changed:   isoUtc(row.created_at),
+  };
+}
+
+function decodePlaylistId(raw) {
+  const s = String(raw || '');
+  const m = /^(?:pl-)?(\d+)$/.exec(s);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+export function getPlaylists(req, res) {
+  const rows = db.getDB().prepare(`
+    SELECT p.id, p.name, p.created_at, p.user_id, u.username,
+           (SELECT COUNT(*) FROM playlist_tracks WHERE playlist_id = p.id) AS songCount,
+           0 AS duration
+    FROM playlists p JOIN users u ON u.id = p.user_id
+    WHERE p.user_id = ?
+    ORDER BY p.name COLLATE NOCASE
+  `).all(req.user.id);
+  sendOk(req, res, { playlists: { playlist: rows.map(playlistSummary) } });
+}
+
+export function getPlaylist(req, res) {
+  const id = decodePlaylistId(req.query.id);
+  if (id == null) { return SubErr.MISSING_PARAM(req, res, 'id'); }
+  const meta = playlistMeta(id, req.user.id);
+  if (!meta) { return SubErr.NOT_FOUND(req, res, 'Playlist'); }
+
+  // Resolve tracks by splitting pt.filepath at the first `/`.
+  const tracks = db.getDB().prepare(`
+    SELECT t.id, t.filepath, t.title, t.track_number, t.disc_number, t.duration,
+           t.format, t.file_size, t.bitrate, t.year, t.genre, t.album_art_file,
+           t.created_at, t.library_id,
+           a.id AS artist_id, a.name AS artist_name,
+           al.id AS album_id, al.name AS album_name
+    FROM playlist_tracks pt
+    JOIN libraries l ON l.name = CASE
+        WHEN INSTR(pt.filepath, '/') > 0 THEN SUBSTR(pt.filepath, 1, INSTR(pt.filepath, '/') - 1)
+        ELSE pt.filepath END
+    JOIN tracks t ON t.library_id = l.id AND t.filepath = CASE
+        WHEN INSTR(pt.filepath, '/') > 0 THEN SUBSTR(pt.filepath, INSTR(pt.filepath, '/') + 1)
+        ELSE '' END
+    LEFT JOIN artists a  ON a.id = t.artist_id
+    LEFT JOIN albums  al ON al.id = t.album_id
+    WHERE pt.playlist_id = ?
+    ORDER BY pt.position
+  `).all(id);
+
+  sendOk(req, res, {
+    playlist: {
+      ...playlistSummary(meta),
+      entry: enrichSongsWithUserMeta(req, tracks.map(songFromRow)),
+    },
+  });
+}
+
+function addSongsToPlaylist(playlistId, songIds, startPosition) {
+  const stmt = db.getDB().prepare(
+    'INSERT INTO playlist_tracks (playlist_id, filepath, position) VALUES (?, ?, ?)'
+  );
+  let pos = startPosition;
+  for (const sid of songIds) {
+    const fp = filepathForSong(sid);
+    if (fp) { stmt.run(playlistId, fp, pos++); }
+  }
+}
+
+export function createPlaylist(req, res) {
+  const name = String(req.query.name || '').trim();
+  const updatePlaylistId = decodePlaylistId(req.query.playlistId);
+  const songIds = arrayParam(req.query.songId).map(v => decodeId(v, 'song')?.id).filter(Number.isFinite);
+  const d = db.getDB();
+
+  if (updatePlaylistId != null) {
+    // Subsonic overloads createPlaylist: passing playlistId replaces contents.
+    const meta = playlistMeta(updatePlaylistId, req.user.id);
+    if (!meta) { return SubErr.NOT_FOUND(req, res, 'Playlist'); }
+    d.prepare('DELETE FROM playlist_tracks WHERE playlist_id = ?').run(updatePlaylistId);
+    addSongsToPlaylist(updatePlaylistId, songIds, 0);
+    if (name) { d.prepare('UPDATE playlists SET name = ? WHERE id = ?').run(name, updatePlaylistId); }
+    return getPlaylist({ ...req, query: { ...req.query, id: `pl-${updatePlaylistId}` } }, res);
+  }
+
+  if (!name) { return SubErr.MISSING_PARAM(req, res, 'name'); }
+  const result = d.prepare('INSERT INTO playlists (name, user_id) VALUES (?, ?)').run(name, req.user.id);
+  const newId = Number(result.lastInsertRowid);
+  addSongsToPlaylist(newId, songIds, 0);
+  return getPlaylist({ ...req, query: { ...req.query, id: `pl-${newId}` } }, res);
+}
+
+export function updatePlaylist(req, res) {
+  const id = decodePlaylistId(req.query.playlistId);
+  if (id == null) { return SubErr.MISSING_PARAM(req, res, 'playlistId'); }
+  const meta = playlistMeta(id, req.user.id);
+  if (!meta) { return SubErr.NOT_FOUND(req, res, 'Playlist'); }
+
+  const d = db.getDB();
+  if (req.query.name) { d.prepare('UPDATE playlists SET name = ? WHERE id = ?').run(String(req.query.name), id); }
+  // `public` and `comment` are accepted but ignored (no schema for them yet).
+
+  // Remove entries by zero-based index (into current sorted position list).
+  const removeIdx = arrayParam(req.query.songIndexToRemove).map(v => parseInt(v, 10)).filter(Number.isFinite);
+  if (removeIdx.length) {
+    const rows = d.prepare('SELECT id FROM playlist_tracks WHERE playlist_id = ? ORDER BY position').all(id);
+    const toDelete = removeIdx.filter(i => i >= 0 && i < rows.length).map(i => rows[i].id);
+    if (toDelete.length) {
+      const ph = toDelete.map(() => '?').join(',');
+      d.prepare(`DELETE FROM playlist_tracks WHERE id IN (${ph})`).run(...toDelete);
+    }
+  }
+
+  // Append new songs at the end.
+  const toAdd = arrayParam(req.query.songIdToAdd).map(v => decodeId(v, 'song')?.id).filter(Number.isFinite);
+  if (toAdd.length) {
+    const maxPos = d.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS p FROM playlist_tracks WHERE playlist_id = ?').get(id).p;
+    addSongsToPlaylist(id, toAdd, maxPos);
+  }
+
+  sendOk(req, res);
+}
+
+export function deletePlaylist(req, res) {
+  const id = decodePlaylistId(req.query.id);
+  if (id == null) { return SubErr.MISSING_PARAM(req, res, 'id'); }
+  const result = db.getDB().prepare('DELETE FROM playlists WHERE id = ? AND user_id = ?').run(id, req.user.id);
+  if (result.changes === 0) { return SubErr.NOT_FOUND(req, res, 'Playlist'); }
+  sendOk(req, res);
+}

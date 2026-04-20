@@ -43,6 +43,26 @@ const METHODS = {
   search:            H.search,
   search2:           H.search2,
   search3:           H.search3,
+
+  // Phase 2 — scrobble / favourites
+  scrobble:          H.scrobble,
+  star:              H.star,
+  unstar:            H.unstar,
+  setRating:         H.setRating,
+  getStarred2:       H.getStarred2,
+
+  // Phase 2 — album/song lists
+  getAlbumList:      H.getAlbumList,
+  getAlbumList2:     H.getAlbumList2,
+  getRandomSongs:    H.getRandomSongs,
+  getSongsByGenre:   H.getSongsByGenre,
+
+  // Phase 2 — playlists
+  getPlaylists:      H.getPlaylists,
+  getPlaylist:       H.getPlaylist,
+  createPlaylist:    H.createPlaylist,
+  updatePlaylist:    H.updatePlaylist,
+  deletePlaylist:    H.deletePlaylist,
 };
 
 export function setup(mstream) {

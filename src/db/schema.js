@@ -1,7 +1,7 @@
 // SQLite schema definitions and migration system for mStream.
 // Uses PRAGMA user_version for tracking which migrations have been applied.
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 export const SCHEMA_V1 = `
   -- Users
@@ -241,6 +241,14 @@ export const SCHEMA_V9 = `
   CREATE INDEX IF NOT EXISTS idx_user_api_keys_user ON user_api_keys(user_id);
 `;
 
+export const SCHEMA_V10 = `
+  -- Subsonic star state. Decoupled from rating so a client can star a track
+  -- without setting its rating (and vice versa). Populated by Subsonic
+  -- star/unstar endpoints; exposed in getStarred2 + the \`starred\` field
+  -- on song/album responses.
+  ALTER TABLE user_metadata ADD COLUMN starred_at TEXT;
+`;
+
 // rescanRequired: true — marks migrations that change the tracks table schema
 // and need a force rescan to populate new fields. When applied, a marker file
 // is written so the next boot triggers rescanAll() instead of scanAll().
@@ -254,4 +262,5 @@ export const MIGRATIONS = [
   { version: 7, sql: SCHEMA_V7 },
   { version: 8, sql: SCHEMA_V8 },
   { version: 9, sql: SCHEMA_V9 },
+  { version: 10, sql: SCHEMA_V10 },
 ];
