@@ -124,7 +124,7 @@ function countSmartQuery(filters, userId, user) {
     LEFT JOIN artists a ON t.artist_id = a.id
     LEFT JOIN albums al ON t.album_id = al.id
     LEFT JOIN libraries l ON t.library_id = l.id
-    LEFT JOIN user_metadata um ON t.file_hash = um.track_hash AND um.user_id = ${userId ? '?' : 'NULL'}
+    LEFT JOIN user_metadata um ON COALESCE(t.audio_hash, t.file_hash) = um.track_hash AND um.user_id = ${userId ? '?' : 'NULL'}
     ${genreJoin}
     WHERE ${conditions.join(' AND ')}
   `;

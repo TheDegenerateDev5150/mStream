@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -46,6 +46,31 @@ fn default_commit_interval() -> u64 { 25 }
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+
+    // Hidden developer/test subcommand: `rust-parser --audio-hash <path>`
+    // prints the dual-hash result as JSON on stdout and exits. Used by
+    // test/audio-hash-parity.test.mjs to compare against the JS impl.
+    if args.len() == 3 && args[1] == "--audio-hash" {
+        let p = Path::new(&args[2]);
+        let ext = file_ext(p).to_lowercase();
+        match compute_hashes(p, &ext) {
+            Ok((fh, ah)) => {
+                // Null-safe JSON serialization without pulling in serde for a
+                // one-line output: quote strings, use "null" for None.
+                let ah_json = match ah {
+                    Some(s) => format!("\"{}\"", s),
+                    None => "null".to_string(),
+                };
+                println!("{{\"fileHash\":\"{}\",\"audioHash\":{},\"format\":\"{}\"}}", fh, ah_json, ext);
+                return;
+            }
+            Err(e) => {
+                eprintln!("compute_hashes failed: {}", e);
+                std::process::exit(2);
+            }
+        }
+    }
+
     let json_str = match args.last() {
         Some(s) if args.len() > 1 => s.clone(),
         _ => {
@@ -196,31 +221,37 @@ fn process_one(
         .to_string_lossy()
         .replace('\\', "/");
 
-    // Check if file exists and is unchanged. We also read the existing
-    // file_hash so we can migrate user-facing rows (stars, ratings, play
-    // counts, bookmarks, play queue) if the content hash changes on
-    // re-parse — typical trigger is an external ID3 tag editor rewriting
-    // the file bytes.
-    let existing: Option<(i64, i64, String)> = conn.prepare_cached(
-        "SELECT id, modified, file_hash FROM tracks WHERE filepath = ? AND library_id = ?"
+    // Check if the file is already in the table. Keep a snapshot of both
+    // hashes so we can migrate user-facing rows (stars, ratings, play
+    // counts, bookmarks, play queue) if the track's canonical identity
+    // changed on re-parse — typical trigger is an external ID3 tag editor.
+    let existing: Option<(i64, i64, String, String)> = conn.prepare_cached(
+        "SELECT id, modified, file_hash, audio_hash FROM tracks WHERE filepath = ? AND library_id = ?"
     )?.query_row(rusqlite::params![rel_path, config.library_id], |row| {
-        Ok((row.get(0)?, row.get(1)?, row.get::<_, Option<String>>(2)?.unwrap_or_default()))
+        Ok((
+            row.get(0)?,
+            row.get(1)?,
+            row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+            row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+        ))
     }).ok();
 
-    let old_hash: Option<String> = if let Some((id, existing_mod, old_hash)) = &existing {
-        if *existing_mod == mod_time && !config.force_rescan {
-            // Unchanged — just update scan_id
-            conn.execute("UPDATE tracks SET scan_id = ? WHERE id = ?",
-                rusqlite::params![config.scan_id, id])?;
-            return Ok(false);
-        }
-        // Modified — delete old record; remember the prior hash so we can
-        // migrate user_* rows if the content hash changes.
-        conn.execute("DELETE FROM tracks WHERE id = ?", rusqlite::params![id])?;
-        if old_hash.is_empty() { None } else { Some(old_hash.clone()) }
-    } else {
-        None
-    };
+    let (old_hash, old_audio_hash): (Option<String>, Option<String>) =
+        if let Some((id, existing_mod, old_file, old_audio)) = &existing {
+            if *existing_mod == mod_time && !config.force_rescan {
+                // Unchanged — just update scan_id
+                conn.execute("UPDATE tracks SET scan_id = ? WHERE id = ?",
+                    rusqlite::params![config.scan_id, id])?;
+                return Ok(false);
+            }
+            conn.execute("DELETE FROM tracks WHERE id = ?", rusqlite::params![id])?;
+            (
+                if old_file.is_empty()  { None } else { Some(old_file.clone())  },
+                if old_audio.is_empty() { None } else { Some(old_audio.clone()) },
+            )
+        } else {
+            (None, None)
+        };
 
     // Parse metadata
     let mut title = None;
@@ -279,7 +310,7 @@ fn process_one(
         aa_file = check_directory_for_album_art(filepath, config, dir_art_cache);
     }
 
-    let hash = calculate_hash(filepath)?;
+    let (hash, audio_hash) = compute_hashes(filepath, ext)?;
 
     // Find or create artist
     let artist_id = match &artist {
@@ -299,12 +330,12 @@ fn process_one(
     // Insert track
     conn.execute(
         "INSERT OR REPLACE INTO tracks (filepath, library_id, title, artist_id, album_id, track_number,
-         disc_number, year, duration, format, file_hash, album_art_file, genre, replaygain_track_db,
-         modified, scan_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         disc_number, year, duration, format, file_hash, audio_hash, album_art_file, genre,
+         replaygain_track_db, modified, scan_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rusqlite::params![
             rel_path, config.library_id, title, artist_id, album_id,
-            track_num, disc_num, year, duration_sec, ext, hash,
+            track_num, disc_num, year, duration_sec, ext, hash, audio_hash,
             aa_file, genre, rg_track_db, mod_time, config.scan_id
         ],
     )?;
@@ -312,13 +343,14 @@ fn process_one(
     let track_id = conn.last_insert_rowid();
     set_track_genres(conn, track_id, genre.as_deref())?;
 
-    // If the file's content hash changed (vs. the row we deleted above),
-    // migrate user_metadata / user_bookmarks / user_play_queue so stars,
-    // bookmarks, and queue entries follow the file's new identity.
-    if let Some(old) = &old_hash {
-        if old != &hash {
-            migrate_hash_references(conn, old, &hash)?;
-        }
+    // Migrate user_* rows to the new canonical identity. Canonical = audio_hash
+    // when present, file_hash otherwise. A tag edit keeps audio_hash stable,
+    // so the common case is a no-op; migration only runs on real content
+    // change or on the transition from file-hash-only rows to audio_hash rows.
+    let new_canon = audio_hash.clone().unwrap_or_else(|| hash.clone());
+    let old_canon = old_audio_hash.clone().unwrap_or_else(|| old_hash.clone().unwrap_or_default());
+    if !old_canon.is_empty() && old_canon != new_canon {
+        migrate_hash_references(conn, &old_canon, &new_canon)?;
     }
 
     Ok(true)
@@ -451,16 +483,139 @@ fn set_track_genres(conn: &Connection, track_id: i64, genre_str: Option<&str>) -
 
 // ── MD5 hash ────────────────────────────────────────────────────────────────
 
-fn calculate_hash(filepath: &Path) -> Result<String, Box<dyn std::error::Error>> {
-    let mut file = fs::File::open(filepath)?;
+// ── Dual-hash: file_hash (whole file) + audio_hash (audio payload only) ────
+//
+// audio_hash strips tag regions so user-facing state (stars, play counts,
+// bookmarks, play queue) survives tag-only edits. MUST produce the same
+// output as src/db/audio-hash.js `computeHashes` — parity is enforced by
+// test/audio-hash-parity.test.mjs. Any change to the byte-range logic must
+// land in both implementations simultaneously.
+
+fn md5_range(
+    file: &mut fs::File, start: u64, end: u64,
+) -> Result<String, Box<dyn std::error::Error>> {
+    file.seek(SeekFrom::Start(start))?;
+    let mut remaining = end - start;
     let mut ctx = md5::Context::new();
     let mut buf = [0u8; 65536];
-    loop {
-        let n = file.read(&mut buf)?;
+    while remaining > 0 {
+        let chunk = buf.len().min(remaining as usize);
+        let n = file.read(&mut buf[..chunk])?;
         if n == 0 { break; }
         ctx.consume(&buf[..n]);
+        remaining -= n as u64;
     }
     Ok(format!("{:x}", ctx.compute()))
+}
+
+// MP3 audio range: between the ID3v2 header (if present) and the ID3v1
+// footer (if present). See the JS mirror for spec references.
+fn mp3_audio_range(file: &mut fs::File, file_size: u64) -> Option<(u64, u64)> {
+    if file_size < 10 { return None; }
+
+    let mut head = [0u8; 10];
+    file.seek(SeekFrom::Start(0)).ok()?;
+    file.read_exact(&mut head).ok()?;
+
+    let mut start: u64 = 0;
+    if head[0] == b'I' && head[1] == b'D' && head[2] == b'3' {
+        let tag_size: u64 =
+            ((head[6] & 0x7f) as u64) << 21 |
+            ((head[7] & 0x7f) as u64) << 14 |
+            ((head[8] & 0x7f) as u64) << 7  |
+             (head[9] & 0x7f) as u64;
+        start = 10 + tag_size;
+        if head[5] & 0x10 != 0 { start += 10; }  // footer flag
+    }
+
+    let mut end: u64 = file_size;
+    if file_size >= 128 {
+        let mut trailer = [0u8; 3];
+        file.seek(SeekFrom::Start(file_size - 128)).ok()?;
+        file.read_exact(&mut trailer).ok()?;
+        if trailer == *b"TAG" { end = file_size - 128; }
+    }
+
+    // APEv2 footer (8-byte signature at end - 32, or end - 32 - 128 if ID3v1 present).
+    if end >= 32 {
+        let footer_at = end - 32;
+        let mut probe = [0u8; 8];
+        file.seek(SeekFrom::Start(footer_at)).ok()?;
+        if file.read_exact(&mut probe).is_ok() && &probe == b"APETAGEX" {
+            let mut full = [0u8; 32];
+            file.seek(SeekFrom::Start(footer_at)).ok()?;
+            if file.read_exact(&mut full).is_ok() {
+                let sz = u32::from_le_bytes([full[12], full[13], full[14], full[15]]) as u64;
+                let flags = u32::from_le_bytes([full[20], full[21], full[22], full[23]]);
+                let has_header = (flags & 0x8000_0000) != 0;
+                let ape_total = sz + if has_header { 32 } else { 0 };
+                if end >= ape_total { end -= ape_total; }
+            }
+        }
+    }
+
+    if start >= end { return None; }
+    Some((start, end))
+}
+
+// FLAC: walk metadata blocks until last_flag set, then audio follows.
+fn flac_audio_range(file: &mut fs::File, file_size: u64) -> Option<(u64, u64)> {
+    if file_size < 4 { return None; }
+    let mut magic = [0u8; 4];
+    file.seek(SeekFrom::Start(0)).ok()?;
+    file.read_exact(&mut magic).ok()?;
+    if &magic != b"fLaC" { return None; }
+
+    let mut cursor: u64 = 4;
+    let mut hdr = [0u8; 4];
+    loop {
+        if cursor + 4 > file_size { return None; }
+        file.seek(SeekFrom::Start(cursor)).ok()?;
+        file.read_exact(&mut hdr).ok()?;
+        let last = (hdr[0] & 0x80) != 0;
+        let len: u64 = ((hdr[1] as u64) << 16) | ((hdr[2] as u64) << 8) | (hdr[3] as u64);
+        cursor += 4 + len;
+        if last { break; }
+        if cursor > file_size { return None; }
+    }
+    if cursor >= file_size { return None; }
+    Some((cursor, file_size))
+}
+
+fn audio_range_for_ext(
+    file: &mut fs::File, ext: &str, file_size: u64,
+) -> Option<(u64, u64)> {
+    match ext {
+        "mp3"  => mp3_audio_range(file, file_size),
+        "flac" => flac_audio_range(file, file_size),
+        _ => None,
+    }
+}
+
+fn compute_hashes(
+    filepath: &Path, ext: &str,
+) -> Result<(String, Option<String>), Box<dyn std::error::Error>> {
+    let mut file = fs::File::open(filepath)?;
+    let file_size = file.metadata()?.len();
+
+    file.seek(SeekFrom::Start(0))?;
+    let file_hash = {
+        let mut ctx = md5::Context::new();
+        let mut buf = [0u8; 65536];
+        loop {
+            let n = file.read(&mut buf)?;
+            if n == 0 { break; }
+            ctx.consume(&buf[..n]);
+        }
+        format!("{:x}", ctx.compute())
+    };
+
+    let audio_hash = match audio_range_for_ext(&mut file, ext, file_size) {
+        Some((start, end)) => Some(md5_range(&mut file, start, end)?),
+        None => None,
+    };
+
+    Ok((file_hash, audio_hash))
 }
 
 // ── Album art: embedded ─────────────────────────────────────────────────────

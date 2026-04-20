@@ -105,9 +105,15 @@ function libraryScope(req) {
 // Look up a user's metadata row for a given track. Used by star/rating/
 // scrobble handlers. Returns the row (possibly with NULL fields) or null if
 // we can't even find the track.
+// Return the canonical identity hash for a track. Prefers audio_hash (stable
+// across tag edits) and falls back to file_hash for formats the scanner
+// doesn't extract an audio region from and for rows created before the
+// audio_hash column was added.
 function trackFileHash(trackId) {
-  return db.getDB().prepare('SELECT file_hash FROM tracks WHERE id = ?')
-    .get(trackId)?.file_hash;
+  const row = db.getDB().prepare(
+    'SELECT file_hash, audio_hash FROM tracks WHERE id = ?'
+  ).get(trackId);
+  return row ? (row.audio_hash || row.file_hash) : undefined;
 }
 
 // Upsert a user_metadata row, setting the supplied fields. Leaves other
@@ -163,7 +169,7 @@ function enrichSongsWithUserMeta(req, songs) {
     SELECT t.id, um.starred_at, um.rating, um.play_count
     FROM tracks t
     LEFT JOIN user_metadata um
-      ON um.track_hash = t.file_hash AND um.user_id = ?
+      ON um.track_hash = COALESCE(t.audio_hash, t.file_hash) AND um.user_id = ?
     WHERE t.id IN (${placeholders})
   `).all(req.user.id, ...trackIds);
 
@@ -956,7 +962,7 @@ function starredSongRows(req) {
     FROM tracks t
     LEFT JOIN artists a  ON a.id = t.artist_id
     LEFT JOIN albums  al ON al.id = t.album_id
-    JOIN user_metadata um ON um.track_hash = t.file_hash AND um.user_id = ?
+    JOIN user_metadata um ON um.track_hash = COALESCE(t.audio_hash, t.file_hash) AND um.user_id = ?
     WHERE ${clause} AND um.starred_at IS NOT NULL
     ORDER BY um.starred_at DESC
   `).all(req.user.id, ...params);
@@ -1057,7 +1063,7 @@ function buildAlbumListQuery(req, type, params = {}) {
     FROM albums al
     LEFT JOIN artists a ON a.id = al.artist_id
     JOIN tracks t ON t.album_id = al.id
-    LEFT JOIN user_metadata um ON um.track_hash = t.file_hash AND um.user_id = ?
+    LEFT JOIN user_metadata um ON um.track_hash = COALESCE(t.audio_hash, t.file_hash) AND um.user_id = ?
     LEFT JOIN user_album_stars uas ON uas.album_id = al.id AND uas.user_id = ?
     WHERE ${clause}
   `;
@@ -1570,7 +1576,7 @@ export function getTopSongs(req, res) {
   const { clause, params } = libraryScope(req);
   const rows = db.getDB().prepare(`
     ${songQueryBase()}
-    LEFT JOIN user_metadata um ON um.track_hash = t.file_hash AND um.user_id = ?
+    LEFT JOIN user_metadata um ON um.track_hash = COALESCE(t.audio_hash, t.file_hash) AND um.user_id = ?
     WHERE ${clause} AND a.name = ?
     ORDER BY COALESCE(um.play_count, 0) DESC, um.last_played DESC, t.title
     LIMIT ?
@@ -1970,17 +1976,25 @@ export function getBookmarks(req, res) {
   if (!rows.length) { return sendOk(req, res, { bookmarks: { bookmark: [] } }); }
 
   const hashes = rows.map(r => r.track_hash);
+  // Duplicate the list so a bookmark keyed on file_hash still matches a
+  // track whose canonical is audio_hash (transitional rows), and vice
+  // versa. COALESCE in the JOIN would be cleaner but tracks-table lookups
+  // here are by hash value, not a join, so match both columns.
   const ph = hashes.map(() => '?').join(',');
   const { clause, params } = libraryScope(req);
   const songRows = db.getDB().prepare(`
     ${songQueryBase()}
-    WHERE t.file_hash IN (${ph}) AND ${clause}
-  `).all(...hashes, ...params);
+    WHERE (t.audio_hash IN (${ph}) OR t.file_hash IN (${ph})) AND ${clause}
+  `).all(...hashes, ...hashes, ...params);
   const byHash = new Map();
   for (const row of songRows) {
-    // Song rows don't expose file_hash in songQueryBase — look it up cheaply.
-    const h = db.getDB().prepare('SELECT file_hash FROM tracks WHERE id = ?').get(row.id)?.file_hash;
-    if (h) { byHash.set(h, row); }
+    // Songs don't expose hashes in songQueryBase — look up canonical cheaply.
+    const r = db.getDB().prepare('SELECT file_hash, audio_hash FROM tracks WHERE id = ?').get(row.id);
+    const canon = r?.audio_hash || r?.file_hash;
+    if (canon) { byHash.set(canon, row); }
+    // Also register the non-canonical key so a row whose bookmark hasn't
+    // yet been migrated still resolves its song entry.
+    if (r?.file_hash && r.file_hash !== canon) { byHash.set(r.file_hash, row); }
   }
 
   sendOk(req, res, {
@@ -2037,21 +2051,27 @@ export function getPlayQueue(req, res) {
   const hashes = JSON.parse(row.track_hashes_json || '[]');
   if (!hashes.length) { return sendOk(req, res, { playQueue: {} }); }
 
+  // Match both columns — stored queue hashes may be audio_hash (new rows)
+  // or file_hash (legacy rows / formats without audio-region parsing).
   const ph = hashes.map(() => '?').join(',');
   const { clause, params } = libraryScope(req);
   const songRows = db.getDB().prepare(`
     SELECT t.id, t.filepath, t.title, t.track_number, t.disc_number, t.duration,
            t.format, t.file_size, t.bitrate, t.year, t.genre, t.album_art_file,
-           t.created_at, t.library_id, t.file_hash AS _file_hash,
+           t.created_at, t.library_id, t.file_hash, t.audio_hash,
            a.id AS artist_id, a.name AS artist_name,
            al.id AS album_id, al.name AS album_name
     FROM tracks t
     LEFT JOIN artists a  ON a.id = t.artist_id
     LEFT JOIN albums  al ON al.id = t.album_id
-    WHERE t.file_hash IN (${ph}) AND ${clause}
-  `).all(...hashes, ...params);
+    WHERE (t.audio_hash IN (${ph}) OR t.file_hash IN (${ph})) AND ${clause}
+  `).all(...hashes, ...hashes, ...params);
 
-  const byHash = new Map(songRows.map(r => [r._file_hash, r]));
+  const byHash = new Map();
+  for (const r of songRows) {
+    if (r.audio_hash) { byHash.set(r.audio_hash, r); }
+    if (r.file_hash)  { byHash.set(r.file_hash, r); }
+  }
   // Re-order to match the stored sequence, dropping any entries whose tracks
   // were removed since save time.
   const ordered = hashes.map(h => byHash.get(h)).filter(Boolean);

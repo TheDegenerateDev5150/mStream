@@ -55,7 +55,7 @@ function runFfmpeg(args) {
   });
 }
 
-async function encode(outPath, f) {
+async function encode(outPath, f, fixtureIndex) {
   const meta = ['title', 'artist', 'album', 'date', 'track', 'disc', 'genre'];
   const metaArgs = [];
   const pairs = {
@@ -72,10 +72,17 @@ async function encode(outPath, f) {
       metaArgs.push('-metadata', `${key}=${pairs[key]}`);
     }
   }
+  // Each fixture gets a distinct tone frequency so the resulting audio
+  // payload (and therefore audio_hash) differs per-file. Tests that rely
+  // on bookmarks / play queue / scrobbles being track-specific break when
+  // fixtures are all identical silence — two tracks with the same audio
+  // content correctly share one audio_hash, but we want distinct content
+  // here so per-track state stays per-track.
+  const freq = 220 + fixtureIndex * 40;  // 220, 260, 300, … Hz
   await runFfmpeg([
     '-nostdin', '-y', '-loglevel', 'error',
-    '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo',
-    '-t', '1',
+    '-f', 'lavfi', '-i', `sine=frequency=${freq}:sample_rate=44100:duration=1`,
+    '-ac', '2',
     '-c:a', 'libmp3lame', '-b:a', '64k',
     ...metaArgs,
     '-id3v2_version', '3',
@@ -103,11 +110,12 @@ export const FIXTURE_SUMMARY = {
  */
 export async function ensureFixtures() {
   await fs.mkdir(MUSIC_DIR, { recursive: true });
-  for (const f of FIXTURES) {
+  for (let i = 0; i < FIXTURES.length; i++) {
+    const f = FIXTURES[i];
     const full = path.join(MUSIC_DIR, relPathFor(f));
     try { await fs.access(full); continue; } catch { /* need to generate */ }
     await fs.mkdir(path.dirname(full), { recursive: true });
-    await encode(full, f);
+    await encode(full, f, i);
   }
   return MUSIC_DIR;
 }

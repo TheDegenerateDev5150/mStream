@@ -11,6 +11,7 @@ import Joi from 'joi';
 import { Jimp } from 'jimp';
 import mime from 'mime-types';
 import { migrateHashReferences as migrateHashRefsShared } from './hash-migration.js';
+import { computeHashes } from './audio-hash.js';
 
 // ── Parse CLI input ─────────────────────────────────────────────────────────
 
@@ -59,7 +60,7 @@ db.exec('PRAGMA busy_timeout = 5000');
 
 const stmts = {
   getTrack: db.prepare(
-    'SELECT id, modified, file_hash FROM tracks WHERE filepath = ? AND library_id = ?'
+    'SELECT id, modified, file_hash, audio_hash FROM tracks WHERE filepath = ? AND library_id = ?'
   ),
   updateScanId: db.prepare(
     'UPDATE tracks SET scan_id = ? WHERE id = ?'
@@ -81,9 +82,9 @@ const stmts = {
   ),
   insertTrack: db.prepare(
     `INSERT OR REPLACE INTO tracks (filepath, library_id, title, artist_id, album_id, track_number,
-     disc_number, year, duration, format, file_hash, album_art_file, genre, replaygain_track_db,
-     modified, scan_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     disc_number, year, duration, format, file_hash, audio_hash, album_art_file, genre,
+     replaygain_track_db, modified, scan_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ),
   deleteOldTracks: db.prepare(
     'DELETE FROM tracks WHERE library_id = ? AND scan_id != ?'
@@ -144,25 +145,8 @@ function setTrackGenres(trackId, genreStr) {
   }
 }
 
-// ── File hashing ────────────────────────────────────────────────────────────
-
-function calculateHash(filepath) {
-  return new Promise((resolve, reject) => {
-    try {
-      const hash = crypto.createHash('md5').setEncoding('hex');
-      const fileStream = fs.createReadStream(filepath);
-      fileStream.on('error', (err) => reject(err));
-      fileStream.on('end', () => {
-        hash.end();
-        fileStream.close();
-        resolve(hash.read());
-      });
-      fileStream.pipe(hash);
-    } catch (err) {
-      reject(err);
-    }
-  });
-}
+// File hashing moved to src/db/audio-hash.js (returns both file_hash and
+// audio_hash in a single pass).
 
 // ── Album art ───────────────────────────────────────────────────────────────
 
@@ -278,7 +262,14 @@ async function parseMyFile(absolutePath, modified) {
   songInfo.modified = modified;
   songInfo.filePath = path.relative(loadJson.directory, absolutePath).replace(/\\/g, '/');
   songInfo.format = getFileType(absolutePath);
-  songInfo.hash = await calculateHash(absolutePath);
+  // Compute both hashes in one pass. file_hash is whole-file MD5 (stable
+  // identity for a specific byte sequence); audio_hash strips tag regions
+  // so stars / bookmarks / play-queue entries survive tag-only edits. For
+  // formats the extractor doesn't cover (ogg, opus, m4a, wav, aac)
+  // audioHash is null and user_* callers fall back to file_hash.
+  const { fileHash, audioHash } = await computeHashes(absolutePath);
+  songInfo.hash = fileHash;
+  songInfo.audioHash = audioHash;
   await getAlbumArt(songInfo);
 
   return songInfo;
@@ -307,6 +298,7 @@ function insertTrack(song) {
     song.duration || null,
     song.format,
     song.hash,
+    song.audioHash || null,
     song.aaFile || null,
     song.genre || null,
     song.replaygain_track_gain?.dB || null,
@@ -385,20 +377,24 @@ async function recursiveScan(dir) {
           stmts.updateScanId.run(loadJson.scanId, existing.id);
         } else {
           // New or modified file — parse and insert
-          const oldHash = existing ? existing.file_hash : null;
+          const oldFileHash  = existing ? existing.file_hash  : null;
+          const oldAudioHash = existing ? existing.audio_hash : null;
           if (existing) {
             // Delete old record (will be re-inserted with fresh metadata)
             db.prepare('DELETE FROM tracks WHERE id = ?').run(existing.id);
           }
           const songInfo = await parseMyFile(filepath, stat.mtime.getTime());
           insertTrack(songInfo);
-          // If the file's content hash changed (typical trigger: an external
-          // ID3 tag editor rewriting the frames), the existing user_metadata /
-          // user_bookmarks / user_play_queue rows still reference the old
-          // hash. Migrate them so stars, ratings, play counts, bookmarks, and
-          // queue entries follow the file's new content identity.
-          if (oldHash && songInfo.hash && oldHash !== songInfo.hash) {
-            migrateHashReferences(oldHash, songInfo.hash);
+          // User-facing tables key on canonical hash — audio_hash when we
+          // have it, file_hash otherwise. A tag edit changes file_hash but
+          // keeps audio_hash stable, so most rescans have nothing to do.
+          // The migration runs when the canonical key actually changed
+          // (content edit, first-time audio_hash populate for an existing
+          // track, or format we can't extract an audio region from).
+          const oldCanon = oldAudioHash || oldFileHash;
+          const newCanon = songInfo.audioHash || songInfo.hash;
+          if (oldCanon && newCanon && oldCanon !== newCanon) {
+            migrateHashReferences(oldCanon, newCanon);
           }
           fileCount++;
         }

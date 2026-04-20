@@ -1,7 +1,7 @@
 // SQLite schema definitions and migration system for mStream.
 // Uses PRAGMA user_version for tracking which migrations have been applied.
 
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 14;
 
 export const SCHEMA_V1 = `
   -- Users
@@ -66,16 +66,23 @@ export const SCHEMA_V1 = `
     bitrate INTEGER,
     format TEXT,
     file_size INTEGER,
-    -- file_hash is a content MD5 (hex, lowercase). It is the stable per-file
-    -- identity used by every user-facing table (user_metadata, user_bookmarks,
-    -- user_play_queue): stable across file renames, moves between libraries,
-    -- and mtime-only touches. It changes *only* when the file's bytes change
-    -- (e.g. an external ID3 tag editor rewriting frames). The scanner
-    -- migrates affected user_* rows from the old hash to the new one on
-    -- content change — see migrateHashReferences in src/db/scanner.mjs and
-    -- migrate_hash_references in rust-parser/src/main.rs. Do not change this
-    -- semantics in future migrations without also updating the migration
-    -- logic in both scanners.
+    -- file_hash is a content MD5 of the raw file bytes (hex, lowercase).
+    -- Changes on ANY byte change, including tag edits. Used for whole-file
+    -- integrity (e.g. waveform cache — bytes change → re-render).
+    --
+    -- Companion column audio_hash (added in migration V14) hashes just the
+    -- audio payload region, skipping tag metadata. It is the PREFERRED
+    -- identity key for user-facing state (stars, ratings, play counts,
+    -- bookmarks, play queue) because it is stable across tag edits,
+    -- album-art changes, and ReplayGain rewrites. NULL for formats the
+    -- scanner does not yet parse (ogg, opus, m4a, m4b, wav, aac); in that
+    -- case user_* tables fall back to file_hash.
+    --
+    -- Both scanners (src/db/scanner.mjs and rust-parser/src/main.rs) must
+    -- produce byte-identical hashes for the same input file — enforced
+    -- by test/audio-hash-parity.test.mjs. Any change to the audio-region
+    -- byte extraction must land simultaneously in both scanners and the
+    -- golden fixtures.
     file_hash TEXT,
     album_art_file TEXT,
     genre TEXT,
@@ -298,6 +305,16 @@ export const SCHEMA_V12 = `
   CREATE INDEX IF NOT EXISTS idx_user_bookmarks_user ON user_bookmarks(user_id);
 `;
 
+export const SCHEMA_V14 = `
+  -- Dual-hash identity: audio_hash complements file_hash (see schema_v1
+  -- comments on the tracks table). audio_hash hashes just the audio
+  -- payload region, so it stays stable across tag edits. Populated by
+  -- the scanner for MP3 + FLAC today; NULL for formats we don't parse
+  -- yet — user_* tables fall back to file_hash in that case.
+  ALTER TABLE tracks ADD COLUMN audio_hash TEXT;
+  CREATE INDEX IF NOT EXISTS idx_tracks_audio_hash ON tracks(audio_hash);
+`;
+
 export const SCHEMA_V13 = `
   -- OpenSubsonic getPlayQueue / savePlayQueue: one row per user storing
   -- their current across-device play queue. track_hashes_json is a JSON
@@ -330,4 +347,5 @@ export const MIGRATIONS = [
   { version: 11, sql: SCHEMA_V11 },
   { version: 12, sql: SCHEMA_V12 },
   { version: 13, sql: SCHEMA_V13 },
+  { version: 14, sql: SCHEMA_V14, rescanRequired: true },
 ];

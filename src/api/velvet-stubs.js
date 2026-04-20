@@ -169,9 +169,10 @@ export function setup(mstream) {
     if (!lib) return res.json({ ok: true });
 
     const track = d().prepare(
-      'SELECT file_hash FROM tracks WHERE filepath = ? AND library_id = ?'
+      'SELECT file_hash, audio_hash FROM tracks WHERE filepath = ? AND library_id = ?'
     ).get(pathInfo.relativePath, lib.id);
     if (!track) return res.json({ ok: true });
+    const trackKey = track.audio_hash || track.file_hash;
 
     d().prepare(`
       INSERT INTO user_metadata (user_id, track_hash, play_count, last_played)
@@ -179,7 +180,7 @@ export function setup(mstream) {
       ON CONFLICT(user_id, track_hash) DO UPDATE SET
         play_count = play_count + 1,
         last_played = datetime('now')
-    `).run(req.user.id, track.file_hash);
+    `).run(req.user.id, trackKey);
 
     res.json({ ok: true });
   });
