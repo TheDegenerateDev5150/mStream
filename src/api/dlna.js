@@ -1,16 +1,33 @@
 import express from 'express';
 import crypto from 'node:crypto';
+import http from 'node:http';
 import path from 'node:path';
 import winston from 'winston';
 import * as config from '../state/config.js';
 import * as db from '../db/manager.js';
 import { getBaseUrl } from '../dlna/ssdp.js';
 
+// ── Mutable state ────────────────────────────────────────────────────────────
+
+// SystemUpdateID increments each time the library changes (e.g. scan completes).
+// Control points use it to decide whether to invalidate their caches.
+let systemUpdateID = 1;
+
+// GENA subscribers, keyed by SID. Each entry holds the service it subscribed
+// to, its callback URLs, expiry, and a per-subscription event sequence number.
+const subscribers = new Map();
+
 // ── XML / SOAP helpers ───────────────────────────────────────────────────────
+
+// Characters forbidden in XML 1.0 content: C0 control chars except TAB, LF, CR.
+// Sloppy ID3 tags sometimes include stray bytes here; stripping them keeps the
+// DIDL well-formed for strict renderers.
+const XML_INVALID_CTRL = /[\x00-\x08\x0B\x0C\x0E-\x1F]/g;
 
 function xmlEscape(str) {
   if (str == null) { return ''; }
   return String(str)
+    .replace(XML_INVALID_CTRL, '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -114,7 +131,7 @@ function containerArtXml(albumArtFile) {
 
 function libraryContainer(lib, parentId, childCount) {
   return `
-  <container id="lib-${lib.id}" parentID="${parentId}" restricted="1" childCount="${childCount}">
+  <container id="lib-${lib.id}" parentID="${xmlEscape(parentId)}" restricted="1" childCount="${childCount}">
     <dc:title>${xmlEscape(lib.name)}</dc:title>
     <upnp:class>object.container.storageFolder</upnp:class>
   </container>`;
@@ -123,7 +140,7 @@ function libraryContainer(lib, parentId, childCount) {
 function dirContainer(libId, relPath, parentId, childCount) {
   const name = relPath.split('/').pop();
   return `
-  <container id="dir-${libId}-${encodeRelPath(relPath)}" parentID="${parentId}" restricted="1" childCount="${childCount}">
+  <container id="dir-${libId}-${encodeRelPath(relPath)}" parentID="${xmlEscape(parentId)}" restricted="1" childCount="${childCount}">
     <dc:title>${xmlEscape(name)}</dc:title>
     <upnp:class>object.container.storageFolder</upnp:class>
   </container>`;
@@ -131,7 +148,7 @@ function dirContainer(libId, relPath, parentId, childCount) {
 
 function artistContainer(libId, artist, parentId) {
   return `
-  <container id="artist-${libId}-${artist.id}" parentID="${parentId}" restricted="1" childCount="${artist.album_count}">${containerArtXml(artist.album_art_file)}
+  <container id="artist-${libId}-${artist.id}" parentID="${xmlEscape(parentId)}" restricted="1" childCount="${artist.album_count}">${containerArtXml(artist.album_art_file)}
     <dc:title>${xmlEscape(artist.name)}</dc:title>
     <upnp:class>object.container.person.musicArtist</upnp:class>
   </container>`;
@@ -139,23 +156,26 @@ function artistContainer(libId, artist, parentId) {
 
 function albumContainer(libId, album, parentId) {
   return `
-  <container id="album-${libId}-${album.id}" parentID="${parentId}" restricted="1" childCount="${album.track_count}">${containerArtXml(album.album_art_file)}
+  <container id="album-${libId}-${album.id}" parentID="${xmlEscape(parentId)}" restricted="1" childCount="${album.track_count}">${containerArtXml(album.album_art_file)}
     <dc:title>${xmlEscape(album.name)}</dc:title>
     <upnp:class>object.container.album.musicAlbum</upnp:class>
   </container>`;
 }
 
 function genreContainer(libId, genre, parentId) {
+  // genre.name is null for tracks with no genre tag; encode null as empty string sentinel
+  const encodedName = encodeRelPath(genre.name ?? '');
+  const displayName = genre.name ?? 'Unknown Genre';
   return `
-  <container id="genre-${libId}-${encodeRelPath(genre.name)}" parentID="${parentId}" restricted="1" childCount="${genre.artist_count}">${containerArtXml(genre.album_art_file)}
-    <dc:title>${xmlEscape(genre.name)}</dc:title>
+  <container id="genre-${libId}-${encodedName}" parentID="${xmlEscape(parentId)}" restricted="1" childCount="${genre.artist_count}">${containerArtXml(genre.album_art_file)}
+    <dc:title>${xmlEscape(displayName)}</dc:title>
     <upnp:class>object.container.genre.musicGenre</upnp:class>
   </container>`;
 }
 
 function genreArtistContainer(libId, artist, parentId, genre) {
   return `
-  <container id="gartist-${libId}-${artist.id}-${encodeRelPath(genre)}" parentID="${parentId}" restricted="1" childCount="${artist.album_count}">${containerArtXml(artist.album_art_file)}
+  <container id="gartist-${libId}-${artist.id}-${encodeRelPath(genre)}" parentID="${xmlEscape(parentId)}" restricted="1" childCount="${artist.album_count}">${containerArtXml(artist.album_art_file)}
     <dc:title>${xmlEscape(artist.name)}</dc:title>
     <upnp:class>object.container.person.musicArtist</upnp:class>
   </container>`;
@@ -163,7 +183,7 @@ function genreArtistContainer(libId, artist, parentId, genre) {
 
 function playlistsContainer(parentId, childCount) {
   return `
-  <container id="playlists" parentID="${parentId}" restricted="1" childCount="${childCount}">
+  <container id="playlists" parentID="${xmlEscape(parentId)}" restricted="1" childCount="${childCount}">
     <dc:title>Playlists</dc:title>
     <upnp:class>object.container</upnp:class>
   </container>`;
@@ -171,7 +191,7 @@ function playlistsContainer(parentId, childCount) {
 
 function playlistContainer(playlist, parentId) {
   return `
-  <container id="playlist-${playlist.id}" parentID="${parentId}" restricted="1" childCount="${playlist.track_count}">
+  <container id="playlist-${playlist.id}" parentID="${xmlEscape(parentId)}" restricted="1" childCount="${playlist.track_count}">
     <dc:title>${xmlEscape(playlist.name)}</dc:title>
     <upnp:class>object.container.playlistContainer</upnp:class>
   </container>`;
@@ -179,7 +199,7 @@ function playlistContainer(playlist, parentId) {
 
 function recentContainer(parentId, childCount) {
   return `
-  <container id="recent" parentID="${parentId}" restricted="1" childCount="${childCount}">
+  <container id="recent" parentID="${xmlEscape(parentId)}" restricted="1" childCount="${childCount}">
     <dc:title>Recently Added</dc:title>
     <upnp:class>object.container</upnp:class>
   </container>`;
@@ -199,7 +219,7 @@ function trackItem(track, libName, parentId) {
   const sizeAttr = track.file_size ? ` size="${track.file_size}"` : '';
 
   return `
-  <item id="track-${track.id}" parentID="${parentId}" restricted="1">
+  <item id="track-${track.id}" parentID="${xmlEscape(parentId)}" restricted="1">
     <dc:title>${xmlEscape(track.title || path.basename(track.filepath))}</dc:title>
     <dc:creator>${xmlEscape(track.artist_name)}</dc:creator>
     <upnp:artist>${xmlEscape(track.artist_name)}</upnp:artist>
@@ -262,6 +282,26 @@ function getLibraryArtists(libraryId) {
     GROUP BY COALESCE(t.artist_id, 0)
     ORDER BY COALESCE(a.name, '') COLLATE NOCASE
   `).all(libraryId);
+}
+
+// Targeted single-row lookups for BrowseMetadata. artistId=0 means "Unknown
+// Artist" (tracks with NULL artist_id); returns null if no matching tracks.
+function getArtistById(libraryId, artistId) {
+  const artistCond = artistId === 0 ? 't.artist_id IS NULL' : 't.artist_id = ?';
+  const params = artistId === 0 ? [libraryId] : [libraryId, artistId];
+  const row = db.getDB().prepare(`
+    SELECT COALESCE(t.artist_id, 0) AS id,
+           COALESCE(a.name, 'Unknown Artist') AS name,
+           COUNT(DISTINCT COALESCE(t.album_id, 0)) AS album_count,
+           MIN(t.album_art_file) AS album_art_file,
+           COUNT(*) AS _n
+    FROM tracks t
+    LEFT JOIN artists a ON t.artist_id = a.id
+    WHERE t.library_id = ? AND ${artistCond}
+  `).get(...params);
+  if (!row || row._n === 0) return null;
+  delete row._n;
+  return row;
 }
 
 function getArtistAlbums(libraryId, artistId) {
@@ -332,18 +372,35 @@ function getLibraryAlbums(libraryId) {
 
 function getLibraryGenres(libraryId) {
   return db.getDB().prepare(`
-    SELECT COALESCE(genre, 'Unknown Genre') AS name,
+    SELECT genre AS name,
            COUNT(DISTINCT COALESCE(t.artist_id, 0)) AS artist_count,
            MIN(t.album_art_file) AS album_art_file
     FROM tracks t
     WHERE library_id = ?
-    GROUP BY COALESCE(genre, 'Unknown Genre')
+    GROUP BY genre
     ORDER BY COALESCE(genre, '') COLLATE NOCASE
   `).all(libraryId);
 }
 
+// genre='' means "Unknown Genre" (tracks with NULL genre).
+function getGenreByName(libraryId, genre) {
+  const cond = genre === '' ? 't.genre IS NULL' : 't.genre = ?';
+  const params = genre === '' ? [libraryId] : [libraryId, genre];
+  const row = db.getDB().prepare(`
+    SELECT t.genre AS name,
+           COUNT(DISTINCT COALESCE(t.artist_id, 0)) AS artist_count,
+           MIN(t.album_art_file) AS album_art_file,
+           COUNT(*) AS _n
+    FROM tracks t
+    WHERE t.library_id = ? AND ${cond}
+  `).get(...params);
+  if (!row || row._n === 0) return null;
+  delete row._n;
+  return row;
+}
+
 function getGenreArtists(libraryId, genre) {
-  const isUnknown = genre === 'Unknown Genre';
+  const isUnknown = genre === '';
   return db.getDB().prepare(`
     SELECT COALESCE(t.artist_id, 0) AS id,
            COALESCE(a.name, 'Unknown Artist') AS name,
@@ -357,11 +414,32 @@ function getGenreArtists(libraryId, genre) {
   `).all(...(isUnknown ? [libraryId] : [libraryId, genre]));
 }
 
-function getGenreArtistAlbums(libraryId, genre, artistId) {
-  const genreCond  = genre === 'Unknown Genre' ? 't.genre IS NULL'    : 't.genre = ?';
-  const artistCond = artistId === 0            ? 't.artist_id IS NULL' : 't.artist_id = ?';
+function getGenreArtistById(libraryId, genre, artistId) {
+  const genreCond  = genre === '' ? 't.genre IS NULL' : 't.genre = ?';
+  const artistCond = artistId === 0 ? 't.artist_id IS NULL' : 't.artist_id = ?';
   const params = [libraryId];
-  if (genre !== 'Unknown Genre') params.push(genre);
+  if (genre !== '') params.push(genre);
+  if (artistId !== 0) params.push(artistId);
+  const row = db.getDB().prepare(`
+    SELECT COALESCE(t.artist_id, 0) AS id,
+           COALESCE(a.name, 'Unknown Artist') AS name,
+           COUNT(DISTINCT COALESCE(t.album_id, 0)) AS album_count,
+           MIN(t.album_art_file) AS album_art_file,
+           COUNT(*) AS _n
+    FROM tracks t
+    LEFT JOIN artists a ON t.artist_id = a.id
+    WHERE t.library_id = ? AND ${genreCond} AND ${artistCond}
+  `).get(...params);
+  if (!row || row._n === 0) return null;
+  delete row._n;
+  return row;
+}
+
+function getGenreArtistAlbums(libraryId, genre, artistId) {
+  const genreCond  = genre === '' ? 't.genre IS NULL'    : 't.genre = ?';
+  const artistCond = artistId === 0 ? 't.artist_id IS NULL' : 't.artist_id = ?';
+  const params = [libraryId];
+  if (genre !== '') params.push(genre);
   if (artistId !== 0)            params.push(artistId);
   return db.getDB().prepare(`
     SELECT COALESCE(t.album_id, 0) AS id,
@@ -385,6 +463,17 @@ function getAllPlaylists() {
     GROUP BY p.id
     ORDER BY p.name COLLATE NOCASE
   `).all();
+}
+
+function getPlaylistById(playlistId) {
+  return db.getDB().prepare(`
+    SELECT p.id, p.name, u.username, COUNT(pt.id) AS track_count
+    FROM playlists p
+    JOIN users u ON p.user_id = u.id
+    LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id
+    WHERE p.id = ?
+    GROUP BY p.id
+  `).get(playlistId);
 }
 
 function getPlaylistTracks(playlistId) {
@@ -532,6 +621,23 @@ function handleBrowse(body, res) {
     return sendBrowseResponse(res, didlWrapper(slice.join('')), slice.length, rootTotal);
   }
 
+  // ── Samsung BASICVIEW audio root ──────────────────────────────────────────
+  // Advertised via X_GetFeatureList as the shortcut container for audio.
+  // Expose libraries directly so Samsung's UI shows them as browsable folders.
+  if (objectId === 'A') {
+    if (browseFlag === 'BrowseMetadata') {
+      const didl = didlWrapper(`
+  <container id="A" parentID="0" restricted="1" childCount="${libraries.length}">
+    <dc:title>Music</dc:title>
+    <upnp:class>object.container.storageFolder</upnp:class>
+  </container>`);
+      return sendBrowseResponse(res, didl, 1, 1);
+    }
+    const children = libraries.map(lib => libraryContainer(lib, 'A', getLibraryTrackCount(lib.id)));
+    const slice = paginate(children, startIdx, reqCount);
+    return sendBrowseResponse(res, didlWrapper(slice.join('')), slice.length, libraries.length);
+  }
+
   // ── Playlists virtual folder ───────────────────────────────────────────────
   if (objectId === 'playlists') {
     const playlists = getAllPlaylists();
@@ -563,12 +669,26 @@ function handleBrowse(body, res) {
     const lib = libraries.find(l => l.id === libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
+    const browse = config.program.dlna.browse;
+
     if (browseFlag === 'BrowseMetadata') {
-      const count = getLibraryTrackCount(libId);
-      return sendBrowseResponse(res, didlWrapper(libraryContainer(lib, '0', count)), 1, 1);
+      let childCount;
+      if (browse === 'dirs') {
+        const at = getAllLibraryTracks(libId);
+        const { dirs, items } = dirChildren(at, '');
+        childCount = dirs.length + items.length;
+      } else if (browse === 'artist') {
+        childCount = getLibraryArtists(libId).length;
+      } else if (browse === 'album') {
+        childCount = getLibraryAlbums(libId).length;
+      } else if (browse === 'genre') {
+        childCount = getLibraryGenres(libId).length;
+      } else {
+        childCount = getLibraryTrackCount(libId);
+      }
+      return sendBrowseResponse(res, didlWrapper(libraryContainer(lib, '0', childCount)), 1, 1);
     }
 
-    const browse = config.program.dlna.browse;
     if (browse === 'dirs') {
       const allTracks = getAllLibraryTracks(libId);
       const { dirs, items } = dirChildren(allTracks, '');
@@ -639,7 +759,7 @@ function handleBrowse(body, res) {
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     if (browseFlag === 'BrowseMetadata') {
-      const artist = getLibraryArtists(libId).find(a => a.id === artistId);
+      const artist = getArtistById(libId, artistId);
       if (!artist) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
       return sendBrowseResponse(res, didlWrapper(artistContainer(libId, artist, `lib-${libId}`)), 1, 1);
     }
@@ -670,7 +790,7 @@ function handleBrowse(body, res) {
   }
 
   // ── Genre container (genre mode) ─────────────────────────────────────────
-  const genreMatch = objectId.match(/^genre-(\d+)-(.+)$/);
+  const genreMatch = objectId.match(/^genre-(\d+)-(.*)$/);
   if (genreMatch) {
     const libId = parseInt(genreMatch[1], 10);
     const genre = decodeRelPath(genreMatch[2]);
@@ -678,8 +798,7 @@ function handleBrowse(body, res) {
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     if (browseFlag === 'BrowseMetadata') {
-      const genres = getLibraryGenres(libId);
-      const g = genres.find(x => x.name === genre);
+      const g = getGenreByName(libId, genre);
       if (!g) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
       return sendBrowseResponse(res, didlWrapper(genreContainer(libId, g, `lib-${libId}`)), 1, 1);
     }
@@ -690,7 +809,7 @@ function handleBrowse(body, res) {
   }
 
   // ── Genre-scoped artist container (genre mode) ────────────────────────────
-  const gartistMatch = objectId.match(/^gartist-(\d+)-(\d+)-(.+)$/);
+  const gartistMatch = objectId.match(/^gartist-(\d+)-(\d+)-(.*)$/);
   if (gartistMatch) {
     const libId    = parseInt(gartistMatch[1], 10);
     const artistId = parseInt(gartistMatch[2], 10);
@@ -699,7 +818,7 @@ function handleBrowse(body, res) {
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     if (browseFlag === 'BrowseMetadata') {
-      const artist = getGenreArtists(libId, genre).find(a => a.id === artistId);
+      const artist = getGenreArtistById(libId, genre, artistId);
       if (!artist) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
       return sendBrowseResponse(res, didlWrapper(genreArtistContainer(libId, artist, `genre-${libId}-${encodeRelPath(genre)}`, genre)), 1, 1);
     }
@@ -713,8 +832,7 @@ function handleBrowse(body, res) {
   const playlistMatch = objectId.match(/^playlist-(\d+)$/);
   if (playlistMatch) {
     const playlistId = parseInt(playlistMatch[1], 10);
-    const all = getAllPlaylists();
-    const playlist = all.find(p => p.id === playlistId);
+    const playlist = getPlaylistById(playlistId);
     if (!playlist) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     if (browseFlag === 'BrowseMetadata') {
@@ -764,7 +882,7 @@ function handleBrowse(body, res) {
 
 function tokenizeSearch(input) {
   const tokens = [];
-  const re = /"(?:[^"\\]|\\.)*"|[()=!<>]|[\w:.]+/g;
+  const re = /"(?:[^"\\]|\\.)*"|!=|<=|>=|[()=!<>]|[\w:.]+/g;
   for (const m of (input || '').matchAll(re)) { tokens.push(m[0]); }
   return tokens;
 }
@@ -825,13 +943,14 @@ function searchNodeToSql(node, params) {
   if (node.op === 'rel') {
     const { property, relOp, value } = node;
     if (property === 'upnp:class') {
+      if (relOp === 'exists') return value === 'true' ? '1=1' : '1=0';
       return (relOp === '=' || relOp === 'derivedfrom')
         ? (value.includes('audioItem') || value === '*' ? '1=1' : '1=0')
         : '1=1';
     }
     const col = SEARCH_PROP_MAP[property];
     if (!col) return '1=1';
-    const escaped = value.replace(/%/g, '\\%').replace(/_/g, '\\_');
+    const escaped = value.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
     switch (relOp) {
       case '=':             params.push(value);               return `${col} = ?`;
       case '!=':            params.push(value);               return `${col} != ?`;
@@ -846,7 +965,7 @@ function searchNodeToSql(node, params) {
 }
 
 function handleSearch(body, res) {
-  const objectId  = extractSoapField(body, 'ObjectID');
+  const objectId  = extractSoapField(body, 'ContainerID') || extractSoapField(body, 'ObjectID') || '0';
   const criteria  = extractSoapField(body, 'SearchCriteria');
   const startIdx  = Math.max(0, parseInt(extractSoapField(body, 'StartingIndex') || '0', 10) || 0);
   const reqCount  = Math.max(0, parseInt(extractSoapField(body, 'RequestedCount') || '0', 10) || 0);
@@ -902,7 +1021,7 @@ function handleSearch(body, res) {
   const inner = `<Result>${escapedDidl}</Result>
       <NumberReturned>${rows.length}</NumberReturned>
       <TotalMatches>${total}</TotalMatches>
-      <UpdateID>1</UpdateID>`;
+      <UpdateID>${systemUpdateID}</UpdateID>`;
   sendXml(res, soapEnvelope(CDS_NS, 'SearchResponse', inner));
 }
 
@@ -911,7 +1030,7 @@ function sendBrowseResponse(res, didlXml, numberReturned, totalMatches) {
   const inner = `<Result>${escapedDidl}</Result>
       <NumberReturned>${numberReturned}</NumberReturned>
       <TotalMatches>${totalMatches}</TotalMatches>
-      <UpdateID>1</UpdateID>`;
+      <UpdateID>${systemUpdateID}</UpdateID>`;
   sendXml(res, soapEnvelope(CDS_NS, 'BrowseResponse', inner));
 }
 
@@ -1004,6 +1123,12 @@ const CONTENT_DIRECTORY_SCPD = `<?xml version="1.0" encoding="utf-8"?>
         <argument><name>Id</name><direction>out</direction><relatedStateVariable>SystemUpdateID</relatedStateVariable></argument>
       </argumentList>
     </action>
+    <action>
+      <name>X_GetFeatureList</name>
+      <argumentList>
+        <argument><name>FeatureList</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_Featurelist</relatedStateVariable></argument>
+      </argumentList>
+    </action>
   </actionList>
   <serviceStateTable>
     <stateVariable sendEvents="no"><name>A_ARG_TYPE_ObjectID</name><dataType>string</dataType></stateVariable>
@@ -1024,6 +1149,7 @@ const CONTENT_DIRECTORY_SCPD = `<?xml version="1.0" encoding="utf-8"?>
     <stateVariable sendEvents="no"><name>SearchCapabilities</name><dataType>string</dataType></stateVariable>
     <stateVariable sendEvents="no"><name>SortCapabilities</name><dataType>string</dataType></stateVariable>
     <stateVariable sendEvents="yes"><name>SystemUpdateID</name><dataType>ui4</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>A_ARG_TYPE_Featurelist</name><dataType>string</dataType></stateVariable>
   </serviceStateTable>
 </scpd>`;
 
@@ -1083,6 +1209,152 @@ const SOURCE_PROTOCOL_INFO = [
   `http-get:*:audio/opus:DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=${DLNA_FLAGS}`,
 ].join(',');
 
+// ── Samsung X_GetFeatureList ─────────────────────────────────────────────────
+// Samsung TVs call this action to discover a shortcut container ID for the
+// audio root. We point them at "A", which handleBrowse serves as a list of
+// libraries (object.container.storageFolder entries).
+const SAMSUNG_FEATURE_LIST_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<Features xmlns="urn:schemas-upnp-org:av:avs"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="urn:schemas-upnp-org:av:avs http://www.upnp.org/schemas/av/avs-v1-20060531.xsd">
+  <Feature name="samsung.com_BASICVIEW" version="1">
+    <container id="A" type="object.item.audioItem"/>
+  </Feature>
+</Features>`;
+
+// ── GENA event subscriptions ─────────────────────────────────────────────────
+// Minimal UPnP event implementation: track subscribers per service, send the
+// initial NOTIFY on subscribe, and re-NOTIFY on state change.
+
+const GENA_DEFAULT_TIMEOUT = 1800; // seconds
+
+function parseCallbackHeader(val) {
+  const urls = [];
+  const re = /<([^>]+)>/g;
+  let m;
+  while ((m = re.exec(val || '')) !== null) { urls.push(m[1]); }
+  return urls;
+}
+
+function parseTimeout(val) {
+  const m = /Second-(\d+)/i.exec(val || '');
+  return m ? parseInt(m[1], 10) : GENA_DEFAULT_TIMEOUT;
+}
+
+function cleanExpiredSubscribers() {
+  const now = Date.now();
+  for (const [sid, sub] of subscribers) {
+    if (sub.expiresAt < now) { subscribers.delete(sid); }
+  }
+}
+
+function cdsPropertySet() {
+  // ContainerUpdateIDs would list specific changed containers; we don't track
+  // them at that granularity, so it's left empty — clients that care will fall
+  // back to SystemUpdateID and re-browse from the root.
+  return `<?xml version="1.0"?>
+<e:propertyset xmlns:e="urn:schemas-upnp-org:event-1-0">
+  <e:property><SystemUpdateID>${systemUpdateID}</SystemUpdateID></e:property>
+  <e:property><ContainerUpdateIDs></ContainerUpdateIDs></e:property>
+</e:propertyset>`;
+}
+
+function cmPropertySet() {
+  return `<?xml version="1.0"?>
+<e:propertyset xmlns:e="urn:schemas-upnp-org:event-1-0">
+  <e:property><SourceProtocolInfo>${xmlEscape(SOURCE_PROTOCOL_INFO)}</SourceProtocolInfo></e:property>
+  <e:property><SinkProtocolInfo></SinkProtocolInfo></e:property>
+  <e:property><CurrentConnectionIDs>0</CurrentConnectionIDs></e:property>
+</e:propertyset>`;
+}
+
+function sendNotifyToSubscriber(sid, sub, body) {
+  // UPnP: try callback URLs in order, stop on first success. Fire-and-forget;
+  // a failing subscriber just misses this notification.
+  for (const url of sub.callbacks) {
+    try {
+      const parsed = new URL(url);
+      const req = http.request({
+        method: 'NOTIFY',
+        hostname: parsed.hostname,
+        port: parsed.port || 80,
+        path: parsed.pathname + parsed.search,
+        headers: {
+          'Content-Type': 'text/xml; charset="utf-8"',
+          'NT': 'upnp:event',
+          'NTS': 'upnp:propchange',
+          'SID': sid,
+          'SEQ': String(sub.seq),
+          'Content-Length': Buffer.byteLength(body),
+        },
+        timeout: 5000,
+      });
+      req.on('error', (err) => winston.debug(`[dlna] GENA NOTIFY error: ${err.message}`));
+      req.on('timeout', () => req.destroy());
+      req.write(body);
+      req.end();
+      sub.seq = (sub.seq + 1) & 0xFFFFFFFF;
+      return;
+    } catch (err) {
+      winston.debug(`[dlna] GENA NOTIFY bad callback ${url}: ${err.message}`);
+    }
+  }
+}
+
+function broadcastToService(service) {
+  cleanExpiredSubscribers();
+  const body = service === 'cds' ? cdsPropertySet() : cmPropertySet();
+  for (const [sid, sub] of subscribers) {
+    if (sub.service === service) { sendNotifyToSubscriber(sid, sub, body); }
+  }
+}
+
+function handleSubscribe(req, res, service) {
+  cleanExpiredSubscribers();
+  const timeout = parseTimeout(req.headers['timeout']);
+  const existingSid = req.headers['sid'];
+
+  if (existingSid) {
+    // Renewal — must have SID and no CALLBACK/NT per UPnP 1.0 §4.1.2
+    const sub = subscribers.get(existingSid);
+    if (!sub || sub.service !== service) { return res.status(412).end(); }
+    sub.expiresAt = Date.now() + timeout * 1000;
+    return res.set({ SID: existingSid, TIMEOUT: `Second-${timeout}` }).status(200).end();
+  }
+
+  const callbacks = parseCallbackHeader(req.headers['callback']);
+  const nt = (req.headers['nt'] || '').toLowerCase();
+  if (!callbacks.length || nt !== 'upnp:event') {
+    return res.status(412).end();
+  }
+
+  const sid = `uuid:${crypto.randomUUID()}`;
+  const sub = { service, callbacks, expiresAt: Date.now() + timeout * 1000, seq: 0 };
+  subscribers.set(sid, sub);
+
+  res.set({ SID: sid, TIMEOUT: `Second-${timeout}` }).status(200).end();
+
+  // Spec requires an initial NOTIFY containing all evented state variables,
+  // sent only after the SUBSCRIBE response is delivered.
+  setImmediate(() => {
+    const body = service === 'cds' ? cdsPropertySet() : cmPropertySet();
+    sendNotifyToSubscriber(sid, sub, body);
+  });
+}
+
+function handleUnsubscribe(req, res) {
+  const sid = req.headers['sid'];
+  if (sid) { subscribers.delete(sid); }
+  res.status(200).end();
+}
+
+export function bumpSystemUpdateID() {
+  // SystemUpdateID is a UPnP ui4 (32-bit unsigned). Wrap to stay in range.
+  systemUpdateID = (systemUpdateID + 1) >>> 0;
+  winston.debug(`[dlna] SystemUpdateID bumped to ${systemUpdateID}`);
+  broadcastToService('cds');
+}
+
 // ── Route setup ──────────────────────────────────────────────────────────────
 
 export function setup(mstream, { checkMode = true } = {}) {
@@ -1138,7 +1410,13 @@ export function setup(mstream, { checkMode = true } = {}) {
 
           case 'GetSystemUpdateID':
             return sendXml(res, soapEnvelope(CDS_NS, 'GetSystemUpdateIDResponse',
-              '<Id>1</Id>'));
+              `<Id>${systemUpdateID}</Id>`));
+
+          // Samsung's shortcut discovery action. The FeatureList body must be
+          // XML-escaped once because it's embedded in the SOAP response.
+          case 'X_GetFeatureList':
+            return sendXml(res, soapEnvelope(CDS_NS, 'X_GetFeatureListResponse',
+              `<FeatureList>${xmlEscape(SAMSUNG_FEATURE_LIST_XML)}</FeatureList>`));
 
           default:
             return sendXml(res, soapError('401', 'Invalid Action'), 500);
@@ -1180,15 +1458,16 @@ export function setup(mstream, { checkMode = true } = {}) {
     }
   );
 
-  // Event subscription stubs — return a minimal valid response
-  const stubSid = `uuid:${crypto.randomUUID()}`;
-  mstream.all('/dlna/event/content-directory', (req, res) => {
-    if (!modeOk()) { return res.status(503).end(); }
-    res.set({ 'SID': stubSid, 'TIMEOUT': 'Second-1800', 'Content-Length': '0' }).status(200).end();
-  });
-
-  mstream.all('/dlna/event/connection-manager', (req, res) => {
-    if (!modeOk()) { return res.status(503).end(); }
-    res.set({ 'SID': stubSid, 'TIMEOUT': 'Second-1800', 'Content-Length': '0' }).status(200).end();
-  });
+  // GENA event subscription endpoints — dispatch by HTTP method. Express
+  // routes custom methods (SUBSCRIBE, UNSUBSCRIBE) through `.all()`.
+  function genaRoute(service) {
+    return (req, res) => {
+      if (!modeOk()) { return res.status(503).end(); }
+      if (req.method === 'SUBSCRIBE')   { return handleSubscribe(req, res, service); }
+      if (req.method === 'UNSUBSCRIBE') { return handleUnsubscribe(req, res); }
+      res.status(405).end();
+    };
+  }
+  mstream.all('/dlna/event/content-directory', genaRoute('cds'));
+  mstream.all('/dlna/event/connection-manager', genaRoute('cm'));
 }
