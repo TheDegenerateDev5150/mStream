@@ -1,0 +1,140 @@
+/**
+ * DLNA time-based seek support.
+ *
+ * When a renderer sends `TimeSeekRange.dlna.org: npt=START-` on a `/media/...`
+ * request, we transcode the file to MP3 starting from `START` seconds using
+ * ffmpeg, and respond with the `TimeSeekRange.dlna.org` response header. This
+ * lets DLNA clients like Sony receivers and some TVs seek by time even when
+ * the underlying codec doesn't support efficient byte-range time lookup.
+ *
+ * No TimeSeekRange header → the middleware calls `next()` and the static
+ * file handler serves byte-ranges normally.
+ */
+
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import winston from 'winston';
+import * as db from '../db/manager.js';
+import { ffmpegBin } from '../util/ffmpeg-bootstrap.js';
+
+// Parse an NPT time spec per UPnP AV: either decimal seconds (`123.456`) or
+// `H:MM:SS.sss` / `MM:SS.sss`. Returns null on malformed input.
+function parseNptStart(header) {
+  const m = /npt\s*=\s*([^-\s]+)/i.exec(header || '');
+  if (!m) return null;
+  const raw = m[1];
+  if (raw.includes(':')) {
+    const segs = raw.split(':').map(Number);
+    if (segs.some(n => !Number.isFinite(n))) return null;
+    if (segs.length === 3) return segs[0] * 3600 + segs[1] * 60 + segs[2];
+    if (segs.length === 2) return segs[0] * 60 + segs[1];
+    return null;
+  }
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+function formatNpt(secs) {
+  if (!Number.isFinite(secs) || secs < 0) return '0:00:00.000';
+  const totalMs = Math.round(secs * 1000);
+  const h = Math.floor(totalMs / 3600000);
+  const m = Math.floor((totalMs % 3600000) / 60000);
+  const s = (totalMs % 60000) / 1000;
+  return `${h}:${String(m).padStart(2, '0')}:${s.toFixed(3).padStart(6, '0')}`;
+}
+
+export function timeSeekMiddleware(req, res, next) {
+  const header = req.headers['timeseekrange.dlna.org'];
+  if (!header) { return next(); }
+
+  const start = parseNptStart(header);
+  if (start === null || start < 0) { return res.status(400).end(); }
+
+  // Resolve library + file path from the URL.
+  const parts = req.path.split('/').filter(Boolean);
+  if (parts.length < 2) { return res.status(404).end(); }
+  let libname, fileParts;
+  try {
+    libname = decodeURIComponent(parts[0]);
+    fileParts = parts.slice(1).map(p => decodeURIComponent(p));
+  } catch (_) {
+    return res.status(400).end();
+  }
+
+  const lib = db.getAllLibraries().find(l => l.name === libname);
+  if (!lib) { return res.status(404).end(); }
+
+  const resolved = path.resolve(path.join(lib.root_path, ...fileParts));
+  const rootResolved = path.resolve(lib.root_path);
+  if (!resolved.startsWith(rootResolved + path.sep) && resolved !== rootResolved) {
+    return res.status(403).end();
+  }
+
+  // Look up duration so we can emit the TimeSeekRange response header.
+  const relPath = fileParts.join('/');
+  const row = db.getDB().prepare(
+    'SELECT duration FROM tracks WHERE library_id = ? AND filepath = ?'
+  ).get(lib.id, relPath);
+  const duration = row?.duration;
+  if (duration && start >= duration) { return res.status(416).end(); }
+
+  // HEAD: clients probe duration via HEAD + TimeSeekRange. Respond with
+  // headers only, no body — ffmpeg would be wasted work.
+  if (req.method === 'HEAD') {
+    const end = duration ? formatNpt(duration) : '';
+    const durStr = duration ? formatNpt(duration) : '';
+    res.status(200).set({
+      'Content-Type': 'audio/mpeg',
+      'TimeSeekRange.dlna.org': `npt=${formatNpt(start)}-${end}/${durStr}`,
+      'X-Seek-By-Time-Range': 'true',
+      'transferMode.dlna.org': 'Streaming',
+      'Connection': 'close',
+    }).end();
+    return;
+  }
+
+  // Transcode to MP3 from the seek point. MP3 is universally supported by
+  // DLNA renderers; choosing it avoids per-format codec-copy edge cases.
+  const args = [
+    '-nostdin',
+    '-ss', String(start),
+    '-i', resolved,
+    '-vn',
+    '-c:a', 'libmp3lame',
+    '-b:a', '192k',
+    '-f', 'mp3',
+    '-loglevel', 'error',
+    '-',
+  ];
+
+  let ff;
+  try {
+    ff = spawn(ffmpegBin(), args);
+  } catch (err) {
+    winston.error(`[dlna time-seek] ffmpeg spawn failed: ${err.message}`);
+    return res.status(500).end();
+  }
+
+  const end = duration ? formatNpt(duration) : '';
+  const durStr = duration ? formatNpt(duration) : '';
+  res.status(200).set({
+    'Content-Type': 'audio/mpeg',
+    'TimeSeekRange.dlna.org': `npt=${formatNpt(start)}-${end}/${durStr}`,
+    'X-Seek-By-Time-Range': 'true',
+    'transferMode.dlna.org': 'Streaming',
+    'Connection': 'close',
+  });
+
+  ff.stdout.pipe(res);
+  ff.stderr.on('data', d => winston.debug(`[dlna time-seek] ${d.toString().trim()}`));
+  ff.on('error', err => {
+    winston.error(`[dlna time-seek] ffmpeg error: ${err.message}`);
+    try { res.end(); } catch (_) { /* response already closed */ }
+  });
+
+  // Kill ffmpeg if the client disconnects mid-stream — otherwise it keeps
+  // encoding to a dead pipe until the input file is exhausted.
+  const cleanup = () => { try { ff.kill('SIGKILL'); } catch (_) { /* already exited */ } };
+  req.on('close', cleanup);
+  res.on('close', cleanup);
+}
