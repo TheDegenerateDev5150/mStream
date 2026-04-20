@@ -2596,8 +2596,8 @@ const dlnaView = Vue.component('dlna-view', {
         <div class="col s12">
           <div class="card">
             <div class="card-content">
-              <span class="card-title">Browse Mode</span>
-              <p>Controls how your library is presented to DLNA clients.</p>
+              <span class="card-title">Default View</span>
+              <p>DLNA clients always see all five views (Folders, Artists, Albums, Genres, All Tracks) as sibling containers. This setting controls which one is listed first &mdash; useful for clients that auto-drill into the first container.</p>
               <div style="margin-top:16px">
                 <p><b>Current:</b> {{params.browse || 'dirs'}}</p>
               </div>
@@ -2605,23 +2605,23 @@ const dlnaView = Vue.component('dlna-view', {
                 <p>
                   <label style="margin-right:20px">
                     <input type="radio" v-model="selectedBrowse" value="dirs" />
-                    <span>Directory tree</span>
+                    <span>Folders</span>
                   </label>
                   <label style="margin-right:20px">
                     <input type="radio" v-model="selectedBrowse" value="artist" />
-                    <span>Artist → Album → Song</span>
-                  </label>
-                  <label style="margin-right:20px">
-                    <input type="radio" v-model="selectedBrowse" value="flat" />
-                    <span>Flat list</span>
+                    <span>Artists</span>
                   </label>
                   <label style="margin-right:20px">
                     <input type="radio" v-model="selectedBrowse" value="album" />
-                    <span>Album → Song</span>
+                    <span>Albums</span>
+                  </label>
+                  <label style="margin-right:20px">
+                    <input type="radio" v-model="selectedBrowse" value="genre" />
+                    <span>Genres</span>
                   </label>
                   <label>
-                    <input type="radio" v-model="selectedBrowse" value="genre" />
-                    <span>Genre → Artist → Album → Song</span>
+                    <input type="radio" v-model="selectedBrowse" value="flat" />
+                    <span>All Tracks</span>
                   </label>
                 </p>
               </div>
@@ -2646,8 +2646,8 @@ const dlnaView = Vue.component('dlna-view', {
           data: { browse: this.selectedBrowse }
         });
         await ADMINDATA.getDlnaParams();
-        const labels = { dirs: 'Directory tree', artist: 'Artist → Album → Song', flat: 'Flat list', album: 'Album → Song', genre: 'Genre → Artist → Album → Song' };
-        iziToast.success({ title: `Browse mode set to: ${labels[this.selectedBrowse] || this.selectedBrowse}`, position: 'topCenter', timeout: 3500 });
+        const labels = { dirs: 'Folders', artist: 'Artists', flat: 'All Tracks', album: 'Albums', genre: 'Genres' };
+        iziToast.success({ title: `Default view set to: ${labels[this.selectedBrowse] || this.selectedBrowse}`, position: 'topCenter', timeout: 3500 });
       } catch(err) {
         iziToast.error({ title: 'Failed to update browse mode', position: 'topCenter', timeout: 3500 });
       } finally {
