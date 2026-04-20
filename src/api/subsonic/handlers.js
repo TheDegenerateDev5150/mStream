@@ -18,11 +18,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import winston from 'winston';
+import { nanoid } from 'nanoid';
 import * as db from '../../db/manager.js';
 import * as config from '../../state/config.js';
+import * as dbQueue from '../../db/task-queue.js';
+import * as adminUtil from '../../util/admin.js';
 import { ffmpegBin } from '../../util/ffmpeg-bootstrap.js';
 import { serveAlbumArtFile } from '../album-art.js';
 import { sendOk, SubErr } from './response.js';
+import * as nowPlaying from './now-playing.js';
+import { identiconFor } from './identicon.js';
 
 // ── Common helpers ──────────────────────────────────────────────────────────
 
@@ -119,6 +124,27 @@ function upsertUserMeta(userId, trackHash, fields) {
   d.prepare(`UPDATE user_metadata SET ${setClause} WHERE user_id = ? AND track_hash = ?`)
     .run(...vals, userId, trackHash);
   return true;
+}
+
+// Look up the star-timestamp for a set of album or artist ids for the caller.
+// Returns a Map<id, isoString>. Empty input returns an empty Map.
+function albumStarMap(userId, albumIds) {
+  if (!albumIds.length) { return new Map(); }
+  const ph = albumIds.map(() => '?').join(',');
+  const rows = db.getDB().prepare(
+    `SELECT album_id, starred_at FROM user_album_stars
+     WHERE user_id = ? AND album_id IN (${ph})`
+  ).all(userId, ...albumIds);
+  return new Map(rows.map(r => [r.album_id, r.starred_at]));
+}
+function artistStarMap(userId, artistIds) {
+  if (!artistIds.length) { return new Map(); }
+  const ph = artistIds.map(() => '?').join(',');
+  const rows = db.getDB().prepare(
+    `SELECT artist_id, starred_at FROM user_artist_stars
+     WHERE user_id = ? AND artist_id IN (${ph})`
+  ).all(userId, ...artistIds);
+  return new Map(rows.map(r => [r.artist_id, r.starred_at]));
 }
 
 // Bulk-annotate Subsonic song objects with the current user's starred /
@@ -297,11 +323,15 @@ export function getArtist(req, res) {
     ORDER BY al.year, al.name COLLATE NOCASE
   `).all(id, ...params);
 
+  const albumStars = albumStarMap(req.user.id, albums.map(a => a.id));
+  const artistStars = artistStarMap(req.user.id, [artist.id]);
+
   sendOk(req, res, {
     artist: {
       id: encArtist(artist.id),
       name: artist.name,
       albumCount: albums.length,
+      starred: artistStars.has(artist.id) ? isoUtc(artistStars.get(artist.id)) : undefined,
       album: albums.map(al => ({
         id:        encAlbum(al.id),
         parent:    encArtist(artist.id),
@@ -317,6 +347,7 @@ export function getArtist(req, res) {
         songCount: al.songCount,
         duration:  al.duration != null ? Math.round(al.duration) : undefined,
         created:   undefined,
+        starred:   albumStars.has(al.id) ? isoUtc(albumStars.get(al.id)) : undefined,
       })),
     },
   });
@@ -350,6 +381,8 @@ export function getAlbum(req, res) {
     ORDER BY t.disc_number, t.track_number, t.title
   `).all(id, ...params);
 
+  const albumStars = albumStarMap(req.user.id, [album.id]);
+
   sendOk(req, res, {
     album: {
       id:        encAlbum(album.id),
@@ -360,6 +393,7 @@ export function getAlbum(req, res) {
       coverArt:  album.album_art_file ? encAlbum(album.id) : undefined,
       songCount: songs.length,
       duration:  Math.round(songs.reduce((s, r) => s + (r.duration || 0), 0)),
+      starred:   albumStars.has(album.id) ? isoUtc(albumStars.get(album.id)) : undefined,
       song:      enrichSongsWithUserMeta(req, songs.map(songFromRow)),
     },
   });
@@ -557,28 +591,62 @@ const TRANSCODE_CODECS = {
 
 function streamNative(req, res, track) {
   if (!fs.existsSync(track.absPath)) { return res.status(404).end(); }
+  if (req.method === 'HEAD') {
+    try {
+      const st = fs.statSync(track.absPath);
+      const suffix = suffixFor(track.row.filepath, track.row.format);
+      res.status(200).set({
+        'Content-Type':   contentTypeFor(suffix),
+        'Content-Length': String(st.size),
+        'Accept-Ranges':  'bytes',
+      }).end();
+    } catch { res.status(404).end(); }
+    return;
+  }
   res.sendFile(track.absPath, { dotfiles: 'allow' });
 }
 
-function streamTranscoded(req, res, track, codec, bitrateK) {
+function streamTranscoded(req, res, track, codec, bitrateK, timeOffsetSec, estimateContentLength) {
   const spec = TRANSCODE_CODECS[codec];
-  const args = [
-    '-nostdin', '-i', track.absPath,
+  const args = ['-nostdin'];
+  // `-ss` before `-i` uses input-seek (fast, keyframe-aligned) — good enough
+  // for lossy sources where sample-accurate seek doesn't matter.
+  if (Number.isFinite(timeOffsetSec) && timeOffsetSec > 0) {
+    args.push('-ss', String(Math.floor(timeOffsetSec)));
+  }
+  args.push(
+    '-i', track.absPath,
     '-vn', ...spec.args, '-b:a', `${bitrateK}k`,
     '-f', spec.format, '-loglevel', 'error',
     '-',
-  ];
+  );
+
+  // Send headers first. If the caller asked for an estimate, compute one from
+  // the remaining duration × bitrate so clients that require Content-Length
+  // (e.g. Ultrasonic) can populate their seek bar.
+  const headers = {
+    'Content-Type': spec.mime,
+    'transferMode.dlna.org': 'Streaming',
+    'Connection': 'close',
+  };
+  if (estimateContentLength && Number.isFinite(track.row.duration)) {
+    const remaining = Math.max(0, track.row.duration - (timeOffsetSec || 0));
+    headers['Content-Length'] = String(Math.floor((remaining * bitrateK * 1000) / 8));
+  }
+
+  if (req.method === 'HEAD') {
+    // Don't spawn ffmpeg for a probe — headers-only response is the contract.
+    res.status(200).set(headers).end();
+    return;
+  }
+
   let ff;
   try { ff = spawn(ffmpegBin(), args); }
   catch (err) {
     winston.error('[subsonic] stream: ffmpeg spawn failed', { stack: err });
     return res.status(500).end();
   }
-  res.status(200).set({
-    'Content-Type': spec.mime,
-    'transferMode.dlna.org': 'Streaming',
-    'Connection': 'close',
-  });
+  res.status(200).set(headers);
   ff.stdout.pipe(res);
   ff.stderr.on('data', d => winston.debug(`[subsonic stream] ${d.toString().trim()}`));
   ff.on('error', err => {
@@ -596,16 +664,30 @@ export function stream(req, res) {
   const track = resolveTrackForPlayback(req, parsed.id);
   if (!track) { return res.status(404).end(); }
 
+  // Register now-playing so getNowPlaying can surface it. Cleared on socket close.
+  if (req.method !== 'HEAD') {
+    try {
+      nowPlaying.register(req.user.id, req.user.username, track.row.id);
+      const off = () => nowPlaying.unregister(req.user.id);
+      req.on('close', off);
+      res.on('close', off);
+    } catch { /* non-fatal */ }
+  }
+
   const requestedFormat = (req.query.format || '').toLowerCase();
   const maxBitRate = parseInt(req.query.maxBitRate, 10);
+  const timeOffset = parseFloat(req.query.timeOffset);
+  const estimateContentLength = req.query.estimateContentLength === 'true';
   const nativeFormat = (track.row.format || '').toLowerCase();
   const nativeBitRateK = track.row.bitrate ? Math.round(track.row.bitrate / 1000) : null;
 
-  // No transcoding requested, or requested native format at native bitrate.
+  // Native streaming only works when no seek was requested — ffmpeg is needed
+  // to shift the start offset mid-stream.
   const wantsNative =
     !requestedFormat || requestedFormat === 'raw' || requestedFormat === nativeFormat;
   const bitrateOk = !Number.isFinite(maxBitRate) || !nativeBitRateK || nativeBitRateK <= maxBitRate;
-  if (wantsNative && bitrateOk) {
+  const seekRequested = Number.isFinite(timeOffset) && timeOffset > 0;
+  if (wantsNative && bitrateOk && !seekRequested) {
     return streamNative(req, res, track);
   }
 
@@ -615,7 +697,7 @@ export function stream(req, res) {
     ? requestedFormat
     : config.program.transcode.defaultCodec;
   const bitrateK = Number.isFinite(maxBitRate) ? maxBitRate : parseInt(config.program.transcode.defaultBitrate, 10);
-  streamTranscoded(req, res, track, codec, bitrateK);
+  streamTranscoded(req, res, track, codec, bitrateK, timeOffset, estimateContentLength);
 }
 
 export function download(req, res) {
@@ -726,7 +808,13 @@ export function scrobble(req, res) {
   const parsed = decodeId(req.query.id, 'song');
   if (!parsed) { return SubErr.MISSING_PARAM(req, res, 'id'); }
   const submission = req.query.submission !== 'false'; // default true per spec
-  if (!submission) { return sendOk(req, res); }
+
+  // submission=false is the "now playing" signal — register the user as
+  // currently playing this track but don't bump play_count.
+  if (!submission) {
+    nowPlaying.register(req.user.id, req.user.username, parsed.id);
+    return sendOk(req, res);
+  }
 
   const hash = trackFileHash(parsed.id);
   if (!hash) { return SubErr.NOT_FOUND(req, res, 'Song'); }
@@ -749,56 +837,81 @@ export function scrobble(req, res) {
   sendOk(req, res);
 }
 
-// ── Star / unstar / setRating / getStarred2 ────────────────────────────────
+// ── Star / unstar / setRating / getStarred{,2} ─────────────────────────────
 
-// `star`/`unstar` accept `id` (songs), `albumId`, and `artistId` params, each
-// repeatable. Phase 2 tracks star state only for songs; albums/artists are
-// accepted silently so clients don't error out, and we record the star by
-// flagging *any one* track under that album/artist so the UI reflects a
-// star. Proper per-album/artist star tables are a future improvement.
+// Starring is per-user and tracked in three tables:
+//
+//   user_metadata.starred_at  — song stars (set alongside ratings)
+//   user_album_stars          — album stars
+//   user_artist_stars         — artist stars
+//
+// Earlier phases synthesised album/artist stars by flagging every child track,
+// which lost information (unstarring a track unstarred "the album"). Phase 3
+// stores each grain independently.
 
-function markStarred(req, trackIds, nowIso) {
-  for (const id of trackIds) {
+function collectIds(req) {
+  return {
+    songIds:   arrayParam(req.query.id).map(v => decodeId(v, 'song')?.id).filter(Number.isFinite),
+    albumIds:  arrayParam(req.query.albumId).map(v => decodeId(v, 'album')?.id).filter(Number.isFinite),
+    artistIds: arrayParam(req.query.artistId).map(v => decodeId(v, 'artist')?.id).filter(Number.isFinite),
+  };
+}
+
+function starSongs(userId, songIds) {
+  const nowIso = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  for (const id of songIds) {
     const hash = trackFileHash(id);
-    if (hash) { upsertUserMeta(req.user.id, hash, { starred_at: nowIso }); }
+    if (hash) { upsertUserMeta(userId, hash, { starred_at: nowIso }); }
   }
 }
-
-function tracksUnderAlbum(albumIds) {
-  if (!albumIds.length) { return []; }
-  const ph = albumIds.map(() => '?').join(',');
-  return db.getDB().prepare(`SELECT id FROM tracks WHERE album_id IN (${ph})`)
-    .all(...albumIds).map(r => r.id);
+function unstarSongs(userId, songIds) {
+  for (const id of songIds) {
+    const hash = trackFileHash(id);
+    if (hash) { upsertUserMeta(userId, hash, { starred_at: null }); }
+  }
 }
-function tracksUnderArtist(artistIds) {
-  if (!artistIds.length) { return []; }
-  const ph = artistIds.map(() => '?').join(',');
-  return db.getDB().prepare(`SELECT id FROM tracks WHERE artist_id IN (${ph})`)
-    .all(...artistIds).map(r => r.id);
+function starAlbums(userId, albumIds) {
+  const stmt = db.getDB().prepare(
+    `INSERT INTO user_album_stars (user_id, album_id) VALUES (?, ?)
+     ON CONFLICT(user_id, album_id) DO UPDATE SET starred_at = datetime('now')`
+  );
+  for (const id of albumIds) { stmt.run(userId, id); }
 }
-
-function collectStarTargets(req) {
-  const songIds = arrayParam(req.query.id).map(v => decodeId(v, 'song')?.id).filter(Number.isFinite);
-  const albumIds = arrayParam(req.query.albumId).map(v => decodeId(v, 'album')?.id).filter(Number.isFinite);
-  const artistIds = arrayParam(req.query.artistId).map(v => decodeId(v, 'artist')?.id).filter(Number.isFinite);
-  return [...songIds, ...tracksUnderAlbum(albumIds), ...tracksUnderArtist(artistIds)];
+function unstarAlbums(userId, albumIds) {
+  const stmt = db.getDB().prepare('DELETE FROM user_album_stars WHERE user_id = ? AND album_id = ?');
+  for (const id of albumIds) { stmt.run(userId, id); }
+}
+function starArtists(userId, artistIds) {
+  const stmt = db.getDB().prepare(
+    `INSERT INTO user_artist_stars (user_id, artist_id) VALUES (?, ?)
+     ON CONFLICT(user_id, artist_id) DO UPDATE SET starred_at = datetime('now')`
+  );
+  for (const id of artistIds) { stmt.run(userId, id); }
+}
+function unstarArtists(userId, artistIds) {
+  const stmt = db.getDB().prepare('DELETE FROM user_artist_stars WHERE user_id = ? AND artist_id = ?');
+  for (const id of artistIds) { stmt.run(userId, id); }
 }
 
 export function star(req, res) {
-  const targets = collectStarTargets(req);
-  if (!targets.length) { return SubErr.MISSING_PARAM(req, res, 'id / albumId / artistId'); }
-  const nowIso = new Date().toISOString().replace('T', ' ').slice(0, 19);
-  markStarred(req, targets, nowIso);
+  const { songIds, albumIds, artistIds } = collectIds(req);
+  if (!songIds.length && !albumIds.length && !artistIds.length) {
+    return SubErr.MISSING_PARAM(req, res, 'id / albumId / artistId');
+  }
+  starSongs(req.user.id, songIds);
+  starAlbums(req.user.id, albumIds);
+  starArtists(req.user.id, artistIds);
   sendOk(req, res);
 }
 
 export function unstar(req, res) {
-  const targets = collectStarTargets(req);
-  if (!targets.length) { return SubErr.MISSING_PARAM(req, res, 'id / albumId / artistId'); }
-  for (const id of targets) {
-    const hash = trackFileHash(id);
-    if (hash) { upsertUserMeta(req.user.id, hash, { starred_at: null }); }
+  const { songIds, albumIds, artistIds } = collectIds(req);
+  if (!songIds.length && !albumIds.length && !artistIds.length) {
+    return SubErr.MISSING_PARAM(req, res, 'id / albumId / artistId');
   }
+  unstarSongs(req.user.id, songIds);
+  unstarAlbums(req.user.id, albumIds);
+  unstarArtists(req.user.id, artistIds);
   sendOk(req, res);
 }
 
@@ -815,9 +928,10 @@ export function setRating(req, res) {
   sendOk(req, res);
 }
 
-export function getStarred2(req, res) {
+// Fetch a user's starred-song rows, optionally library-scoped.
+function starredSongRows(req) {
   const { clause, params } = libraryScope(req);
-  const rows = db.getDB().prepare(`
+  return db.getDB().prepare(`
     SELECT t.id, t.filepath, t.title, t.track_number, t.disc_number, t.duration,
            t.format, t.file_size, t.bitrate, t.year, t.genre, t.album_art_file,
            t.created_at, t.library_id,
@@ -830,15 +944,75 @@ export function getStarred2(req, res) {
     WHERE ${clause} AND um.starred_at IS NOT NULL
     ORDER BY um.starred_at DESC
   `).all(req.user.id, ...params);
-  const songs = enrichSongsWithUserMeta(req, rows.map(songFromRow));
+}
+
+// Starred albums for the caller, scoped to their libraries via the existing
+// album-list machinery. We reuse buildAlbumListQuery's select shape by going
+// direct — the 'starred' type used to synthesise from child tracks, which
+// this replaces.
+function starredAlbumRows(req) {
+  const { clause, params } = libraryScope(req);
+  return db.getDB().prepare(`
+    SELECT al.id, al.name, al.year, al.album_art_file, al.artist_id,
+           a.name AS artist_name,
+           COUNT(t.id) AS songCount, SUM(t.duration) AS duration,
+           MIN(t.genre) AS genre, MIN(t.created_at) AS created_at,
+           s.starred_at AS starred_at
+    FROM user_album_stars s
+    JOIN albums al ON al.id = s.album_id
+    LEFT JOIN artists a ON a.id = al.artist_id
+    JOIN tracks t ON t.album_id = al.id
+    WHERE s.user_id = ? AND ${clause}
+    GROUP BY al.id
+    HAVING songCount > 0
+    ORDER BY s.starred_at DESC
+  `).all(req.user.id, ...params);
+}
+
+function starredArtistRows(req) {
+  const { clause, params } = libraryScope(req);
+  return db.getDB().prepare(`
+    SELECT a.id, a.name, s.starred_at,
+           COUNT(DISTINCT al.id) AS albumCount,
+           MIN(al.album_art_file) AS coverArt
+    FROM user_artist_stars s
+    JOIN artists a ON a.id = s.artist_id
+    JOIN albums al ON al.artist_id = a.id
+    JOIN tracks t  ON t.album_id = al.id
+    WHERE s.user_id = ? AND ${clause}
+    GROUP BY a.id
+    HAVING albumCount > 0
+    ORDER BY s.starred_at DESC
+  `).all(req.user.id, ...params);
+}
+
+function artistFromStarredRow(a) {
+  return {
+    id:         encArtist(a.id),
+    name:       a.name,
+    albumCount: a.albumCount,
+    coverArt:   a.coverArt ? encArtist(a.id) : undefined,
+    starred:    a.starred_at ? isoUtc(a.starred_at) : undefined,
+  };
+}
+
+export function getStarred2(req, res) {
+  const songs = enrichSongsWithUserMeta(req, starredSongRows(req).map(songFromRow));
+  const albums = starredAlbumRows(req).map(albumFromListRow);
+  const artists = starredArtistRows(req).map(artistFromStarredRow);
   sendOk(req, res, {
-    starred2: {
-      // Phase 2 only stars songs; artist/album arrays are empty but present
-      // so clients that look for them don't choke.
-      artist: [],
-      album:  [],
-      song:   songs,
-    },
+    starred2: { artist: artists, album: albums, song: songs },
+  });
+}
+
+// v1 getStarred. Shape is almost identical to getStarred2 but under the
+// `starred` key. Clients that predate ID3-based browsing use this.
+export function getStarred(req, res) {
+  const songs = enrichSongsWithUserMeta(req, starredSongRows(req).map(songFromRow));
+  const albums = starredAlbumRows(req).map(albumFromListRow);
+  const artists = starredArtistRows(req).map(artistFromStarredRow);
+  sendOk(req, res, {
+    starred: { artist: artists, album: albums, song: songs },
   });
 }
 
@@ -852,13 +1026,15 @@ function buildAlbumListQuery(req, type, params = {}) {
   const offset = Math.max(0, parseInt(params.offset, 10) || 0);
   const { clause, params: libParams } = libraryScope(req);
 
-  // Base select + join schema used by every type.
+  // Base select + join schema used by every type. user_album_stars is joined
+  // at the album level so the `starred` column reflects proper album-level
+  // star state (not "any one track is starred" — fixed in Phase 3).
   const base = `
     SELECT al.id, al.name, al.year, al.album_art_file, al.artist_id,
            a.name AS artist_name,
            COUNT(t.id) AS songCount, SUM(t.duration) AS duration,
            MIN(t.genre) AS genre, MIN(t.created_at) AS created_at,
-           MAX(um.starred_at) AS starred_at,
+           uas.starred_at AS starred_at,
            MAX(um.rating) AS rating_max,
            SUM(COALESCE(um.play_count, 0)) AS plays,
            MAX(um.last_played) AS last_played
@@ -866,9 +1042,10 @@ function buildAlbumListQuery(req, type, params = {}) {
     LEFT JOIN artists a ON a.id = al.artist_id
     JOIN tracks t ON t.album_id = al.id
     LEFT JOIN user_metadata um ON um.track_hash = t.file_hash AND um.user_id = ?
+    LEFT JOIN user_album_stars uas ON uas.album_id = al.id AND uas.user_id = ?
     WHERE ${clause}
   `;
-  const tailParams = [req.user.id, ...libParams];
+  const tailParams = [req.user.id, req.user.id, ...libParams];
 
   let where   = '';           // row-level filter (WHERE clause tail)
   let having  = 'songCount > 0'; // group-level filter (HAVING clause)
@@ -879,7 +1056,7 @@ function buildAlbumListQuery(req, type, params = {}) {
     case 'recent':    having += ' AND MAX(um.last_played) IS NOT NULL'; order = 'MAX(um.last_played) DESC'; break;
     case 'frequent':  having += ' AND plays > 0';                        order = 'plays DESC'; break;
     case 'highest':   having += ' AND rating_max IS NOT NULL';           order = 'rating_max DESC'; break;
-    case 'starred':   having += ' AND starred_at IS NOT NULL';           order = 'starred_at DESC'; break;
+    case 'starred':   having += ' AND uas.starred_at IS NOT NULL';       order = 'uas.starred_at DESC'; break;
     case 'random':    order = 'RANDOM()'; break;
     case 'byYear': {
       const from = parseInt(params.fromYear, 10);
@@ -1183,4 +1360,732 @@ export function deletePlaylist(req, res) {
   const result = db.getDB().prepare('DELETE FROM playlists WHERE id = ? AND user_id = ?').run(id, req.user.id);
   if (result.changes === 0) { return SubErr.NOT_FOUND(req, res, 'Playlist'); }
   sendOk(req, res);
+}
+
+// ── Phase 3: OpenSubsonic extensions manifest ─────────────────────────────
+//
+// Declared extensions — the client probes this to decide which optional
+// features to use. Keep this list in sync with what we actually implement
+// across phases. Each entry is { name, versions: [numbers] }.
+
+const OPENSUBSONIC_EXTENSIONS = [
+  { name: 'formPost',          versions: [1] },    // POST bodies accepted on every endpoint
+  { name: 'apiKeyAuthentication', versions: [1] }, // `apiKey=` auth
+  { name: 'transcodeOffset',   versions: [1] },    // `timeOffset` supported on stream
+  { name: 'httpHeaders',       versions: [1] },    // HEAD + Content-Length estimate
+];
+
+export function getOpenSubsonicExtensions(req, res) {
+  sendOk(req, res, { openSubsonicExtensions: OPENSUBSONIC_EXTENSIONS });
+}
+
+// ── Phase 3: User management ───────────────────────────────────────────────
+//
+// Thin wrappers around src/util/admin.js so validation, hashing, and vpath
+// linking happen in exactly one place. Admin-only endpoints guard with
+// `req.user.admin`; self-service endpoints let users change their own data.
+
+function userToSubsonicShape(row, libNames) {
+  const isAdmin = !!row.is_admin;
+  return {
+    username:          row.username,
+    email:             row.email || undefined,
+    scrobblingEnabled: true,
+    adminRole:         isAdmin,
+    settingsRole:      isAdmin,
+    downloadRole:      true,
+    uploadRole:        !!row.allow_upload,
+    playlistRole:      true,
+    coverArtRole:      isAdmin,
+    commentRole:       false,
+    podcastRole:       false,
+    streamRole:        true,
+    jukeboxRole:       false,
+    shareRole:         true,
+    videoConversionRole: false,
+    folder:            libNames,
+  };
+}
+
+function vpathsForUser(row) {
+  const libIds = db.getUserLibraryIds(row);
+  return db.getAllLibraries().filter(l => libIds.includes(l.id)).map(l => l.name);
+}
+
+export function getUser(req, res) {
+  const wanted = req.query.username ? String(req.query.username) : req.user.username;
+  // Non-admins can only query themselves.
+  if (wanted !== req.user.username && !req.user.admin) {
+    return SubErr.NOT_AUTHORIZED(req, res);
+  }
+  const row = db.getUserByUsername(wanted);
+  if (!row) { return SubErr.NOT_FOUND(req, res, 'User'); }
+  sendOk(req, res, { user: userToSubsonicShape(row, vpathsForUser(row)) });
+}
+
+export function getUsers(req, res) {
+  if (!req.user.admin) { return SubErr.NOT_AUTHORIZED(req, res); }
+  const rows = db.getAllUsers();
+  sendOk(req, res, {
+    users: { user: rows.map(r => userToSubsonicShape(r, vpathsForUser(r))) },
+  });
+}
+
+export async function createUser(req, res) {
+  if (!req.user.admin) { return SubErr.NOT_AUTHORIZED(req, res); }
+  const username = String(req.query.username || '').trim();
+  const password = String(req.query.password || '');
+  if (!username) { return SubErr.MISSING_PARAM(req, res, 'username'); }
+  if (!password) { return SubErr.MISSING_PARAM(req, res, 'password'); }
+
+  const plainPassword = password.startsWith('enc:')
+    ? Buffer.from(password.slice(4), 'hex').toString('utf8')
+    : password;
+  const adminRole    = req.query.adminRole === 'true';
+  const uploadRole   = req.query.uploadRole !== 'false';
+  // Subsonic's `musicFolderId` is repeatable — map each id back to a vpath.
+  const folderIds = arrayParam(req.query.musicFolderId)
+    .map(v => decodeId(v, 'folder')?.id)
+    .filter(Number.isFinite);
+  const libs = db.getAllLibraries();
+  const vpaths = folderIds.length
+    ? libs.filter(l => folderIds.includes(l.id)).map(l => l.name)
+    : libs.map(l => l.name); // default: grant everything
+
+  try {
+    await adminUtil.addUser(username, plainPassword, adminRole, vpaths, true, uploadRole);
+    sendOk(req, res);
+  } catch (err) {
+    return SubErr.GENERIC(req, res, err.message || 'createUser failed');
+  }
+}
+
+export async function updateUser(req, res) {
+  if (!req.user.admin) { return SubErr.NOT_AUTHORIZED(req, res); }
+  const username = String(req.query.username || '').trim();
+  if (!username) { return SubErr.MISSING_PARAM(req, res, 'username'); }
+  const row = db.getUserByUsername(username);
+  if (!row) { return SubErr.NOT_FOUND(req, res, 'User'); }
+
+  // Only update fields the client actually sent.
+  const adminRole    = 'adminRole'  in req.query ? req.query.adminRole  === 'true' : !!row.is_admin;
+  const uploadRole   = 'uploadRole' in req.query ? req.query.uploadRole === 'true' : !!row.allow_upload;
+  await adminUtil.editUserAccess(username, adminRole, !!row.allow_mkdir, uploadRole,
+    row.allow_file_modify == null ? true : !!row.allow_file_modify);
+
+  if ('musicFolderId' in req.query) {
+    const folderIds = arrayParam(req.query.musicFolderId)
+      .map(v => decodeId(v, 'folder')?.id)
+      .filter(Number.isFinite);
+    const libs = db.getAllLibraries();
+    const vpaths = libs.filter(l => folderIds.includes(l.id)).map(l => l.name);
+    await adminUtil.editUserVPaths(username, vpaths);
+  }
+
+  if (req.query.password) {
+    const plain = String(req.query.password).startsWith('enc:')
+      ? Buffer.from(String(req.query.password).slice(4), 'hex').toString('utf8')
+      : String(req.query.password);
+    await adminUtil.editUserPassword(username, plain);
+  }
+  sendOk(req, res);
+}
+
+export async function deleteUser(req, res) {
+  if (!req.user.admin) { return SubErr.NOT_AUTHORIZED(req, res); }
+  const username = String(req.query.username || '').trim();
+  if (!username) { return SubErr.MISSING_PARAM(req, res, 'username'); }
+  if (username === req.user.username) {
+    return SubErr.GENERIC(req, res, 'Cannot delete the currently authenticated user.');
+  }
+  try {
+    await adminUtil.deleteUser(username);
+    sendOk(req, res);
+  } catch {
+    return SubErr.NOT_FOUND(req, res, 'User');
+  }
+}
+
+export async function changePassword(req, res) {
+  const username = String(req.query.username || '').trim();
+  const password = String(req.query.password || '');
+  if (!username) { return SubErr.MISSING_PARAM(req, res, 'username'); }
+  if (!password) { return SubErr.MISSING_PARAM(req, res, 'password'); }
+  // Self-service or admin.
+  if (username !== req.user.username && !req.user.admin) {
+    return SubErr.NOT_AUTHORIZED(req, res);
+  }
+  const plain = password.startsWith('enc:')
+    ? Buffer.from(password.slice(4), 'hex').toString('utf8')
+    : password;
+  try {
+    await adminUtil.editUserPassword(username, plain);
+    sendOk(req, res);
+  } catch {
+    return SubErr.NOT_FOUND(req, res, 'User');
+  }
+}
+
+// ── Phase 3: Similar songs & top songs ─────────────────────────────────────
+//
+// No LastFM dependency. `getTopSongs` is straight from local play counts.
+// `getSimilarSongs{,2}` uses a "same artist, then shared-genre peers" local
+// heuristic — good enough to make client Shuffle / recommendation features
+// light up instead of showing empty state.
+
+function songQueryBase() {
+  return `
+    SELECT t.id, t.filepath, t.title, t.track_number, t.disc_number, t.duration,
+           t.format, t.file_size, t.bitrate, t.year, t.genre, t.album_art_file,
+           t.created_at, t.library_id,
+           a.id AS artist_id, a.name AS artist_name,
+           al.id AS album_id, al.name AS album_name
+    FROM tracks t
+    LEFT JOIN artists a  ON a.id = t.artist_id
+    LEFT JOIN albums  al ON al.id = t.album_id
+  `;
+}
+
+export function getTopSongs(req, res) {
+  const artistName = String(req.query.artist || '').trim();
+  const count = Math.min(Math.max(parseInt(req.query.count, 10) || 50, 1), 500);
+  if (!artistName) { return SubErr.MISSING_PARAM(req, res, 'artist'); }
+
+  const { clause, params } = libraryScope(req);
+  const rows = db.getDB().prepare(`
+    ${songQueryBase()}
+    LEFT JOIN user_metadata um ON um.track_hash = t.file_hash AND um.user_id = ?
+    WHERE ${clause} AND a.name = ?
+    ORDER BY COALESCE(um.play_count, 0) DESC, um.last_played DESC, t.title
+    LIMIT ?
+  `).all(req.user.id, ...params, artistName, count);
+
+  sendOk(req, res, {
+    topSongs: { song: enrichSongsWithUserMeta(req, rows.map(songFromRow)) },
+  });
+}
+
+function similarSongsFor(req, artistId, count) {
+  const { clause, params } = libraryScope(req);
+  // Tier 1: tracks by the same artist.
+  const sameArtist = db.getDB().prepare(`
+    ${songQueryBase()}
+    WHERE ${clause} AND t.artist_id = ?
+    ORDER BY RANDOM() LIMIT ?
+  `).all(...params, artistId, count);
+  if (sameArtist.length >= count) { return sameArtist.slice(0, count); }
+
+  // Tier 2: tracks that share at least one genre with any of this artist's
+  // tracks, excluding the artist's own tracks.
+  const genres = db.getDB().prepare(`
+    SELECT DISTINCT t.genre FROM tracks t
+    WHERE t.artist_id = ? AND t.genre IS NOT NULL AND t.genre <> ''
+  `).all(artistId).map(r => r.genre);
+
+  if (!genres.length) { return sameArtist; }
+
+  const genrePh = genres.map(() => '?').join(',');
+  const remaining = count - sameArtist.length;
+  const related = db.getDB().prepare(`
+    ${songQueryBase()}
+    WHERE ${clause} AND t.artist_id <> ? AND t.genre IN (${genrePh})
+    ORDER BY RANDOM() LIMIT ?
+  `).all(...params, artistId, ...genres, remaining);
+
+  return [...sameArtist, ...related];
+}
+
+export function getSimilarSongs(req, res) {
+  // v1 accepts any id (artist / album / song) — pick the enclosing artist.
+  const parsed = decodeId(req.query.id);
+  if (!parsed) { return SubErr.MISSING_PARAM(req, res, 'id'); }
+  const count = Math.min(Math.max(parseInt(req.query.count, 10) || 50, 1), 500);
+
+  const artistId = (() => {
+    if (parsed.type === 'artist') { return parsed.id; }
+    if (parsed.type === 'album')  { return db.getDB().prepare('SELECT artist_id FROM albums WHERE id = ?').get(parsed.id)?.artist_id; }
+    return db.getDB().prepare('SELECT artist_id FROM tracks WHERE id = ?').get(parsed.id)?.artist_id;
+  })();
+  if (!artistId) { return SubErr.NOT_FOUND(req, res, 'Artist'); }
+
+  const rows = similarSongsFor(req, artistId, count);
+  sendOk(req, res, {
+    similarSongs: { song: enrichSongsWithUserMeta(req, rows.map(songFromRow)) },
+  });
+}
+
+export function getSimilarSongs2(req, res) {
+  const parsed = decodeId(req.query.id, 'artist');
+  if (!parsed) { return SubErr.MISSING_PARAM(req, res, 'id'); }
+  const count = Math.min(Math.max(parseInt(req.query.count, 10) || 50, 1), 500);
+  const rows = similarSongsFor(req, parsed.id, count);
+  sendOk(req, res, {
+    similarSongs2: { song: enrichSongsWithUserMeta(req, rows.map(songFromRow)) },
+  });
+}
+
+// ── Phase 3: Now playing ───────────────────────────────────────────────────
+
+export function getNowPlaying(req, res) {
+  const snap = nowPlaying.snapshot();
+  if (!snap.length) {
+    return sendOk(req, res, { nowPlaying: { entry: [] } });
+  }
+
+  const trackIds = snap.map(s => s.trackId);
+  const ph = trackIds.map(() => '?').join(',');
+  const rows = db.getDB().prepare(`
+    ${songQueryBase()}
+    WHERE t.id IN (${ph})
+  `).all(...trackIds);
+  const byId = new Map(rows.map(r => [r.id, r]));
+
+  const entry = snap.map(s => {
+    const r = byId.get(s.trackId);
+    if (!r) { return null; }
+    const song = songFromRow(r);
+    return {
+      ...song,
+      username:  s.username,
+      // Seconds since this player's stream started. The spec calls this
+      // `minutesAgo` — we convert.
+      minutesAgo: Math.max(0, Math.floor((Date.now() - s.since) / 60000)),
+      playerId:  s.userId, // stable per-user; matches Subsonic's loose usage
+    };
+  }).filter(Boolean);
+
+  sendOk(req, res, { nowPlaying: { entry } });
+}
+
+// ── Phase 3: Scan status / start ───────────────────────────────────────────
+
+export function getScanStatus(req, res) {
+  // The scanner exposes its progress via dbQueue; we also report the total
+  // number of tracks known so clients can display a "library size" number.
+  const total = db.getDB().prepare('SELECT COUNT(*) AS n FROM tracks').get()?.n || 0;
+  const scanning = typeof dbQueue.isScanning === 'function' ? !!dbQueue.isScanning() : false;
+  sendOk(req, res, { scanStatus: { scanning, count: total } });
+}
+
+export function startScan(req, res) {
+  if (!req.user.admin) { return SubErr.NOT_AUTHORIZED(req, res); }
+  try { dbQueue.scanAll(); } catch { /* already scanning */ }
+  // Return the fresh status so clients can immediately display progress.
+  return getScanStatus(req, res);
+}
+
+// ── Phase 3: Artist/album info stubs ──────────────────────────────────────
+//
+// LastFM/MusicBrainz bios aren't in scope. We return the minimum shape with
+// real similar-artists (computed from shared genres) so client "Info" panels
+// render something useful instead of falling back to an error.
+
+function similarArtistsFor(artistId, limit = 10) {
+  const { clause: libClause, params: libParams } = { clause: '1=1', params: [] }; // libraries don't apply to artist rows
+  void libClause; void libParams;
+  // Artists sharing ≥1 genre with the target, scored by shared-genre count.
+  return db.getDB().prepare(`
+    WITH our_genres AS (
+      SELECT DISTINCT t.genre FROM tracks t
+      WHERE t.artist_id = ? AND t.genre IS NOT NULL AND t.genre <> ''
+    )
+    SELECT a.id, a.name,
+           COUNT(DISTINCT t.genre) AS shared,
+           COUNT(DISTINCT al.id)   AS albumCount
+    FROM artists a
+    JOIN albums al ON al.artist_id = a.id
+    JOIN tracks t  ON t.album_id = al.id
+    WHERE a.id <> ? AND t.genre IN (SELECT genre FROM our_genres)
+    GROUP BY a.id
+    HAVING shared > 0
+    ORDER BY shared DESC, albumCount DESC
+    LIMIT ?
+  `).all(artistId, artistId, limit);
+}
+
+function artistInfoPayload(artistRow) {
+  const similar = similarArtistsFor(artistRow.id, 10);
+  return {
+    biography:      '',
+    musicBrainzId:  artistRow.mbz_artist_id || undefined,
+    lastFmUrl:      undefined,
+    smallImageUrl:  undefined,
+    mediumImageUrl: undefined,
+    largeImageUrl:  undefined,
+    similarArtist:  similar.map(s => ({
+      id:         encArtist(s.id),
+      name:       s.name,
+      albumCount: s.albumCount,
+    })),
+  };
+}
+
+export function getArtistInfo(req, res) {
+  const parsed = decodeId(req.query.id);
+  if (!parsed) { return SubErr.MISSING_PARAM(req, res, 'id'); }
+  const artistId = parsed.type === 'artist' ? parsed.id
+    : (parsed.type === 'album' ? db.getDB().prepare('SELECT artist_id FROM albums WHERE id = ?').get(parsed.id)?.artist_id
+    : db.getDB().prepare('SELECT artist_id FROM tracks WHERE id = ?').get(parsed.id)?.artist_id);
+  if (!artistId) { return SubErr.NOT_FOUND(req, res, 'Artist'); }
+  const row = db.getDB().prepare('SELECT id, name, mbz_artist_id FROM artists WHERE id = ?').get(artistId);
+  if (!row) { return SubErr.NOT_FOUND(req, res, 'Artist'); }
+  sendOk(req, res, { artistInfo: artistInfoPayload(row) });
+}
+
+export function getArtistInfo2(req, res) {
+  const parsed = decodeId(req.query.id, 'artist');
+  if (!parsed) { return SubErr.MISSING_PARAM(req, res, 'id'); }
+  const row = db.getDB().prepare('SELECT id, name, mbz_artist_id FROM artists WHERE id = ?').get(parsed.id);
+  if (!row) { return SubErr.NOT_FOUND(req, res, 'Artist'); }
+  sendOk(req, res, { artistInfo2: artistInfoPayload(row) });
+}
+
+function albumInfoPayload(albumRow) {
+  return {
+    notes:          '',
+    musicBrainzId:  albumRow.mbz_album_id || undefined,
+    lastFmUrl:      undefined,
+    smallImageUrl:  undefined,
+    mediumImageUrl: undefined,
+    largeImageUrl:  undefined,
+  };
+}
+
+export function getAlbumInfo(req, res) {
+  const parsed = decodeId(req.query.id);
+  if (!parsed) { return SubErr.MISSING_PARAM(req, res, 'id'); }
+  const albumId = parsed.type === 'album' ? parsed.id
+    : (parsed.type === 'song' ? db.getDB().prepare('SELECT album_id FROM tracks WHERE id = ?').get(parsed.id)?.album_id : null);
+  if (!albumId) { return SubErr.NOT_FOUND(req, res, 'Album'); }
+  const row = db.getDB().prepare('SELECT id, mbz_album_id FROM albums WHERE id = ?').get(albumId);
+  if (!row) { return SubErr.NOT_FOUND(req, res, 'Album'); }
+  sendOk(req, res, { albumInfo: albumInfoPayload(row) });
+}
+
+export function getAlbumInfo2(req, res) {
+  const parsed = decodeId(req.query.id, 'album');
+  if (!parsed) { return SubErr.MISSING_PARAM(req, res, 'id'); }
+  const row = db.getDB().prepare('SELECT id, mbz_album_id FROM albums WHERE id = ?').get(parsed.id);
+  if (!row) { return SubErr.NOT_FOUND(req, res, 'Album'); }
+  sendOk(req, res, { albumInfo2: albumInfoPayload(row) });
+}
+
+// ── Phase 3: Avatar (identicon) ───────────────────────────────────────────
+
+export async function getAvatar(req, res) {
+  const username = String(req.query.username || req.user.username);
+  try {
+    const buf = await identiconFor(username, 128);
+    res.status(200).set({
+      'Content-Type':  'image/png',
+      'Cache-Control': 'public, max-age=3600',
+    }).send(buf);
+  } catch (err) {
+    winston.error('[subsonic] getAvatar failed', { stack: err });
+    res.status(404).end();
+  }
+}
+
+// ── Phase 3: Shares ───────────────────────────────────────────────────────
+//
+// Subsonic shares map onto mStream's existing `shared_playlists` table.
+// `playlist_json` is already a JSON array of "<vpath>/<relpath>" strings,
+// which is exactly what mStream's share-view webapp reads. We convert song
+// IDs to that form on create and back to songs on read.
+
+function shareRowToPayload(row, sharePrefix) {
+  const entries = JSON.parse(row.playlist_json || '[]');
+  // Resolve each "<vpath>/<relpath>" filepath back to a track row so we can
+  // emit the full Subsonic song object.
+  const stmt = db.getDB().prepare(`
+    SELECT t.id, t.filepath, t.title, t.track_number, t.disc_number, t.duration,
+           t.format, t.file_size, t.bitrate, t.year, t.genre, t.album_art_file,
+           t.created_at, t.library_id,
+           a.id AS artist_id, a.name AS artist_name,
+           al.id AS album_id, al.name AS album_name
+    FROM tracks t
+    JOIN libraries l ON l.id = t.library_id
+    LEFT JOIN artists a  ON a.id = t.artist_id
+    LEFT JOIN albums  al ON al.id = t.album_id
+    WHERE l.name = ? AND t.filepath = ?
+  `);
+  const songRows = [];
+  for (const fp of entries) {
+    const slash = fp.indexOf('/');
+    if (slash < 0) { continue; }
+    const vpath = fp.slice(0, slash);
+    const rel   = fp.slice(slash + 1);
+    const r = stmt.get(vpath, rel);
+    if (r) { songRows.push(r); }
+  }
+
+  return {
+    id:          `sh-${row.share_id}`,
+    url:         `${sharePrefix}/shared/${row.share_id}`,
+    description: row.description || undefined,
+    username:    row.username || undefined,
+    created:     isoUtc(row.created_at),
+    expires:     row.expires ? new Date(row.expires * 1000).toISOString() : undefined,
+    entry:       songRows.map(songFromRow),
+  };
+}
+
+function shareUrlPrefix(req) {
+  const host = req.get('host') || `127.0.0.1:${config.program.port}`;
+  const proto = req.protocol || 'http';
+  return `${proto}://${host}`;
+}
+
+export function getShares(req, res) {
+  const rows = db.getDB().prepare(`
+    SELECT s.id, s.share_id, s.playlist_json, s.user_id, s.expires, s.created_at,
+           u.username
+    FROM shared_playlists s
+    LEFT JOIN users u ON u.id = s.user_id
+    ${req.user.admin ? '' : 'WHERE s.user_id = ?'}
+    ORDER BY s.created_at DESC
+  `).all(...(req.user.admin ? [] : [req.user.id]));
+
+  const prefix = shareUrlPrefix(req);
+  sendOk(req, res, {
+    shares: { share: rows.map(r => shareRowToPayload({ ...r, description: null }, prefix)) },
+  });
+}
+
+export function createShare(req, res) {
+  const songIds = arrayParam(req.query.id).map(v => decodeId(v, 'song')?.id).filter(Number.isFinite);
+  if (!songIds.length) { return SubErr.MISSING_PARAM(req, res, 'id'); }
+
+  const filepaths = songIds.map(id => filepathForSong(id)).filter(Boolean);
+  if (!filepaths.length) { return SubErr.NOT_FOUND(req, res, 'Song'); }
+
+  const shareId = nanoid(10);
+  const expiresMs = parseInt(req.query.expires, 10);
+  const expires = Number.isFinite(expiresMs) && expiresMs > 0
+    ? Math.floor(expiresMs / 1000)
+    : null;
+
+  db.getDB().prepare(`
+    INSERT INTO shared_playlists (share_id, playlist_json, user_id, expires, token)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(shareId, JSON.stringify(filepaths), req.user.id, expires, '');
+
+  const row = db.getDB().prepare(`
+    SELECT s.*, u.username FROM shared_playlists s
+    LEFT JOIN users u ON u.id = s.user_id WHERE s.share_id = ?
+  `).get(shareId);
+  sendOk(req, res, {
+    shares: { share: [shareRowToPayload({ ...row, description: req.query.description || null }, shareUrlPrefix(req))] },
+  });
+}
+
+export function updateShare(req, res) {
+  const idRaw = String(req.query.id || '');
+  const m = /^sh-(.+)$/.exec(idRaw);
+  const shareId = m ? m[1] : idRaw;
+  if (!shareId) { return SubErr.MISSING_PARAM(req, res, 'id'); }
+  const row = db.getDB().prepare('SELECT user_id FROM shared_playlists WHERE share_id = ?').get(shareId);
+  if (!row) { return SubErr.NOT_FOUND(req, res, 'Share'); }
+  if (row.user_id !== req.user.id && !req.user.admin) { return SubErr.NOT_AUTHORIZED(req, res); }
+
+  // Only `expires` is persistable — mStream's schema doesn't store a
+  // description column. We accept `description` silently so clients don't
+  // error out, but it won't round-trip.
+  if ('expires' in req.query) {
+    const ms = parseInt(req.query.expires, 10);
+    const expires = Number.isFinite(ms) && ms > 0 ? Math.floor(ms / 1000) : null;
+    db.getDB().prepare('UPDATE shared_playlists SET expires = ? WHERE share_id = ?').run(expires, shareId);
+  }
+  sendOk(req, res);
+}
+
+export function deleteShare(req, res) {
+  const idRaw = String(req.query.id || '');
+  const m = /^sh-(.+)$/.exec(idRaw);
+  const shareId = m ? m[1] : idRaw;
+  if (!shareId) { return SubErr.MISSING_PARAM(req, res, 'id'); }
+  const row = db.getDB().prepare('SELECT user_id FROM shared_playlists WHERE share_id = ?').get(shareId);
+  if (!row) { return SubErr.NOT_FOUND(req, res, 'Share'); }
+  if (row.user_id !== req.user.id && !req.user.admin) { return SubErr.NOT_AUTHORIZED(req, res); }
+  db.getDB().prepare('DELETE FROM shared_playlists WHERE share_id = ?').run(shareId);
+  sendOk(req, res);
+}
+
+// ── Phase 3: Bookmarks ────────────────────────────────────────────────────
+//
+// Keyed on track_hash to survive a rescan (same pattern as user_metadata).
+
+function bookmarkToPayload(row, songRow) {
+  return {
+    entry:       songRow ? songFromRow(songRow) : undefined,
+    position:    row.position_ms,
+    username:    row.username || undefined,
+    comment:     row.comment || undefined,
+    created:     isoUtc(row.created_at),
+    changed:     isoUtc(row.changed_at),
+  };
+}
+
+export function getBookmarks(req, res) {
+  const rows = db.getDB().prepare(`
+    SELECT b.*, u.username
+    FROM user_bookmarks b
+    LEFT JOIN users u ON u.id = b.user_id
+    WHERE b.user_id = ?
+    ORDER BY b.changed_at DESC
+  `).all(req.user.id);
+
+  if (!rows.length) { return sendOk(req, res, { bookmarks: { bookmark: [] } }); }
+
+  const hashes = rows.map(r => r.track_hash);
+  const ph = hashes.map(() => '?').join(',');
+  const { clause, params } = libraryScope(req);
+  const songRows = db.getDB().prepare(`
+    ${songQueryBase()}
+    WHERE t.file_hash IN (${ph}) AND ${clause}
+  `).all(...hashes, ...params);
+  const byHash = new Map();
+  for (const row of songRows) {
+    // Song rows don't expose file_hash in songQueryBase — look it up cheaply.
+    const h = db.getDB().prepare('SELECT file_hash FROM tracks WHERE id = ?').get(row.id)?.file_hash;
+    if (h) { byHash.set(h, row); }
+  }
+
+  sendOk(req, res, {
+    bookmarks: {
+      bookmark: rows.map(r => bookmarkToPayload(r, byHash.get(r.track_hash))),
+    },
+  });
+}
+
+export function createBookmark(req, res) {
+  const parsed = decodeId(req.query.id, 'song');
+  if (!parsed) { return SubErr.MISSING_PARAM(req, res, 'id'); }
+  const position = parseInt(req.query.position, 10);
+  if (!Number.isFinite(position) || position < 0) {
+    return SubErr.MISSING_PARAM(req, res, 'position');
+  }
+  const hash = trackFileHash(parsed.id);
+  if (!hash) { return SubErr.NOT_FOUND(req, res, 'Song'); }
+  const comment = req.query.comment ? String(req.query.comment) : null;
+
+  db.getDB().prepare(`
+    INSERT INTO user_bookmarks (user_id, track_hash, position_ms, comment)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(user_id, track_hash) DO UPDATE SET
+      position_ms = excluded.position_ms,
+      comment     = excluded.comment,
+      changed_at  = datetime('now')
+  `).run(req.user.id, hash, position, comment);
+
+  sendOk(req, res);
+}
+
+export function deleteBookmark(req, res) {
+  const parsed = decodeId(req.query.id, 'song');
+  if (!parsed) { return SubErr.MISSING_PARAM(req, res, 'id'); }
+  const hash = trackFileHash(parsed.id);
+  if (!hash) { return SubErr.NOT_FOUND(req, res, 'Song'); }
+  db.getDB().prepare('DELETE FROM user_bookmarks WHERE user_id = ? AND track_hash = ?')
+    .run(req.user.id, hash);
+  sendOk(req, res);
+}
+
+// ── Phase 3: Play queue ───────────────────────────────────────────────────
+//
+// One row per user storing their current queue as a JSON array of track
+// hashes. Resolves to current track ids at read time so rescans don't break
+// pointers.
+
+export function getPlayQueue(req, res) {
+  const row = db.getDB().prepare('SELECT * FROM user_play_queue WHERE user_id = ?')
+    .get(req.user.id);
+  if (!row) { return sendOk(req, res, { playQueue: {} }); }
+
+  const hashes = JSON.parse(row.track_hashes_json || '[]');
+  if (!hashes.length) { return sendOk(req, res, { playQueue: {} }); }
+
+  const ph = hashes.map(() => '?').join(',');
+  const { clause, params } = libraryScope(req);
+  const songRows = db.getDB().prepare(`
+    SELECT t.id, t.filepath, t.title, t.track_number, t.disc_number, t.duration,
+           t.format, t.file_size, t.bitrate, t.year, t.genre, t.album_art_file,
+           t.created_at, t.library_id, t.file_hash AS _file_hash,
+           a.id AS artist_id, a.name AS artist_name,
+           al.id AS album_id, al.name AS album_name
+    FROM tracks t
+    LEFT JOIN artists a  ON a.id = t.artist_id
+    LEFT JOIN albums  al ON al.id = t.album_id
+    WHERE t.file_hash IN (${ph}) AND ${clause}
+  `).all(...hashes, ...params);
+
+  const byHash = new Map(songRows.map(r => [r._file_hash, r]));
+  // Re-order to match the stored sequence, dropping any entries whose tracks
+  // were removed since save time.
+  const ordered = hashes.map(h => byHash.get(h)).filter(Boolean);
+
+  // Find current (optional) — may have moved to a different id since save.
+  let current;
+  if (row.current_track_hash && byHash.has(row.current_track_hash)) {
+    current = String(byHash.get(row.current_track_hash).id);
+  }
+
+  sendOk(req, res, {
+    playQueue: {
+      current,
+      position: row.position_ms || undefined,
+      username: req.user.username,
+      changed:  isoUtc(row.changed_at),
+      changedBy: row.changed_by || undefined,
+      entry:    enrichSongsWithUserMeta(req, ordered.map(songFromRow)),
+    },
+  });
+}
+
+export function savePlayQueue(req, res) {
+  const songIds = arrayParam(req.query.id).map(v => decodeId(v, 'song')?.id).filter(Number.isFinite);
+  const hashes = songIds.map(trackFileHash).filter(Boolean);
+  const currentId = decodeId(req.query.current, 'song')?.id;
+  const currentHash = currentId ? trackFileHash(currentId) : null;
+  const position = parseInt(req.query.position, 10);
+  const posMs = Number.isFinite(position) && position >= 0 ? position : null;
+  const changedBy = req.query.c ? String(req.query.c) : null;
+
+  db.getDB().prepare(`
+    INSERT INTO user_play_queue
+      (user_id, current_track_hash, position_ms, changed_at, changed_by, track_hashes_json)
+    VALUES (?, ?, ?, datetime('now'), ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET
+      current_track_hash = excluded.current_track_hash,
+      position_ms        = excluded.position_ms,
+      changed_at         = datetime('now'),
+      changed_by         = excluded.changed_by,
+      track_hashes_json  = excluded.track_hashes_json
+  `).run(req.user.id, currentHash, posMs, changedBy, JSON.stringify(hashes));
+
+  sendOk(req, res);
+}
+
+// ── Phase 3: Tier 3 stubs (explicit decline / empty) ──────────────────────
+
+export function getInternetRadioStations(req, res) {
+  sendOk(req, res, { internetRadioStations: { internetRadioStation: [] } });
+}
+export function getPodcasts(req, res) {
+  sendOk(req, res, { podcasts: { channel: [] } });
+}
+export function getNewestPodcasts(req, res) {
+  sendOk(req, res, { newestPodcasts: { episode: [] } });
+}
+export function getLyrics(req, res) {
+  // No lyrics ingestion yet — see docs/subsonic-phase3.md Tier 3.
+  sendOk(req, res, { lyrics: { value: '' } });
+}
+export function getLyricsBySongId(req, res) {
+  sendOk(req, res, { lyricsList: { structuredLyrics: [] } });
+}
+export function jukeboxControl(req, res) {
+  // mStream's model is "every client is its own player" — a server-side
+  // jukebox doesn't fit. Politely decline.
+  return SubErr.GENERIC(req, res, 'Jukebox control is not supported by this server.');
 }

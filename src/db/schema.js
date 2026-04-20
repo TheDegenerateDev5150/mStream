@@ -1,7 +1,7 @@
 // SQLite schema definitions and migration system for mStream.
 // Uses PRAGMA user_version for tracking which migrations have been applied.
 
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 13;
 
 export const SCHEMA_V1 = `
   -- Users
@@ -249,18 +249,75 @@ export const SCHEMA_V10 = `
   ALTER TABLE user_metadata ADD COLUMN starred_at TEXT;
 `;
 
+export const SCHEMA_V11 = `
+  -- Per-user star state for albums and artists. Subsonic's star/unstar
+  -- endpoints accept songId, albumId, and artistId independently; these
+  -- tables let us track the latter two directly rather than synthesizing
+  -- from child-track stars (which was lossy — unstarring a track
+  -- accidentally unstarred the album).
+  CREATE TABLE IF NOT EXISTS user_album_stars (
+    user_id    INTEGER NOT NULL REFERENCES users(id)  ON DELETE CASCADE,
+    album_id   INTEGER NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
+    starred_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (user_id, album_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_user_album_stars_user ON user_album_stars(user_id);
+
+  CREATE TABLE IF NOT EXISTS user_artist_stars (
+    user_id    INTEGER NOT NULL REFERENCES users(id)   ON DELETE CASCADE,
+    artist_id  INTEGER NOT NULL REFERENCES artists(id) ON DELETE CASCADE,
+    starred_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (user_id, artist_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_user_artist_stars_user ON user_artist_stars(user_id);
+`;
+
+export const SCHEMA_V12 = `
+  -- Subsonic bookmarks: per-user, per-track position markers. Keyed on
+  -- track_hash rather than track rowid so bookmarks survive a rescan that
+  -- reshuffles ids — same pattern user_metadata uses.
+  CREATE TABLE IF NOT EXISTS user_bookmarks (
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    track_hash  TEXT    NOT NULL,
+    position_ms INTEGER NOT NULL,
+    comment     TEXT,
+    created_at  TEXT    DEFAULT (datetime('now')),
+    changed_at  TEXT    DEFAULT (datetime('now')),
+    PRIMARY KEY (user_id, track_hash)
+  );
+  CREATE INDEX IF NOT EXISTS idx_user_bookmarks_user ON user_bookmarks(user_id);
+`;
+
+export const SCHEMA_V13 = `
+  -- OpenSubsonic getPlayQueue / savePlayQueue: one row per user storing
+  -- their current across-device play queue. track_hashes_json is a JSON
+  -- array of track_hashes in play order; reading requires mapping back to
+  -- current track ids (same rescan-survival reason as bookmarks).
+  CREATE TABLE IF NOT EXISTS user_play_queue (
+    user_id            INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    current_track_hash TEXT,
+    position_ms        INTEGER,
+    changed_at         TEXT    DEFAULT (datetime('now')),
+    changed_by         TEXT,
+    track_hashes_json  TEXT    NOT NULL
+  );
+`;
+
 // rescanRequired: true — marks migrations that change the tracks table schema
 // and need a force rescan to populate new fields. When applied, a marker file
 // is written so the next boot triggers rescanAll() instead of scanAll().
 export const MIGRATIONS = [
-  { version: 1, sql: SCHEMA_V1 },
-  { version: 2, sql: SCHEMA_V2 },
-  { version: 3, sql: SCHEMA_V3 },
-  { version: 4, sql: SCHEMA_V4 },
-  { version: 5, sql: SCHEMA_V5 },
-  { version: 6, sql: SCHEMA_V6 },
-  { version: 7, sql: SCHEMA_V7 },
-  { version: 8, sql: SCHEMA_V8 },
-  { version: 9, sql: SCHEMA_V9 },
+  { version: 1,  sql: SCHEMA_V1  },
+  { version: 2,  sql: SCHEMA_V2  },
+  { version: 3,  sql: SCHEMA_V3  },
+  { version: 4,  sql: SCHEMA_V4  },
+  { version: 5,  sql: SCHEMA_V5  },
+  { version: 6,  sql: SCHEMA_V6  },
+  { version: 7,  sql: SCHEMA_V7  },
+  { version: 8,  sql: SCHEMA_V8  },
+  { version: 9,  sql: SCHEMA_V9  },
   { version: 10, sql: SCHEMA_V10 },
+  { version: 11, sql: SCHEMA_V11 },
+  { version: 12, sql: SCHEMA_V12 },
+  { version: 13, sql: SCHEMA_V13 },
 ];

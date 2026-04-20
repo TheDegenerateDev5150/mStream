@@ -24,6 +24,7 @@ const METHODS = {
   ping:              H.ping,
   getLicense:        H.getLicense,
   getMusicFolders:   H.getMusicFolders,
+  getOpenSubsonicExtensions: H.getOpenSubsonicExtensions,
 
   // Browsing
   getIndexes:        H.getIndexes,
@@ -33,11 +34,19 @@ const METHODS = {
   getAlbum:          H.getAlbum,
   getSong:           H.getSong,
   getGenres:         H.getGenres,
+  getArtistInfo:     H.getArtistInfo,
+  getArtistInfo2:    H.getArtistInfo2,
+  getAlbumInfo:      H.getAlbumInfo,
+  getAlbumInfo2:     H.getAlbumInfo2,
+  getTopSongs:       H.getTopSongs,
+  getSimilarSongs:   H.getSimilarSongs,
+  getSimilarSongs2:  H.getSimilarSongs2,
 
   // Media
   getCoverArt:       H.getCoverArt,
   stream:            H.stream,
   download:          H.download,
+  getAvatar:         H.getAvatar,
 
   // Search
   search:            H.search,
@@ -49,6 +58,7 @@ const METHODS = {
   star:              H.star,
   unstar:            H.unstar,
   setRating:         H.setRating,
+  getStarred:        H.getStarred,
   getStarred2:       H.getStarred2,
 
   // Phase 2 — album/song lists
@@ -63,6 +73,38 @@ const METHODS = {
   createPlaylist:    H.createPlaylist,
   updatePlaylist:    H.updatePlaylist,
   deletePlaylist:    H.deletePlaylist,
+
+  // Phase 3 — user management
+  getUser:           H.getUser,
+  getUsers:          H.getUsers,
+  createUser:        H.createUser,
+  updateUser:        H.updateUser,
+  deleteUser:        H.deleteUser,
+  changePassword:    H.changePassword,
+
+  // Phase 3 — now playing / scanning
+  getNowPlaying:     H.getNowPlaying,
+  getScanStatus:     H.getScanStatus,
+  startScan:         H.startScan,
+
+  // Phase 3 — shares / bookmarks / play queue
+  getShares:         H.getShares,
+  createShare:       H.createShare,
+  updateShare:       H.updateShare,
+  deleteShare:       H.deleteShare,
+  getBookmarks:      H.getBookmarks,
+  createBookmark:    H.createBookmark,
+  deleteBookmark:    H.deleteBookmark,
+  getPlayQueue:      H.getPlayQueue,
+  savePlayQueue:     H.savePlayQueue,
+
+  // Phase 3 — Tier 3 explicit stubs / declines
+  getInternetRadioStations: H.getInternetRadioStations,
+  getPodcasts:       H.getPodcasts,
+  getNewestPodcasts: H.getNewestPodcasts,
+  getLyrics:         H.getLyrics,
+  getLyricsBySongId: H.getLyricsBySongId,
+  jukeboxControl:    H.jukeboxControl,
 };
 
 export function setup(mstream) {
@@ -84,7 +126,9 @@ export function setup(mstream) {
   };
 
   // Subsonic supports both GET and POST on every endpoint; clients pick
-  // based on whether they're sending a large `songId` list etc.
+  // based on whether they're sending a large `songId` list etc. HEAD is
+  // required by some clients to probe stream size before playback.
   mstream.get( '/rest/:method', handle);
   mstream.post('/rest/:method', handle);
+  mstream.head('/rest/:method', handle);
 }
