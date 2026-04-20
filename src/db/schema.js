@@ -1,7 +1,7 @@
 // SQLite schema definitions and migration system for mStream.
 // Uses PRAGMA user_version for tracking which migrations have been applied.
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 export const SCHEMA_V1 = `
   -- Users
@@ -224,6 +224,23 @@ export const SCHEMA_V8 = `
   );
 `;
 
+export const SCHEMA_V9 = `
+  -- Per-user API keys. Primary use case: Subsonic API authentication, where
+  -- clients send \`apiKey=...\` instead of a username/password pair. Each user
+  -- can have multiple keys (one per device/app).
+  CREATE TABLE IF NOT EXISTS user_api_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    key TEXT NOT NULL UNIQUE,
+    name TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    last_used TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_user_api_keys_key ON user_api_keys(key);
+  CREATE INDEX IF NOT EXISTS idx_user_api_keys_user ON user_api_keys(user_id);
+`;
+
 // rescanRequired: true — marks migrations that change the tracks table schema
 // and need a force rescan to populate new fields. When applied, a marker file
 // is written so the next boot triggers rescanAll() instead of scanAll().
@@ -236,4 +253,5 @@ export const MIGRATIONS = [
   { version: 6, sql: SCHEMA_V6 },
   { version: 7, sql: SCHEMA_V7 },
   { version: 8, sql: SCHEMA_V8 },
+  { version: 9, sql: SCHEMA_V9 },
 ];

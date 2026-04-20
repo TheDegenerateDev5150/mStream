@@ -29,6 +29,8 @@ import * as ytdlApi from './api/ytdl.js';
 import * as dlnaApi from './api/dlna.js';
 import * as dlnaSsdp from './dlna/ssdp.js';
 import * as dlnaServer from './dlna/dlna-server.js';
+import * as subsonicApi from './api/subsonic/index.js';
+import * as userApiKeysApi from './api/user-api-keys.js';
 import * as serverPlaybackApi from './api/server-playback.js';
 import * as albumArtApi from './api/album-art.js';
 import * as waveformApi from './api/waveform.js';
@@ -185,6 +187,10 @@ export async function serveIt(configFile) {
   // DLNA routes must be before the auth wall — only needed in same-port mode
   if (config.program.dlna.mode === 'same-port') { dlnaApi.setup(mstream); }
 
+  // Subsonic REST API — sits before the auth wall because it carries its own
+  // credentials (u/p query string or apiKey) and populates req.user itself.
+  subsonicApi.setup(mstream);
+
   // Everything below this line requires authentication
   authApi.setup(mstream);
 
@@ -203,6 +209,7 @@ export async function serveIt(configFile) {
   albumArtApi.setup(mstream);
   waveformApi.setup(mstream);
   serverPlaybackApi.setup(mstream);
+  userApiKeysApi.setup(mstream);
 
   // VELVET ONLY: additional API modules loaded only when ui='velvet'
   // These provide features specific to the Velvet UI (ListenBrainz, smart playlists,

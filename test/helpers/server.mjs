@@ -67,6 +67,9 @@ async function waitForScanComplete(baseUrl, timeoutMs = 30_000) {
  * @param {string} [opts.browseMode='dirs']     `dlna.browse` default-view setting
  * @param {boolean} [opts.waitForScan=true]     Block until the initial scan finishes
  * @param {boolean} [opts.captureLogs=false]    Pipe stdout/stderr to the test process
+ * @param {Object[]} [opts.users]               Users to create after boot (PUT
+ *   /api/v1/admin/users while the server is still in public-access mode).
+ *   Each entry: { username, password, admin?, vpaths? }.
  */
 export async function startServer(opts = {}) {
   const {
@@ -74,6 +77,7 @@ export async function startServer(opts = {}) {
     browseMode   = 'dirs',
     waitForScan  = true,
     captureLogs  = false,
+    users        = [],
   } = opts;
 
   const musicDir = await ensureFixtures();
@@ -137,6 +141,45 @@ export async function startServer(opts = {}) {
 
   if (waitForScan) {
     await waitForScanComplete(baseUrl);
+  }
+
+  // Create users before the caller starts testing. While there are zero users
+  // the server is in public-access mode and admin endpoints are unauthenticated;
+  // once the first user is added, subsequent ones need an admin token, so we
+  // always mark the first created user as admin.
+  for (let i = 0; i < users.length; i++) {
+    const u = users[i];
+    const body = {
+      username:    u.username,
+      password:    u.password,
+      admin:       u.admin ?? (i === 0),
+      vpaths:      u.vpaths ?? ['testlib'],
+      allowMkdir:  u.allowMkdir ?? true,
+      allowUpload: u.allowUpload ?? true,
+    };
+    // First user created in public mode — no token needed. Subsequent users
+    // require the first user's JWT; easier to just do them all via the
+    // pre-user public path: add them in a loop while at least one survives
+    // as a singleton is incorrect, so we create the first admin, then log in
+    // and reuse that token for the rest.
+    let headers = { 'Content-Type': 'application/json' };
+    if (i > 0) {
+      const loginR = await fetch(`${baseUrl}/api/v1/auth/login`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ username: users[0].username, password: users[0].password }),
+      });
+      const j = await loginR.json();
+      if (j?.token) { headers['x-access-token'] = j.token; }
+    }
+    const r = await fetch(`${baseUrl}/api/v1/admin/users`, {
+      method: 'PUT', headers, body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const msg = await r.text();
+      try { proc.kill('SIGKILL'); } catch { /* already gone */ }
+      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+      throw new Error(`failed to create user "${u.username}": ${r.status} ${msg}`);
+    }
   }
 
   async function stop() {
