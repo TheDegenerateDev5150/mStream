@@ -34,7 +34,6 @@ import * as albumArtApi from './api/album-art.js';
 import * as waveformApi from './api/waveform.js';
 // Velvet UI modules — dynamically imported only when ui='velvet' is active
 import WebError from './util/web-error.js';
-import { sanitizeFilename } from './util/validation.js';
 
 const require = createRequire(import.meta.url);
 const packageJson = require('../package.json');
@@ -233,21 +232,7 @@ export async function serveIt(configFile) {
   mstream.get('/api/', (req, res) => res.json({ "server": packageJson.version, "apiVersions": ["1"] }));
 
   // album art folder
-  mstream.get('/album-art/:file', (req, res) => {
-    if (!req.params.file) {
-      throw new WebError('Missing Error', 404);
-    }
-
-    // ideally we should be checking this filename against a DB entry
-    const filename = sanitizeFilename(req.params.file);
-
-    const compressedFilePath = path.join(config.program.storage.albumArtDirectory, `z${req.query.compress}-${filename}`);
-    if (req.query.compress && fs.existsSync(compressedFilePath)) {
-      return res.sendFile(compressedFilePath);
-    }
-
-    res.sendFile(path.join(config.program.storage.albumArtDirectory, filename));
-  });
+  mstream.get('/album-art/:file', albumArtApi.serveAlbumArtFile);
 
   // TODO: determine if user has access to the exact file
   // mstream.all('/media/*', (req, res, next) => {

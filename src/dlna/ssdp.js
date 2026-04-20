@@ -1,11 +1,25 @@
 import dgram from 'node:dgram';
 import os from 'node:os';
+import { createRequire } from 'node:module';
 import winston from 'winston';
 import * as config from '../state/config.js';
 
+const require = createRequire(import.meta.url);
+const packageJson = require('../../package.json');
+
 const MULTICAST_ADDR = '239.255.255.250';
 const SSDP_PORT = 1900;
-const NOTIFY_INTERVAL_MS = 30 * 60 * 1000;
+const CACHE_MAX_AGE_SECONDS = 1800;
+// Re-announce well before max-age expires so control points don't briefly
+// drop the device between announcements.
+const NOTIFY_INTERVAL_MS = (CACHE_MAX_AGE_SECONDS / 2) * 1000;
+
+// UPnP 1.1 BOOTID/CONFIGID. BOOTID must be non-decreasing across reboots and
+// fit in 31 bits (< 2^31 = 2,147,483,648); Unix seconds satisfies both until
+// 2038. CONFIGID is a stable id for the device description — it's effectively
+// static for mStream, so a single reserved constant is fine.
+const BOOT_ID = Math.floor(Date.now() / 1000);
+const CONFIG_ID = 1;
 
 let socket = null;
 let notifyTimer = null;
@@ -42,18 +56,20 @@ function uuid() {
 
 // ── Message builders ─────────────────────────────────────────────────────────
 
-const SERVER_STRING = `Node/${process.version} UPnP/1.0 mStream/1.0`;
+const SERVER_STRING = `Node/${process.version} UPnP/1.0 mStream/${packageJson.version}`;
 
 function notifyMsg(nt, usn) {
   return [
     'NOTIFY * HTTP/1.1',
     `HOST: ${MULTICAST_ADDR}:${SSDP_PORT}`,
-    'CACHE-CONTROL: max-age=1800',
+    `CACHE-CONTROL: max-age=${CACHE_MAX_AGE_SECONDS}`,
     `LOCATION: ${deviceUrl()}`,
     `NT: ${nt}`,
     'NTS: ssdp:alive',
     `SERVER: ${SERVER_STRING}`,
     `USN: ${usn}`,
+    `BOOTID.UPNP.ORG: ${BOOT_ID}`,
+    `CONFIGID.UPNP.ORG: ${CONFIG_ID}`,
     '',
     '',
   ].join('\r\n');
@@ -66,6 +82,8 @@ function byebyeMsg(nt, usn) {
     `NT: ${nt}`,
     'NTS: ssdp:byebye',
     `USN: ${usn}`,
+    `BOOTID.UPNP.ORG: ${BOOT_ID}`,
+    `CONFIGID.UPNP.ORG: ${CONFIG_ID}`,
     '',
     '',
   ].join('\r\n');
@@ -74,13 +92,15 @@ function byebyeMsg(nt, usn) {
 function searchResponseMsg(st, usn) {
   return [
     'HTTP/1.1 200 OK',
-    'CACHE-CONTROL: max-age=1800',
+    `CACHE-CONTROL: max-age=${CACHE_MAX_AGE_SECONDS}`,
     `DATE: ${new Date().toUTCString()}`,
     `LOCATION: ${deviceUrl()}`,
     `SERVER: ${SERVER_STRING}`,
     `ST: ${st}`,
     `USN: ${usn}`,
     'EXT:',
+    `BOOTID.UPNP.ORG: ${BOOT_ID}`,
+    `CONFIGID.UPNP.ORG: ${CONFIG_ID}`,
     '',
     '',
   ].join('\r\n');

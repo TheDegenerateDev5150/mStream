@@ -16,7 +16,7 @@ import winston from 'winston';
 import * as config from '../state/config.js';
 import * as db from '../db/manager.js';
 import * as vpath from '../util/vpath.js';
-import { joiValidate } from '../util/validation.js';
+import { joiValidate, sanitizeFilename } from '../util/validation.js';
 import { ffmpegBin } from '../util/ffmpeg-bootstrap.js';
 import { isDownloaded as ffmpegIsDownloaded } from './transcode.js';
 
@@ -101,6 +101,30 @@ async function searchDeezerUrls(artist, album) {
       label: `Deezer: ${r.title}${r.nb_tracks ? ' (' + r.nb_tracks + ' tracks)' : ''}`
     })).filter(r => r.url);
   } catch (_e) { return []; }
+}
+
+// ── Art serving ─────────────────────────────────────────────────────────────
+
+// Express handler for GET /album-art/:file. The `compress` query param is
+// interpolated into the on-disk cache filename (e.g. `zl-abc.jpeg`), so it's
+// strictly validated — anything path-like would escape the album-art directory.
+// `dotfiles: 'allow'` lets it serve files when the install path contains
+// dot-prefixed segments (e.g. `~/.config/mstream/image-cache`).
+const SEND_FILE_OPTS = { dotfiles: 'allow' };
+export function serveAlbumArtFile(req, res) {
+  const filename = sanitizeFilename(req.params.file);
+  const dir = config.program.storage.albumArtDirectory;
+  const compress = req.query.compress;
+  if (compress !== undefined) {
+    if (typeof compress !== 'string' || !/^[a-zA-Z0-9]{1,8}$/.test(compress)) {
+      return res.status(400).end();
+    }
+    const compressedPath = path.resolve(path.join(dir, `z${compress}-${filename}`));
+    if (fs.existsSync(compressedPath)) {
+      return res.sendFile(compressedPath, SEND_FILE_OPTS);
+    }
+  }
+  res.sendFile(path.resolve(path.join(dir, filename)), SEND_FILE_OPTS);
 }
 
 // ── Art save helpers ────────────────────────────────────────────────────────

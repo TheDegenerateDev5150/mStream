@@ -1,16 +1,33 @@
 import express from 'express';
 import crypto from 'node:crypto';
+import http from 'node:http';
 import path from 'node:path';
 import winston from 'winston';
 import * as config from '../state/config.js';
 import * as db from '../db/manager.js';
 import { getBaseUrl } from '../dlna/ssdp.js';
 
+// ── Mutable state ────────────────────────────────────────────────────────────
+
+// SystemUpdateID increments each time the library changes (e.g. scan completes).
+// Control points use it to decide whether to invalidate their caches.
+let systemUpdateID = 1;
+
+// GENA subscribers, keyed by SID. Each entry holds the service it subscribed
+// to, its callback URLs, expiry, and a per-subscription event sequence number.
+const subscribers = new Map();
+
 // ── XML / SOAP helpers ───────────────────────────────────────────────────────
+
+// Characters forbidden in XML 1.0 content: C0 control chars except TAB, LF, CR.
+// Sloppy ID3 tags sometimes include stray bytes here; stripping them keeps the
+// DIDL well-formed for strict renderers.
+const XML_INVALID_CTRL = /[\x00-\x08\x0B\x0C\x0E-\x1F]/g;
 
 function xmlEscape(str) {
   if (str == null) { return ''; }
   return String(str)
+    .replace(XML_INVALID_CTRL, '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -106,11 +123,85 @@ function didlWrapper(items) {
   xmlns:dlna="urn:schemas-dlna-org:metadata-1-0/">${items}</DIDL-Lite>`;
 }
 
-function libraryContainer(lib, parentId, trackCount) {
+function containerArtXml(albumArtFile) {
+  if (!albumArtFile) return '';
+  const base = getBaseUrl();
+  return `\n    <upnp:albumArtURI dlna:profileID="JPEG_TN">${xmlEscape(`${base}/album-art/${encodeURIComponent(albumArtFile)}`)}</upnp:albumArtURI>`;
+}
+
+function libraryContainer(lib, parentId, childCount) {
   return `
-  <container id="lib-${lib.id}" parentID="${parentId}" restricted="1" childCount="${trackCount}">
+  <container id="lib-${lib.id}" parentID="${xmlEscape(parentId)}" restricted="1" childCount="${childCount}">
     <dc:title>${xmlEscape(lib.name)}</dc:title>
     <upnp:class>object.container.storageFolder</upnp:class>
+  </container>`;
+}
+
+function dirContainer(libId, relPath, parentId, childCount) {
+  const name = relPath.split('/').pop();
+  return `
+  <container id="dir-${libId}-${encodeRelPath(relPath)}" parentID="${xmlEscape(parentId)}" restricted="1" childCount="${childCount}">
+    <dc:title>${xmlEscape(name)}</dc:title>
+    <upnp:class>object.container.storageFolder</upnp:class>
+  </container>`;
+}
+
+function artistContainer(libId, artist, parentId) {
+  return `
+  <container id="artist-${libId}-${artist.id}" parentID="${xmlEscape(parentId)}" restricted="1" childCount="${artist.album_count}">${containerArtXml(artist.album_art_file)}
+    <dc:title>${xmlEscape(artist.name)}</dc:title>
+    <upnp:class>object.container.person.musicArtist</upnp:class>
+  </container>`;
+}
+
+function albumContainer(libId, album, parentId) {
+  return `
+  <container id="album-${libId}-${album.id}" parentID="${xmlEscape(parentId)}" restricted="1" childCount="${album.track_count}">${containerArtXml(album.album_art_file)}
+    <dc:title>${xmlEscape(album.name)}</dc:title>
+    <upnp:class>object.container.album.musicAlbum</upnp:class>
+  </container>`;
+}
+
+function genreContainer(libId, genre, parentId) {
+  // genre.name is null for tracks with no genre tag; encode null as empty string sentinel
+  const encodedName = encodeRelPath(genre.name ?? '');
+  const displayName = genre.name ?? 'Unknown Genre';
+  return `
+  <container id="genre-${libId}-${encodedName}" parentID="${xmlEscape(parentId)}" restricted="1" childCount="${genre.artist_count}">${containerArtXml(genre.album_art_file)}
+    <dc:title>${xmlEscape(displayName)}</dc:title>
+    <upnp:class>object.container.genre.musicGenre</upnp:class>
+  </container>`;
+}
+
+function genreArtistContainer(libId, artist, parentId, genre) {
+  return `
+  <container id="gartist-${libId}-${artist.id}-${encodeRelPath(genre)}" parentID="${xmlEscape(parentId)}" restricted="1" childCount="${artist.album_count}">${containerArtXml(artist.album_art_file)}
+    <dc:title>${xmlEscape(artist.name)}</dc:title>
+    <upnp:class>object.container.person.musicArtist</upnp:class>
+  </container>`;
+}
+
+function playlistsContainer(parentId, childCount) {
+  return `
+  <container id="playlists" parentID="${xmlEscape(parentId)}" restricted="1" childCount="${childCount}">
+    <dc:title>Playlists</dc:title>
+    <upnp:class>object.container</upnp:class>
+  </container>`;
+}
+
+function playlistContainer(playlist, parentId) {
+  return `
+  <container id="playlist-${playlist.id}" parentID="${xmlEscape(parentId)}" restricted="1" childCount="${playlist.track_count}">
+    <dc:title>${xmlEscape(playlist.name)}</dc:title>
+    <upnp:class>object.container.playlistContainer</upnp:class>
+  </container>`;
+}
+
+function recentContainer(parentId, childCount) {
+  return `
+  <container id="recent" parentID="${xmlEscape(parentId)}" restricted="1" childCount="${childCount}">
+    <dc:title>Recently Added</dc:title>
+    <upnp:class>object.container</upnp:class>
   </container>`;
 }
 
@@ -128,7 +219,7 @@ function trackItem(track, libName, parentId) {
   const sizeAttr = track.file_size ? ` size="${track.file_size}"` : '';
 
   return `
-  <item id="track-${track.id}" parentID="${parentId}" restricted="1">
+  <item id="track-${track.id}" parentID="${xmlEscape(parentId)}" restricted="1">
     <dc:title>${xmlEscape(track.title || path.basename(track.filepath))}</dc:title>
     <dc:creator>${xmlEscape(track.artist_name)}</dc:creator>
     <upnp:artist>${xmlEscape(track.artist_name)}</upnp:artist>
@@ -147,7 +238,7 @@ function getLibraryTrackCount(libraryId) {
   return row ? row.n : 0;
 }
 
-function getLibraryTracks(libraryId, start, count) {
+function getLibraryTracks(libraryId, start, count, orderBy = 'al.name, t.disc_number, t.track_number, t.title') {
   const limit = count > 0 ? count : -1; // SQLite: -1 = no limit
   return db.getDB().prepare(`
     SELECT t.id, t.filepath, t.title, t.track_number, t.duration, t.format,
@@ -158,9 +249,341 @@ function getLibraryTracks(libraryId, start, count) {
     LEFT JOIN artists a  ON t.artist_id = a.id
     LEFT JOIN albums al  ON t.album_id  = al.id
     WHERE t.library_id = ?
-    ORDER BY al.name, t.disc_number, t.track_number, t.title
+    ORDER BY ${orderBy}
     LIMIT ? OFFSET ?
   `).all(libraryId, limit, start);
+}
+
+function getAllLibraryTracks(libraryId) {
+  return db.getDB().prepare(`
+    SELECT t.id, t.filepath, t.title, t.track_number, t.duration, t.format,
+           t.file_size, t.genre, t.album_art_file,
+           a.name AS artist_name,
+           al.name AS album_name
+    FROM tracks t
+    LEFT JOIN artists a  ON t.artist_id = a.id
+    LEFT JOIN albums al  ON t.album_id  = al.id
+    WHERE t.library_id = ?
+    ORDER BY t.filepath
+  `).all(libraryId);
+}
+
+function getLibraryArtists(libraryId) {
+  return db.getDB().prepare(`
+    SELECT COALESCE(t.artist_id, 0) AS id,
+           COALESCE(a.name, 'Unknown Artist') AS name,
+           COUNT(DISTINCT COALESCE(t.album_id, 0)) AS album_count,
+           (SELECT t2.album_art_file FROM tracks t2
+            WHERE t2.library_id = t.library_id AND t2.artist_id IS t.artist_id
+              AND t2.album_art_file IS NOT NULL LIMIT 1) AS album_art_file
+    FROM tracks t
+    LEFT JOIN artists a ON t.artist_id = a.id
+    WHERE t.library_id = ?
+    GROUP BY COALESCE(t.artist_id, 0)
+    ORDER BY COALESCE(a.name, '') COLLATE NOCASE
+  `).all(libraryId);
+}
+
+// Targeted single-row lookups for BrowseMetadata. artistId=0 means "Unknown
+// Artist" (tracks with NULL artist_id); returns null if no matching tracks.
+function getArtistById(libraryId, artistId) {
+  const artistCond = artistId === 0 ? 't.artist_id IS NULL' : 't.artist_id = ?';
+  const params = artistId === 0 ? [libraryId] : [libraryId, artistId];
+  const row = db.getDB().prepare(`
+    SELECT COALESCE(t.artist_id, 0) AS id,
+           COALESCE(a.name, 'Unknown Artist') AS name,
+           COUNT(DISTINCT COALESCE(t.album_id, 0)) AS album_count,
+           MIN(t.album_art_file) AS album_art_file,
+           COUNT(*) AS _n
+    FROM tracks t
+    LEFT JOIN artists a ON t.artist_id = a.id
+    WHERE t.library_id = ? AND ${artistCond}
+  `).get(...params);
+  if (!row || row._n === 0) return null;
+  delete row._n;
+  return row;
+}
+
+function getArtistAlbums(libraryId, artistId) {
+  if (artistId === 0) {
+    return db.getDB().prepare(`
+      SELECT COALESCE(t.album_id, 0) AS id,
+             COALESCE(al.name, 'Unknown Album') AS name,
+             COUNT(*) AS track_count,
+             COALESCE(al.album_art_file, MIN(t.album_art_file)) AS album_art_file
+      FROM tracks t
+      LEFT JOIN albums al ON t.album_id = al.id
+      WHERE t.library_id = ? AND t.artist_id IS NULL
+      GROUP BY COALESCE(t.album_id, 0)
+      ORDER BY COALESCE(al.name, '') COLLATE NOCASE
+    `).all(libraryId);
+  }
+  return db.getDB().prepare(`
+    SELECT COALESCE(t.album_id, 0) AS id,
+           COALESCE(al.name, 'Unknown Album') AS name,
+           COUNT(*) AS track_count,
+           COALESCE(al.album_art_file, MIN(t.album_art_file)) AS album_art_file
+    FROM tracks t
+    LEFT JOIN albums al ON t.album_id = al.id
+    WHERE t.library_id = ? AND t.artist_id = ?
+    GROUP BY COALESCE(t.album_id, 0)
+    ORDER BY COALESCE(al.name, '') COLLATE NOCASE
+  `).all(libraryId, artistId);
+}
+
+function getAlbumTracks(libraryId, albumId) {
+  if (albumId === 0) {
+    return db.getDB().prepare(`
+      SELECT t.id, t.filepath, t.title, t.track_number, t.duration, t.format,
+             t.file_size, t.genre, t.album_art_file,
+             a.name AS artist_name, al.name AS album_name
+      FROM tracks t
+      LEFT JOIN artists a  ON t.artist_id = a.id
+      LEFT JOIN albums  al ON t.album_id  = al.id
+      WHERE t.library_id = ? AND t.album_id IS NULL
+      ORDER BY t.disc_number, t.track_number, t.title
+    `).all(libraryId);
+  }
+  return db.getDB().prepare(`
+    SELECT t.id, t.filepath, t.title, t.track_number, t.duration, t.format,
+           t.file_size, t.genre, t.album_art_file,
+           a.name AS artist_name, al.name AS album_name
+    FROM tracks t
+    LEFT JOIN artists a  ON t.artist_id = a.id
+    LEFT JOIN albums  al ON t.album_id  = al.id
+    WHERE t.library_id = ? AND t.album_id = ?
+    ORDER BY t.disc_number, t.track_number, t.title
+  `).all(libraryId, albumId);
+}
+
+function getLibraryAlbums(libraryId) {
+  return db.getDB().prepare(`
+    SELECT COALESCE(t.album_id, 0) AS id,
+           COALESCE(al.name, 'Unknown Album') AS name,
+           COUNT(*) AS track_count,
+           COALESCE(al.album_art_file, MIN(t.album_art_file)) AS album_art_file
+    FROM tracks t
+    LEFT JOIN albums al ON t.album_id = al.id
+    WHERE t.library_id = ?
+    GROUP BY COALESCE(t.album_id, 0)
+    ORDER BY COALESCE(al.name, '') COLLATE NOCASE
+  `).all(libraryId);
+}
+
+function getLibraryGenres(libraryId) {
+  return db.getDB().prepare(`
+    SELECT genre AS name,
+           COUNT(DISTINCT COALESCE(t.artist_id, 0)) AS artist_count,
+           MIN(t.album_art_file) AS album_art_file
+    FROM tracks t
+    WHERE library_id = ?
+    GROUP BY genre
+    ORDER BY COALESCE(genre, '') COLLATE NOCASE
+  `).all(libraryId);
+}
+
+// genre='' means "Unknown Genre" (tracks with NULL genre).
+function getGenreByName(libraryId, genre) {
+  const cond = genre === '' ? 't.genre IS NULL' : 't.genre = ?';
+  const params = genre === '' ? [libraryId] : [libraryId, genre];
+  const row = db.getDB().prepare(`
+    SELECT t.genre AS name,
+           COUNT(DISTINCT COALESCE(t.artist_id, 0)) AS artist_count,
+           MIN(t.album_art_file) AS album_art_file,
+           COUNT(*) AS _n
+    FROM tracks t
+    WHERE t.library_id = ? AND ${cond}
+  `).get(...params);
+  if (!row || row._n === 0) return null;
+  delete row._n;
+  return row;
+}
+
+function getGenreArtists(libraryId, genre) {
+  const isUnknown = genre === '';
+  return db.getDB().prepare(`
+    SELECT COALESCE(t.artist_id, 0) AS id,
+           COALESCE(a.name, 'Unknown Artist') AS name,
+           COUNT(DISTINCT COALESCE(t.album_id, 0)) AS album_count,
+           MIN(t.album_art_file) AS album_art_file
+    FROM tracks t
+    LEFT JOIN artists a ON t.artist_id = a.id
+    WHERE t.library_id = ? AND ${isUnknown ? 't.genre IS NULL' : 't.genre = ?'}
+    GROUP BY COALESCE(t.artist_id, 0)
+    ORDER BY COALESCE(a.name, '') COLLATE NOCASE
+  `).all(...(isUnknown ? [libraryId] : [libraryId, genre]));
+}
+
+function getGenreArtistById(libraryId, genre, artistId) {
+  const genreCond  = genre === '' ? 't.genre IS NULL' : 't.genre = ?';
+  const artistCond = artistId === 0 ? 't.artist_id IS NULL' : 't.artist_id = ?';
+  const params = [libraryId];
+  if (genre !== '') params.push(genre);
+  if (artistId !== 0) params.push(artistId);
+  const row = db.getDB().prepare(`
+    SELECT COALESCE(t.artist_id, 0) AS id,
+           COALESCE(a.name, 'Unknown Artist') AS name,
+           COUNT(DISTINCT COALESCE(t.album_id, 0)) AS album_count,
+           MIN(t.album_art_file) AS album_art_file,
+           COUNT(*) AS _n
+    FROM tracks t
+    LEFT JOIN artists a ON t.artist_id = a.id
+    WHERE t.library_id = ? AND ${genreCond} AND ${artistCond}
+  `).get(...params);
+  if (!row || row._n === 0) return null;
+  delete row._n;
+  return row;
+}
+
+function getGenreArtistAlbums(libraryId, genre, artistId) {
+  const genreCond  = genre === '' ? 't.genre IS NULL'    : 't.genre = ?';
+  const artistCond = artistId === 0 ? 't.artist_id IS NULL' : 't.artist_id = ?';
+  const params = [libraryId];
+  if (genre !== '') params.push(genre);
+  if (artistId !== 0)            params.push(artistId);
+  return db.getDB().prepare(`
+    SELECT COALESCE(t.album_id, 0) AS id,
+           COALESCE(al.name, 'Unknown Album') AS name,
+           COUNT(*) AS track_count,
+           COALESCE(al.album_art_file, MIN(t.album_art_file)) AS album_art_file
+    FROM tracks t
+    LEFT JOIN albums al ON t.album_id = al.id
+    WHERE t.library_id = ? AND ${genreCond} AND ${artistCond}
+    GROUP BY COALESCE(t.album_id, 0)
+    ORDER BY COALESCE(al.name, '') COLLATE NOCASE
+  `).all(...params);
+}
+
+function getAllPlaylists() {
+  return db.getDB().prepare(`
+    SELECT p.id, p.name, u.username, COUNT(pt.id) AS track_count
+    FROM playlists p
+    JOIN users u ON p.user_id = u.id
+    LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id
+    GROUP BY p.id
+    ORDER BY p.name COLLATE NOCASE
+  `).all();
+}
+
+function getPlaylistById(playlistId) {
+  return db.getDB().prepare(`
+    SELECT p.id, p.name, u.username, COUNT(pt.id) AS track_count
+    FROM playlists p
+    JOIN users u ON p.user_id = u.id
+    LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id
+    WHERE p.id = ?
+    GROUP BY p.id
+  `).get(playlistId);
+}
+
+function getPlaylistTracks(playlistId) {
+  return db.getDB().prepare(`
+    SELECT pt.id, pt.position,
+           t.id AS track_id,
+           CASE WHEN INSTR(pt.filepath, '/') > 0
+                THEN SUBSTR(pt.filepath, INSTR(pt.filepath, '/') + 1)
+                ELSE '' END AS rel_filepath,
+           t.title, t.track_number, t.duration, t.format, t.file_size,
+           t.genre, t.album_art_file,
+           a.name AS artist_name, al.name AS album_name,
+           l.name AS library_name
+    FROM playlist_tracks pt
+    JOIN libraries l ON l.name = CASE
+        WHEN INSTR(pt.filepath, '/') > 0 THEN SUBSTR(pt.filepath, 1, INSTR(pt.filepath, '/') - 1)
+        ELSE pt.filepath
+      END
+    JOIN tracks t ON t.library_id = l.id
+        AND t.filepath = CASE
+            WHEN INSTR(pt.filepath, '/') > 0 THEN SUBSTR(pt.filepath, INSTR(pt.filepath, '/') + 1)
+            ELSE '' END
+    LEFT JOIN artists a  ON t.artist_id = a.id
+    LEFT JOIN albums  al ON t.album_id  = al.id
+    WHERE pt.playlist_id = ?
+    ORDER BY pt.position
+  `).all(playlistId);
+}
+
+function getRecentCount() {
+  const total = db.getDB().prepare('SELECT COUNT(*) AS n FROM tracks').get()?.n || 0;
+  return Math.min(total, RECENT_LIMIT);
+}
+
+function getRecentTracks(start, count) {
+  const available = Math.max(0, RECENT_LIMIT - start);
+  const limit = count > 0 ? Math.min(count, available) : available;
+  if (limit <= 0) return [];
+  return db.getDB().prepare(`
+    SELECT t.id, t.filepath, t.title, t.track_number, t.duration, t.format,
+           t.file_size, t.genre, t.album_art_file, t.library_id,
+           a.name AS artist_name, al.name AS album_name
+    FROM tracks t
+    LEFT JOIN artists a  ON t.artist_id = a.id
+    LEFT JOIN albums  al ON t.album_id  = al.id
+    ORDER BY t.created_at DESC
+    LIMIT ? OFFSET ?
+  `).all(limit, start);
+}
+
+// ── Directory-tree helpers ───────────────────────────────────────────────────
+// filepath in DB is already relative to library root, forward-slash separated.
+
+function encodeRelPath(p) { return Buffer.from(p).toString('base64url'); }
+function decodeRelPath(s) { return Buffer.from(s, 'base64url').toString('utf8'); }
+
+// Returns immediate subdirectory names and direct-child track items for a given prefix.
+function dirChildren(tracks, prefix) {
+  const prefixSlash = prefix ? prefix + '/' : '';
+  const dirSet = new Set();
+  const items = [];
+  for (const t of tracks) {
+    if (prefixSlash && !t.filepath.startsWith(prefixSlash)) continue;
+    const remainder = t.filepath.slice(prefixSlash.length);
+    if (!remainder) continue;
+    const slash = remainder.indexOf('/');
+    if (slash === -1) items.push(t);
+    else dirSet.add(remainder.slice(0, slash));
+  }
+  return { dirs: [...dirSet].sort(), items };
+}
+
+function dirChildCount(tracks, prefix) {
+  const { dirs, items } = dirChildren(tracks, prefix);
+  return dirs.length + items.length;
+}
+
+function paginate(arr, start, count) {
+  return count > 0 ? arr.slice(start, start + count) : arr.slice(start);
+}
+
+const RECENT_LIMIT = 200;
+
+// ── Sort helpers ─────────────────────────────────────────────────────────────
+
+const SORT_PROP_MAP = {
+  'dc:title':                 't.title',
+  'dc:creator':               'a.name',
+  'upnp:artist':              'a.name',
+  'upnp:album':               'al.name',
+  'upnp:originalTrackNumber': 't.track_number',
+  'upnp:genre':               't.genre',
+};
+
+function parseSortCriteria(sortStr) {
+  if (!sortStr || !sortStr.trim()) return [];
+  return sortStr.split(',')
+    .map(s => s.trim()).filter(Boolean)
+    .map(s => {
+      const dir = s[0] === '-' ? 'DESC' : 'ASC';
+      const prop = s.replace(/^[+-]/, '');
+      const col = SORT_PROP_MAP[prop];
+      return col ? { col, dir } : null;
+    })
+    .filter(Boolean);
+}
+
+function buildOrderBy(sortTerms, defaultOrder) {
+  if (!sortTerms || !sortTerms.length) return defaultOrder;
+  return sortTerms.map(t => `${t.col} ${t.dir} NULLS LAST`).join(', ');
 }
 
 // ── Browse handler ───────────────────────────────────────────────────────────
@@ -172,25 +595,71 @@ function handleBrowse(body, res) {
   const browseFlag = extractSoapField(body, 'BrowseFlag');
   const startIdx   = Math.max(0, parseInt(extractSoapField(body, 'StartingIndex') || '0', 10) || 0);
   const reqCount   = Math.max(0, parseInt(extractSoapField(body, 'RequestedCount') || '0', 10) || 0);
+  const sortTerms  = parseSortCriteria(extractSoapField(body, 'SortCriteria'));
 
   const libraries = db.getAllLibraries();
 
   // ── Root container ────────────────────────────────────────────────────────
   if (objectId === '0') {
+    const playlists = getAllPlaylists();
+    const recentCount = getRecentCount();
+    const rootTotal = libraries.length + 2; // + Playlists + Recently Added
     if (browseFlag === 'BrowseMetadata') {
       const didl = didlWrapper(`
-  <container id="0" parentID="-1" restricted="1" childCount="${libraries.length}">
+  <container id="0" parentID="-1" restricted="1" childCount="${rootTotal}">
     <dc:title>${xmlEscape(config.program.dlna.name)}</dc:title>
     <upnp:class>object.container</upnp:class>
   </container>`);
       return sendBrowseResponse(res, didl, 1, 1);
     }
+    const rootChildren = [
+      ...libraries.map(lib => libraryContainer(lib, '0', getLibraryTrackCount(lib.id))),
+      recentContainer('0', recentCount),
+      playlistsContainer('0', playlists.length),
+    ];
+    const slice = paginate(rootChildren, startIdx, reqCount);
+    return sendBrowseResponse(res, didlWrapper(slice.join('')), slice.length, rootTotal);
+  }
 
-    // BrowseDirectChildren — list libraries with pagination
-    const total = libraries.length;
-    const slice = reqCount > 0 ? libraries.slice(startIdx, startIdx + reqCount) : libraries.slice(startIdx);
-    const items = slice.map(lib => libraryContainer(lib, '0', getLibraryTrackCount(lib.id))).join('');
-    return sendBrowseResponse(res, didlWrapper(items), slice.length, total);
+  // ── Samsung BASICVIEW audio root ──────────────────────────────────────────
+  // Advertised via X_GetFeatureList as the shortcut container for audio.
+  // Expose libraries directly so Samsung's UI shows them as browsable folders.
+  if (objectId === 'A') {
+    if (browseFlag === 'BrowseMetadata') {
+      const didl = didlWrapper(`
+  <container id="A" parentID="0" restricted="1" childCount="${libraries.length}">
+    <dc:title>Music</dc:title>
+    <upnp:class>object.container.storageFolder</upnp:class>
+  </container>`);
+      return sendBrowseResponse(res, didl, 1, 1);
+    }
+    const children = libraries.map(lib => libraryContainer(lib, 'A', getLibraryTrackCount(lib.id)));
+    const slice = paginate(children, startIdx, reqCount);
+    return sendBrowseResponse(res, didlWrapper(slice.join('')), slice.length, libraries.length);
+  }
+
+  // ── Playlists virtual folder ───────────────────────────────────────────────
+  if (objectId === 'playlists') {
+    const playlists = getAllPlaylists();
+    if (browseFlag === 'BrowseMetadata') {
+      return sendBrowseResponse(res, didlWrapper(playlistsContainer('0', playlists.length)), 1, 1);
+    }
+    const slice = paginate(playlists, startIdx, reqCount);
+    return sendBrowseResponse(res, didlWrapper(slice.map(p => playlistContainer(p, 'playlists')).join('')), slice.length, playlists.length);
+  }
+
+  // ── Recently Added virtual folder ─────────────────────────────────────────
+  if (objectId === 'recent') {
+    const totalRecent = getRecentCount();
+    if (browseFlag === 'BrowseMetadata') {
+      return sendBrowseResponse(res, didlWrapper(recentContainer('0', totalRecent)), 1, 1);
+    }
+    const tracks = getRecentTracks(startIdx, reqCount);
+    const items = tracks.map(t => {
+      const lib = libraries.find(l => l.id === t.library_id);
+      return lib ? trackItem(t, lib.name, 'recent') : '';
+    }).filter(Boolean);
+    return sendBrowseResponse(res, didlWrapper(items.join('')), items.length, totalRecent);
   }
 
   // ── Library container ─────────────────────────────────────────────────────
@@ -198,20 +667,188 @@ function handleBrowse(body, res) {
   if (libMatch) {
     const libId = parseInt(libMatch[1], 10);
     const lib = libraries.find(l => l.id === libId);
-    if (!lib) {
-      return sendXml(res, soapError('701', 'No Such Object'), 500);
-    }
+    if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+
+    const browse = config.program.dlna.browse;
 
     if (browseFlag === 'BrowseMetadata') {
-      const count = getLibraryTrackCount(libId);
-      const didl = didlWrapper(libraryContainer(lib, '0', count));
-      return sendBrowseResponse(res, didl, 1, 1);
+      let childCount;
+      if (browse === 'dirs') {
+        const at = getAllLibraryTracks(libId);
+        const { dirs, items } = dirChildren(at, '');
+        childCount = dirs.length + items.length;
+      } else if (browse === 'artist') {
+        childCount = getLibraryArtists(libId).length;
+      } else if (browse === 'album') {
+        childCount = getLibraryAlbums(libId).length;
+      } else if (browse === 'genre') {
+        childCount = getLibraryGenres(libId).length;
+      } else {
+        childCount = getLibraryTrackCount(libId);
+      }
+      return sendBrowseResponse(res, didlWrapper(libraryContainer(lib, '0', childCount)), 1, 1);
     }
 
+    if (browse === 'dirs') {
+      const allTracks = getAllLibraryTracks(libId);
+      const { dirs, items } = dirChildren(allTracks, '');
+      const children = [
+        ...dirs.map(d => dirContainer(libId, d, objectId, dirChildCount(allTracks, d))),
+        ...items.map(t => trackItem(t, lib.name, objectId)),
+      ];
+      const slice = paginate(children, startIdx, reqCount);
+      return sendBrowseResponse(res, didlWrapper(slice.join('')), slice.length, children.length);
+    }
+    if (browse === 'artist') {
+      const artists = getLibraryArtists(libId);
+      const slice = paginate(artists, startIdx, reqCount);
+      return sendBrowseResponse(res, didlWrapper(slice.map(a => artistContainer(libId, a, objectId)).join('')), slice.length, artists.length);
+    }
+    if (browse === 'album') {
+      const albums = getLibraryAlbums(libId);
+      const slice = paginate(albums, startIdx, reqCount);
+      return sendBrowseResponse(res, didlWrapper(slice.map(al => albumContainer(libId, al, objectId)).join('')), slice.length, albums.length);
+    }
+    if (browse === 'genre') {
+      const genres = getLibraryGenres(libId);
+      const slice = paginate(genres, startIdx, reqCount);
+      return sendBrowseResponse(res, didlWrapper(slice.map(g => genreContainer(libId, g, objectId)).join('')), slice.length, genres.length);
+    }
+    // flat (default)
     const total = getLibraryTrackCount(libId);
-    const tracks = getLibraryTracks(libId, startIdx, reqCount);
-    const items = tracks.map(t => trackItem(t, lib.name, objectId)).join('');
-    return sendBrowseResponse(res, didlWrapper(items), tracks.length, total);
+    const orderBy = buildOrderBy(sortTerms, 'al.name, t.disc_number, t.track_number, t.title');
+    const tracks = getLibraryTracks(libId, startIdx, reqCount, orderBy);
+    return sendBrowseResponse(res, didlWrapper(tracks.map(t => trackItem(t, lib.name, objectId)).join('')), tracks.length, total);
+  }
+
+  // ── Directory container (dirs mode) ──────────────────────────────────────
+  const dirMatch = objectId.match(/^dir-(\d+)-(.+)$/);
+  if (dirMatch) {
+    const libId = parseInt(dirMatch[1], 10);
+    const relPath = decodeRelPath(dirMatch[2]);
+    const lib = libraries.find(l => l.id === libId);
+    if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+
+    const allTracks = getAllLibraryTracks(libId);
+    const { dirs, items } = dirChildren(allTracks, relPath);
+
+    if (browseFlag === 'BrowseMetadata') {
+      const lastSlash = relPath.lastIndexOf('/');
+      const parentRel = lastSlash === -1 ? '' : relPath.slice(0, lastSlash);
+      const parentId  = parentRel ? `dir-${libId}-${encodeRelPath(parentRel)}` : `lib-${libId}`;
+      return sendBrowseResponse(res, didlWrapper(dirContainer(libId, relPath, parentId, dirs.length + items.length)), 1, 1);
+    }
+
+    const children = [
+      ...dirs.map(d => {
+        const full = relPath + '/' + d;
+        return dirContainer(libId, full, objectId, dirChildCount(allTracks, full));
+      }),
+      ...items.map(t => trackItem(t, lib.name, objectId)),
+    ];
+    const slice = paginate(children, startIdx, reqCount);
+    return sendBrowseResponse(res, didlWrapper(slice.join('')), slice.length, children.length);
+  }
+
+  // ── Artist container (artist mode) ────────────────────────────────────────
+  const artistMatch = objectId.match(/^artist-(\d+)-(\d+)$/);
+  if (artistMatch) {
+    const libId    = parseInt(artistMatch[1], 10);
+    const artistId = parseInt(artistMatch[2], 10);
+    const lib = libraries.find(l => l.id === libId);
+    if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+
+    if (browseFlag === 'BrowseMetadata') {
+      const artist = getArtistById(libId, artistId);
+      if (!artist) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+      return sendBrowseResponse(res, didlWrapper(artistContainer(libId, artist, `lib-${libId}`)), 1, 1);
+    }
+
+    const albums = getArtistAlbums(libId, artistId);
+    const slice = paginate(albums, startIdx, reqCount);
+    return sendBrowseResponse(res, didlWrapper(slice.map(al => albumContainer(libId, al, objectId)).join('')), slice.length, albums.length);
+  }
+
+  // ── Album container (artist mode) ─────────────────────────────────────────
+  const albumMatch = objectId.match(/^album-(\d+)-(\d+)$/);
+  if (albumMatch) {
+    const libId   = parseInt(albumMatch[1], 10);
+    const albumId = parseInt(albumMatch[2], 10);
+    const lib = libraries.find(l => l.id === libId);
+    if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+
+    const tracks = getAlbumTracks(libId, albumId);
+
+    if (browseFlag === 'BrowseMetadata') {
+      if (!tracks.length) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+      const album = { id: albumId, name: tracks[0].album_name || 'Unknown Album', track_count: tracks.length, album_art_file: tracks.find(t => t.album_art_file)?.album_art_file || null };
+      return sendBrowseResponse(res, didlWrapper(albumContainer(libId, album, `lib-${libId}`)), 1, 1);
+    }
+
+    const slice = paginate(tracks, startIdx, reqCount);
+    return sendBrowseResponse(res, didlWrapper(slice.map(t => trackItem(t, lib.name, objectId)).join('')), slice.length, tracks.length);
+  }
+
+  // ── Genre container (genre mode) ─────────────────────────────────────────
+  const genreMatch = objectId.match(/^genre-(\d+)-(.*)$/);
+  if (genreMatch) {
+    const libId = parseInt(genreMatch[1], 10);
+    const genre = decodeRelPath(genreMatch[2]);
+    const lib = libraries.find(l => l.id === libId);
+    if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+
+    if (browseFlag === 'BrowseMetadata') {
+      const g = getGenreByName(libId, genre);
+      if (!g) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+      return sendBrowseResponse(res, didlWrapper(genreContainer(libId, g, `lib-${libId}`)), 1, 1);
+    }
+
+    const artists = getGenreArtists(libId, genre);
+    const slice = paginate(artists, startIdx, reqCount);
+    return sendBrowseResponse(res, didlWrapper(slice.map(a => genreArtistContainer(libId, a, objectId, genre)).join('')), slice.length, artists.length);
+  }
+
+  // ── Genre-scoped artist container (genre mode) ────────────────────────────
+  const gartistMatch = objectId.match(/^gartist-(\d+)-(\d+)-(.*)$/);
+  if (gartistMatch) {
+    const libId    = parseInt(gartistMatch[1], 10);
+    const artistId = parseInt(gartistMatch[2], 10);
+    const genre    = decodeRelPath(gartistMatch[3]);
+    const lib = libraries.find(l => l.id === libId);
+    if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+
+    if (browseFlag === 'BrowseMetadata') {
+      const artist = getGenreArtistById(libId, genre, artistId);
+      if (!artist) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+      return sendBrowseResponse(res, didlWrapper(genreArtistContainer(libId, artist, `genre-${libId}-${encodeRelPath(genre)}`, genre)), 1, 1);
+    }
+
+    const albums = getGenreArtistAlbums(libId, genre, artistId);
+    const slice = paginate(albums, startIdx, reqCount);
+    return sendBrowseResponse(res, didlWrapper(slice.map(al => albumContainer(libId, al, objectId)).join('')), slice.length, albums.length);
+  }
+
+  // ── Individual playlist container ────────────────────────────────────────
+  const playlistMatch = objectId.match(/^playlist-(\d+)$/);
+  if (playlistMatch) {
+    const playlistId = parseInt(playlistMatch[1], 10);
+    const playlist = getPlaylistById(playlistId);
+    if (!playlist) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+
+    if (browseFlag === 'BrowseMetadata') {
+      return sendBrowseResponse(res, didlWrapper(playlistContainer(playlist, 'playlists')), 1, 1);
+    }
+
+    const rows = getPlaylistTracks(playlistId);
+    const slice = paginate(rows, startIdx, reqCount);
+    const items = slice.map(row => trackItem({
+      id: row.track_id, filepath: row.rel_filepath,
+      title: row.title, track_number: row.track_number,
+      duration: row.duration, format: row.format, file_size: row.file_size,
+      genre: row.genre, album_art_file: row.album_art_file,
+      artist_name: row.artist_name, album_name: row.album_name,
+    }, row.library_name, objectId)).join('');
+    return sendBrowseResponse(res, didlWrapper(items), slice.length, rows.length);
   }
 
   // ── Track item ────────────────────────────────────────────────────────────
@@ -235,11 +872,157 @@ function handleBrowse(body, res) {
     if (browseFlag === 'BrowseDirectChildren') {
       return sendBrowseResponse(res, didlWrapper(''), 0, 0);
     }
-    const didl = didlWrapper(trackItem(row, lib.name, `lib-${lib.id}`));
-    return sendBrowseResponse(res, didl, 1, 1);
+    return sendBrowseResponse(res, didlWrapper(trackItem(row, lib.name, `lib-${lib.id}`)), 1, 1);
   }
 
   sendXml(res, soapError('701', 'No Such Object'), 500);
+}
+
+// ── Search helpers ───────────────────────────────────────────────────────────
+
+function tokenizeSearch(input) {
+  const tokens = [];
+  const re = /"(?:[^"\\]|\\.)*"|!=|<=|>=|[()=!<>]|[\w:.]+/g;
+  for (const m of (input || '').matchAll(re)) { tokens.push(m[0]); }
+  return tokens;
+}
+
+class SearchParser {
+  constructor(tokens) { this.tokens = tokens; this.pos = 0; }
+  peek() { return this.tokens[this.pos]; }
+  next() { return this.tokens[this.pos++]; }
+
+  parse() { return this.tokens.length ? this.parseOr() : null; }
+
+  parseOr() {
+    let left = this.parseAnd();
+    while (this.peek() && this.peek().toLowerCase() === 'or') {
+      this.next();
+      left = { op: 'or', left, right: this.parseAnd() };
+    }
+    return left;
+  }
+
+  parseAnd() {
+    let left = this.parsePrimary();
+    while (this.peek() && this.peek().toLowerCase() === 'and') {
+      this.next();
+      left = { op: 'and', left, right: this.parsePrimary() };
+    }
+    return left;
+  }
+
+  parsePrimary() {
+    if (this.peek() === '(') {
+      this.next();
+      const inner = this.parseOr();
+      if (this.peek() === ')') this.next();
+      return inner;
+    }
+    const property = this.next() || '';
+    const relOp = (this.next() || '').toLowerCase();
+    const raw = this.next() || '';
+    const value = raw.startsWith('"') ? raw.slice(1, raw.endsWith('"') ? -1 : undefined) : raw;
+    return { op: 'rel', property, relOp, value };
+  }
+}
+
+const SEARCH_PROP_MAP = {
+  'dc:title':                 "COALESCE(t.title, '')",
+  'dc:creator':               "COALESCE(a.name, '')",
+  'upnp:artist':              "COALESCE(a.name, '')",
+  'upnp:album':               "COALESCE(al.name, '')",
+  'upnp:genre':               "COALESCE(t.genre, '')",
+  'upnp:originalTrackNumber': 't.track_number',
+};
+
+function searchNodeToSql(node, params) {
+  if (!node) return '1=1';
+  if (node.op === 'and') return `(${searchNodeToSql(node.left, params)} AND ${searchNodeToSql(node.right, params)})`;
+  if (node.op === 'or')  return `(${searchNodeToSql(node.left, params)} OR ${searchNodeToSql(node.right, params)})`;
+  if (node.op === 'rel') {
+    const { property, relOp, value } = node;
+    if (property === 'upnp:class') {
+      if (relOp === 'exists') return value === 'true' ? '1=1' : '1=0';
+      return (relOp === '=' || relOp === 'derivedfrom')
+        ? (value.includes('audioItem') || value === '*' ? '1=1' : '1=0')
+        : '1=1';
+    }
+    const col = SEARCH_PROP_MAP[property];
+    if (!col) return '1=1';
+    const escaped = value.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+    switch (relOp) {
+      case '=':             params.push(value);               return `${col} = ?`;
+      case '!=':            params.push(value);               return `${col} != ?`;
+      case 'contains':      params.push(`%${escaped}%`);      return `${col} LIKE ? ESCAPE '\\'`;
+      case 'doesnotcontain':params.push(`%${escaped}%`);      return `(${col} NOT LIKE ? ESCAPE '\\')`;
+      case 'startswith':    params.push(`${escaped}%`);       return `${col} LIKE ? ESCAPE '\\'`;
+      case 'exists':        return value === 'true' ? `${col} IS NOT NULL` : `${col} IS NULL`;
+      default:              return '1=1';
+    }
+  }
+  return '1=1';
+}
+
+function handleSearch(body, res) {
+  const objectId  = extractSoapField(body, 'ContainerID') || extractSoapField(body, 'ObjectID') || '0';
+  const criteria  = extractSoapField(body, 'SearchCriteria');
+  const startIdx  = Math.max(0, parseInt(extractSoapField(body, 'StartingIndex') || '0', 10) || 0);
+  const reqCount  = Math.max(0, parseInt(extractSoapField(body, 'RequestedCount') || '0', 10) || 0);
+  const sortTerms = parseSortCriteria(extractSoapField(body, 'SortCriteria'));
+
+  const libraries = db.getAllLibraries();
+
+  const libParams = [];
+  let libFilter = '';
+  if (objectId !== '0') {
+    const m = objectId.match(/^lib-(\d+)$/);
+    if (m) { libFilter = 'AND t.library_id = ?'; libParams.push(parseInt(m[1], 10)); }
+  }
+
+  const whereParams = [];
+  let whereClause = '1=1';
+  if (criteria && criteria.trim() !== '*') {
+    try {
+      const ast = new SearchParser(tokenizeSearch(criteria)).parse();
+      whereClause = searchNodeToSql(ast, whereParams);
+    } catch (_) { whereClause = '1=1'; }
+  }
+
+  const d = db.getDB();
+  const countRow = d.prepare(`
+    SELECT COUNT(*) AS n FROM tracks t
+    LEFT JOIN artists a  ON t.artist_id = a.id
+    LEFT JOIN albums  al ON t.album_id  = al.id
+    WHERE ${whereClause} ${libFilter}
+  `).get(...whereParams, ...libParams);
+  const total = countRow ? countRow.n : 0;
+
+  const orderBy = buildOrderBy(sortTerms, 't.title');
+  const limit = reqCount > 0 ? reqCount : -1;
+  const rows = d.prepare(`
+    SELECT t.id, t.filepath, t.title, t.track_number, t.duration, t.format,
+           t.file_size, t.genre, t.album_art_file, t.library_id,
+           a.name AS artist_name, al.name AS album_name
+    FROM tracks t
+    LEFT JOIN artists a  ON t.artist_id = a.id
+    LEFT JOIN albums  al ON t.album_id  = al.id
+    WHERE ${whereClause} ${libFilter}
+    ORDER BY ${orderBy}
+    LIMIT ? OFFSET ?
+  `).all(...whereParams, ...libParams, limit, startIdx);
+
+  const items = rows.map(row => {
+    const lib = libraries.find(l => l.id === row.library_id);
+    return lib ? trackItem(row, lib.name, objectId) : '';
+  }).filter(Boolean).join('');
+
+  const escapedDidl = xmlEscape(didlWrapper(items));
+  const inner = `<Result>${escapedDidl}</Result>
+      <NumberReturned>${rows.length}</NumberReturned>
+      <TotalMatches>${total}</TotalMatches>
+      <UpdateID>${systemUpdateID}</UpdateID>`;
+  sendXml(res, soapEnvelope(CDS_NS, 'SearchResponse', inner));
 }
 
 function sendBrowseResponse(res, didlXml, numberReturned, totalMatches) {
@@ -247,7 +1030,7 @@ function sendBrowseResponse(res, didlXml, numberReturned, totalMatches) {
   const inner = `<Result>${escapedDidl}</Result>
       <NumberReturned>${numberReturned}</NumberReturned>
       <TotalMatches>${totalMatches}</TotalMatches>
-      <UpdateID>1</UpdateID>`;
+      <UpdateID>${systemUpdateID}</UpdateID>`;
   sendXml(res, soapEnvelope(CDS_NS, 'BrowseResponse', inner));
 }
 
@@ -308,6 +1091,21 @@ const CONTENT_DIRECTORY_SCPD = `<?xml version="1.0" encoding="utf-8"?>
       </argumentList>
     </action>
     <action>
+      <name>Search</name>
+      <argumentList>
+        <argument><name>ContainerID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_ObjectID</relatedStateVariable></argument>
+        <argument><name>SearchCriteria</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_SearchCriteria</relatedStateVariable></argument>
+        <argument><name>Filter</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Filter</relatedStateVariable></argument>
+        <argument><name>StartingIndex</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Index</relatedStateVariable></argument>
+        <argument><name>RequestedCount</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Count</relatedStateVariable></argument>
+        <argument><name>SortCriteria</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_SortCriteria</relatedStateVariable></argument>
+        <argument><name>Result</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_Result</relatedStateVariable></argument>
+        <argument><name>NumberReturned</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_Count</relatedStateVariable></argument>
+        <argument><name>TotalMatches</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_Count</relatedStateVariable></argument>
+        <argument><name>UpdateID</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_UpdateID</relatedStateVariable></argument>
+      </argumentList>
+    </action>
+    <action>
       <name>GetSearchCapabilities</name>
       <argumentList>
         <argument><name>SearchCaps</name><direction>out</direction><relatedStateVariable>SearchCapabilities</relatedStateVariable></argument>
@@ -325,6 +1123,12 @@ const CONTENT_DIRECTORY_SCPD = `<?xml version="1.0" encoding="utf-8"?>
         <argument><name>Id</name><direction>out</direction><relatedStateVariable>SystemUpdateID</relatedStateVariable></argument>
       </argumentList>
     </action>
+    <action>
+      <name>X_GetFeatureList</name>
+      <argumentList>
+        <argument><name>FeatureList</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_Featurelist</relatedStateVariable></argument>
+      </argumentList>
+    </action>
   </actionList>
   <serviceStateTable>
     <stateVariable sendEvents="no"><name>A_ARG_TYPE_ObjectID</name><dataType>string</dataType></stateVariable>
@@ -337,6 +1141,7 @@ const CONTENT_DIRECTORY_SCPD = `<?xml version="1.0" encoding="utf-8"?>
       </allowedValueList>
     </stateVariable>
     <stateVariable sendEvents="no"><name>A_ARG_TYPE_Filter</name><dataType>string</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>A_ARG_TYPE_SearchCriteria</name><dataType>string</dataType></stateVariable>
     <stateVariable sendEvents="no"><name>A_ARG_TYPE_SortCriteria</name><dataType>string</dataType></stateVariable>
     <stateVariable sendEvents="no"><name>A_ARG_TYPE_Index</name><dataType>ui4</dataType></stateVariable>
     <stateVariable sendEvents="no"><name>A_ARG_TYPE_Count</name><dataType>ui4</dataType></stateVariable>
@@ -344,6 +1149,7 @@ const CONTENT_DIRECTORY_SCPD = `<?xml version="1.0" encoding="utf-8"?>
     <stateVariable sendEvents="no"><name>SearchCapabilities</name><dataType>string</dataType></stateVariable>
     <stateVariable sendEvents="no"><name>SortCapabilities</name><dataType>string</dataType></stateVariable>
     <stateVariable sendEvents="yes"><name>SystemUpdateID</name><dataType>ui4</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>A_ARG_TYPE_Featurelist</name><dataType>string</dataType></stateVariable>
   </serviceStateTable>
 </scpd>`;
 
@@ -403,6 +1209,152 @@ const SOURCE_PROTOCOL_INFO = [
   `http-get:*:audio/opus:DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=${DLNA_FLAGS}`,
 ].join(',');
 
+// ── Samsung X_GetFeatureList ─────────────────────────────────────────────────
+// Samsung TVs call this action to discover a shortcut container ID for the
+// audio root. We point them at "A", which handleBrowse serves as a list of
+// libraries (object.container.storageFolder entries).
+const SAMSUNG_FEATURE_LIST_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<Features xmlns="urn:schemas-upnp-org:av:avs"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="urn:schemas-upnp-org:av:avs http://www.upnp.org/schemas/av/avs-v1-20060531.xsd">
+  <Feature name="samsung.com_BASICVIEW" version="1">
+    <container id="A" type="object.item.audioItem"/>
+  </Feature>
+</Features>`;
+
+// ── GENA event subscriptions ─────────────────────────────────────────────────
+// Minimal UPnP event implementation: track subscribers per service, send the
+// initial NOTIFY on subscribe, and re-NOTIFY on state change.
+
+const GENA_DEFAULT_TIMEOUT = 1800; // seconds
+
+function parseCallbackHeader(val) {
+  const urls = [];
+  const re = /<([^>]+)>/g;
+  let m;
+  while ((m = re.exec(val || '')) !== null) { urls.push(m[1]); }
+  return urls;
+}
+
+function parseTimeout(val) {
+  const m = /Second-(\d+)/i.exec(val || '');
+  return m ? parseInt(m[1], 10) : GENA_DEFAULT_TIMEOUT;
+}
+
+function cleanExpiredSubscribers() {
+  const now = Date.now();
+  for (const [sid, sub] of subscribers) {
+    if (sub.expiresAt < now) { subscribers.delete(sid); }
+  }
+}
+
+function cdsPropertySet() {
+  // ContainerUpdateIDs would list specific changed containers; we don't track
+  // them at that granularity, so it's left empty — clients that care will fall
+  // back to SystemUpdateID and re-browse from the root.
+  return `<?xml version="1.0"?>
+<e:propertyset xmlns:e="urn:schemas-upnp-org:event-1-0">
+  <e:property><SystemUpdateID>${systemUpdateID}</SystemUpdateID></e:property>
+  <e:property><ContainerUpdateIDs></ContainerUpdateIDs></e:property>
+</e:propertyset>`;
+}
+
+function cmPropertySet() {
+  return `<?xml version="1.0"?>
+<e:propertyset xmlns:e="urn:schemas-upnp-org:event-1-0">
+  <e:property><SourceProtocolInfo>${xmlEscape(SOURCE_PROTOCOL_INFO)}</SourceProtocolInfo></e:property>
+  <e:property><SinkProtocolInfo></SinkProtocolInfo></e:property>
+  <e:property><CurrentConnectionIDs>0</CurrentConnectionIDs></e:property>
+</e:propertyset>`;
+}
+
+function sendNotifyToSubscriber(sid, sub, body) {
+  // UPnP: try callback URLs in order, stop on first success. Fire-and-forget;
+  // a failing subscriber just misses this notification.
+  for (const url of sub.callbacks) {
+    try {
+      const parsed = new URL(url);
+      const req = http.request({
+        method: 'NOTIFY',
+        hostname: parsed.hostname,
+        port: parsed.port || 80,
+        path: parsed.pathname + parsed.search,
+        headers: {
+          'Content-Type': 'text/xml; charset="utf-8"',
+          'NT': 'upnp:event',
+          'NTS': 'upnp:propchange',
+          'SID': sid,
+          'SEQ': String(sub.seq),
+          'Content-Length': Buffer.byteLength(body),
+        },
+        timeout: 5000,
+      });
+      req.on('error', (err) => winston.debug(`[dlna] GENA NOTIFY error: ${err.message}`));
+      req.on('timeout', () => req.destroy());
+      req.write(body);
+      req.end();
+      sub.seq = (sub.seq + 1) & 0xFFFFFFFF;
+      return;
+    } catch (err) {
+      winston.debug(`[dlna] GENA NOTIFY bad callback ${url}: ${err.message}`);
+    }
+  }
+}
+
+function broadcastToService(service) {
+  cleanExpiredSubscribers();
+  const body = service === 'cds' ? cdsPropertySet() : cmPropertySet();
+  for (const [sid, sub] of subscribers) {
+    if (sub.service === service) { sendNotifyToSubscriber(sid, sub, body); }
+  }
+}
+
+function handleSubscribe(req, res, service) {
+  cleanExpiredSubscribers();
+  const timeout = parseTimeout(req.headers['timeout']);
+  const existingSid = req.headers['sid'];
+
+  if (existingSid) {
+    // Renewal — must have SID and no CALLBACK/NT per UPnP 1.0 §4.1.2
+    const sub = subscribers.get(existingSid);
+    if (!sub || sub.service !== service) { return res.status(412).end(); }
+    sub.expiresAt = Date.now() + timeout * 1000;
+    return res.set({ SID: existingSid, TIMEOUT: `Second-${timeout}` }).status(200).end();
+  }
+
+  const callbacks = parseCallbackHeader(req.headers['callback']);
+  const nt = (req.headers['nt'] || '').toLowerCase();
+  if (!callbacks.length || nt !== 'upnp:event') {
+    return res.status(412).end();
+  }
+
+  const sid = `uuid:${crypto.randomUUID()}`;
+  const sub = { service, callbacks, expiresAt: Date.now() + timeout * 1000, seq: 0 };
+  subscribers.set(sid, sub);
+
+  res.set({ SID: sid, TIMEOUT: `Second-${timeout}` }).status(200).end();
+
+  // Spec requires an initial NOTIFY containing all evented state variables,
+  // sent only after the SUBSCRIBE response is delivered.
+  setImmediate(() => {
+    const body = service === 'cds' ? cdsPropertySet() : cmPropertySet();
+    sendNotifyToSubscriber(sid, sub, body);
+  });
+}
+
+function handleUnsubscribe(req, res) {
+  const sid = req.headers['sid'];
+  if (sid) { subscribers.delete(sid); }
+  res.status(200).end();
+}
+
+export function bumpSystemUpdateID() {
+  // SystemUpdateID is a UPnP ui4 (32-bit unsigned). Wrap to stay in range.
+  systemUpdateID = (systemUpdateID + 1) >>> 0;
+  winston.debug(`[dlna] SystemUpdateID bumped to ${systemUpdateID}`);
+  broadcastToService('cds');
+}
+
 // ── Route setup ──────────────────────────────────────────────────────────────
 
 export function setup(mstream, { checkMode = true } = {}) {
@@ -445,17 +1397,26 @@ export function setup(mstream, { checkMode = true } = {}) {
           case 'Browse':
             return handleBrowse(body, res);
 
+          case 'Search':
+            return handleSearch(body, res);
+
           case 'GetSearchCapabilities':
             return sendXml(res, soapEnvelope(CDS_NS, 'GetSearchCapabilitiesResponse',
-              '<SearchCaps></SearchCaps>'));
+              '<SearchCaps>dc:title,dc:creator,upnp:artist,upnp:album,upnp:genre,upnp:class</SearchCaps>'));
 
           case 'GetSortCapabilities':
             return sendXml(res, soapEnvelope(CDS_NS, 'GetSortCapabilitiesResponse',
-              '<SortCaps></SortCaps>'));
+              '<SortCaps>dc:title,dc:creator,upnp:artist,upnp:album,upnp:originalTrackNumber,upnp:genre</SortCaps>'));
 
           case 'GetSystemUpdateID':
             return sendXml(res, soapEnvelope(CDS_NS, 'GetSystemUpdateIDResponse',
-              '<Id>1</Id>'));
+              `<Id>${systemUpdateID}</Id>`));
+
+          // Samsung's shortcut discovery action. The FeatureList body must be
+          // XML-escaped once because it's embedded in the SOAP response.
+          case 'X_GetFeatureList':
+            return sendXml(res, soapEnvelope(CDS_NS, 'X_GetFeatureListResponse',
+              `<FeatureList>${xmlEscape(SAMSUNG_FEATURE_LIST_XML)}</FeatureList>`));
 
           default:
             return sendXml(res, soapError('401', 'Invalid Action'), 500);
@@ -497,15 +1458,16 @@ export function setup(mstream, { checkMode = true } = {}) {
     }
   );
 
-  // Event subscription stubs — return a minimal valid response
-  const stubSid = `uuid:${crypto.randomUUID()}`;
-  mstream.all('/dlna/event/content-directory', (req, res) => {
-    if (!modeOk()) { return res.status(503).end(); }
-    res.set({ 'SID': stubSid, 'TIMEOUT': 'Second-1800', 'Content-Length': '0' }).status(200).end();
-  });
-
-  mstream.all('/dlna/event/connection-manager', (req, res) => {
-    if (!modeOk()) { return res.status(503).end(); }
-    res.set({ 'SID': stubSid, 'TIMEOUT': 'Second-1800', 'Content-Length': '0' }).status(200).end();
-  });
+  // GENA event subscription endpoints — dispatch by HTTP method. Express
+  // routes custom methods (SUBSCRIBE, UNSUBSCRIBE) through `.all()`.
+  function genaRoute(service) {
+    return (req, res) => {
+      if (!modeOk()) { return res.status(503).end(); }
+      if (req.method === 'SUBSCRIBE')   { return handleSubscribe(req, res, service); }
+      if (req.method === 'UNSUBSCRIBE') { return handleUnsubscribe(req, res); }
+      res.status(405).end();
+    };
+  }
+  mstream.all('/dlna/event/content-directory', genaRoute('cds'));
+  mstream.all('/dlna/event/connection-manager', genaRoute('cm'));
 }

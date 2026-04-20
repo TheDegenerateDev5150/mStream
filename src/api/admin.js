@@ -565,11 +565,21 @@ export function setup(mstream) {
 
   mstream.get('/api/v1/admin/dlna', (req, res) => {
     res.json({
-      mode: config.program.dlna.mode,
-      port: config.program.dlna.port,
-      name: config.program.dlna.name,
-      uuid: config.program.dlna.uuid,
+      mode:   config.program.dlna.mode,
+      port:   config.program.dlna.port,
+      name:   config.program.dlna.name,
+      uuid:   config.program.dlna.uuid,
+      browse: config.program.dlna.browse,
     });
+  });
+
+  mstream.post('/api/v1/admin/dlna/browse', async (req, res) => {
+    const schema = Joi.object({
+      browse: Joi.string().valid('flat', 'dirs', 'artist', 'album', 'genre').required(),
+    });
+    const input = joiValidate(schema, req.body);
+    await admin.editDlnaBrowse(input.value.browse);
+    res.json({});
   });
 
   let dlnaDebouncer = false;

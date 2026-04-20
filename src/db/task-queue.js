@@ -8,6 +8,7 @@ import * as db from './manager.js';
 import { addToKillQueue, removeFromKillQueue } from '../state/kill-list.js';
 import { getDirname } from '../util/esm-helpers.js';
 import * as waveformGenerator from './waveform-generator.js';
+import * as dlnaApi from '../api/dlna.js';
 
 const __dirname = getDirname(import.meta.url);
 
@@ -176,6 +177,9 @@ function onScanClose(forkedScan, scanObj, code) {
     anyScansChanged = false;
     batchStartTime = null;
     waveformGenerator.run(since);
+    // Bump SystemUpdateID so DLNA control points refresh their caches.
+    // Safe to call whether or not DLNA is enabled.
+    dlnaApi.bumpSystemUpdateID();
   }
 }
 
