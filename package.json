@@ -19,7 +19,9 @@
     "lint:fix": "eslint . --fix",
     "build-rust": "cd rust-parser && cargo build --release",
     "docs:api": "redocly build-docs docs/openapi.yaml -o docs/api.html",
-    "docs:api:validate": "redocly lint docs/openapi.yaml"
+    "docs:api:validate": "redocly lint docs/openapi.yaml",
+    "test": "node --test --test-reporter=spec test/dlna.test.mjs",
+    "test:dlna": "node --test --test-reporter=spec test/dlna.test.mjs"
   },
   "repository": {
     "type": "git",
@@ -50,6 +52,7 @@
       "!.claude/*",
       "!rust-parser/*",
       "!rust-server-audio/*",
+      "!test/*",
       "!package-lock.json",
       "!TODO.md"
     ],
