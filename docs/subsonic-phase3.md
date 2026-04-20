@@ -159,6 +159,12 @@ Subsonic-specific `/rest/shared/<token>` that renders a minimal player, or
 
 **Effort:** half a day for (b), full day for (a).
 
+**Shipped:** option (b). `createShare` now mints a proper JWT matching the
+shape `/api/v1/share` produces, so the webapp share-viewer verifies
+Subsonic-created shares (regression-tested — the initial Phase 3 cut stored
+an empty token, which broke `jwt.verify`). Clients that expect an inline
+stream URL will need to follow the webapp link in a browser.
+
 ### 2.2 Bookmarks
 
 Position bookmarks for long-form content (audiobooks, DJ mixes). New table:

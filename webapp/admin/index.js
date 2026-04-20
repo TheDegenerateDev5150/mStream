@@ -43,6 +43,13 @@ const ADMINDATA = (() => {
   // subsonic
   module.subsonicParams = {};
   module.subsonicParamsUpdated = { ts: 0 };
+  // subsonic — API keys for the currently-authenticated user. Keys are
+  // returned in full only at creation; subsequent listings are metadata-only.
+  module.apiKeys = [];
+  module.apiKeysUpdated = { ts: 0 };
+  // Holds the most recently minted key so the UI can render a one-time
+  // "copy this now" panel. Cleared as soon as the user dismisses it.
+  module.lastMintedKey = { val: null, name: null };
 
   module.getSharedPlaylists = async () => {
     const res = await API.axios({
@@ -199,6 +206,42 @@ const ADMINDATA = (() => {
     module.subsonicParamsUpdated.ts = Date.now();
   }
 
+  // ── Subsonic API key management ───────────────────────────────────────
+  // All three helpers operate on the currently-authenticated user's keys
+  // via /api/v1/user/api-keys.
+  module.getApiKeys = async () => {
+    try {
+      const res = await API.axios({
+        method: 'GET',
+        url: `${API.url()}/api/v1/user/api-keys`
+      });
+      module.apiKeys.length = 0;
+      res.data.forEach(k => module.apiKeys.push(k));
+    } catch (err) { /* not fatal for panel load */ }
+    module.apiKeysUpdated.ts = Date.now();
+  }
+
+  module.createApiKey = async (name) => {
+    const res = await API.axios({
+      method: 'POST',
+      url: `${API.url()}/api/v1/user/api-keys`,
+      data: { name }
+    });
+    // Stash the plaintext key for the one-time display card.
+    module.lastMintedKey.val = res.data.key;
+    module.lastMintedKey.name = res.data.name;
+    await module.getApiKeys();
+    return res.data.key;
+  }
+
+  module.revokeApiKey = async (id) => {
+    await API.axios({
+      method: 'DELETE',
+      url: `${API.url()}/api/v1/user/api-keys/${id}`
+    });
+    await module.getApiKeys();
+  }
+
   module.getVersion = async () => {
     try {
       const res = await API.axios({
@@ -238,6 +281,7 @@ ADMINDATA.getServerParams();
 ADMINDATA.getFederationParams();
 ADMINDATA.getDlnaParams();
 ADMINDATA.getSubsonicParams();
+ADMINDATA.getApiKeys();
 ADMINDATA.getVersion();
 ADMINDATA.getWinDrives();
 
@@ -2779,6 +2823,13 @@ const subsonicView = Vue.component('subsonic-view', {
       selectedMode: 'disabled',
       selectedPort: 3012,
       applyPending: false,
+      // API keys — the state lives in ADMINDATA so every view sees a fresh
+      // list, but we reach in locally for the inputs driving this form.
+      apiKeysTS:  ADMINDATA.apiKeysUpdated,
+      apiKeys:    ADMINDATA.apiKeys,
+      newKeyName: '',
+      mintPending: false,
+      lastMintedKey: ADMINDATA.lastMintedKey,
     };
   },
   watch: {
@@ -2829,8 +2880,8 @@ const subsonicView = Vue.component('subsonic-view', {
                 </div>
               </div>
               <div v-if="selectedMode !== 'disabled'" class="card-panel orange lighten-4" style="margin-top:16px">
-                <p><b>Security notice:</b> Subsonic clients authenticate with your mStream user credentials. For best security, enable HTTPS before exposing the Subsonic API to untrusted networks, and have each user generate their own API key instead of sharing passwords.</p>
-                <p style="margin-top:8px">Users generate their own API keys via the mStream API: <code>POST /api/v1/user/api-keys</code>. Token-style auth (<code>t=</code>, <code>s=</code>) is not supported &mdash; use plaintext over HTTPS, or an API key.</p>
+                <p><b>Security notice:</b> Subsonic clients authenticate with your mStream user credentials. For best security, enable HTTPS before exposing the Subsonic API to untrusted networks, and use an API key in each client instead of sharing your password.</p>
+                <p style="margin-top:8px">Mint and revoke API keys in the section below. Token-style auth (<code>t=</code>, <code>s=</code>) is not supported &mdash; use plaintext over HTTPS, or an API key.</p>
               </div>
             </div>
             <div class="card-action flow-root">
@@ -2842,8 +2893,108 @@ const subsonicView = Vue.component('subsonic-view', {
           </div>
         </div>
       </div>
+
+      <div class="row">
+        <div class="col s12">
+          <div class="card">
+            <div class="card-content">
+              <span class="card-title">Your Subsonic API Keys</span>
+              <p>API keys are per-user. Each key authenticates Subsonic clients without exposing your mStream password. The full key value is only shown at creation &mdash; copy it into your client immediately, or revoke it and mint a new one.</p>
+
+              <div v-if="lastMintedKey.val" class="card-panel green lighten-4" style="margin-top:16px">
+                <p><b>New key created:</b> {{lastMintedKey.name}}</p>
+                <p style="margin-top:8px">
+                  <code style="user-select:all;word-break:break-all;background:#fff;padding:4px 8px;border-radius:4px;display:inline-block">{{lastMintedKey.val}}</code>
+                </p>
+                <p style="margin-top:8px"><small>This is the only time the full key will be shown. Paste it into your Subsonic client now.</small></p>
+                <a v-on:click="dismissMintedKey()" class="waves-effect btn-flat">Dismiss</a>
+              </div>
+
+              <div style="margin-top:16px">
+                <div class="row" style="margin-bottom:0">
+                  <div class="input-field col s12 m8">
+                    <input id="api-key-name" type="text" v-model="newKeyName" maxlength="100" placeholder="e.g. phone-dsub, laptop-feishin" />
+                    <label for="api-key-name" class="active">New key name</label>
+                  </div>
+                  <div class="col s12 m4" style="padding-top:20px">
+                    <a v-on:click="mintKey()" :disabled="mintPending || !newKeyName.trim()"
+                       class="waves-effect waves-light btn">Generate key</a>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="apiKeysTS.ts > 0" style="margin-top:16px">
+                <p v-if="apiKeys.length === 0"><i>No API keys yet.</i></p>
+                <table v-else class="striped">
+                  <thead>
+                    <tr><th>Name</th><th>Created</th><th>Last used</th><th></th></tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="k in apiKeys" :key="k.id">
+                      <td>{{k.name || '(unnamed)'}}</td>
+                      <td><small>{{formatTs(k.created_at)}}</small></td>
+                      <td><small>{{formatTs(k.last_used) || '—'}}</small></td>
+                      <td>
+                        <a v-on:click="revokeKey(k)" class="waves-effect waves-red btn-small red lighten-1">Revoke</a>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>`,
   methods: {
+    formatTs: function(s) {
+      if (!s) { return null; }
+      // SQLite stores as "YYYY-MM-DD HH:MM:SS" in UTC.
+      const d = new Date(s.replace(' ', 'T') + 'Z');
+      return isNaN(d.getTime()) ? s : d.toLocaleString();
+    },
+    dismissMintedKey: function() {
+      ADMINDATA.lastMintedKey.val = null;
+      ADMINDATA.lastMintedKey.name = null;
+    },
+    mintKey: async function() {
+      const name = this.newKeyName.trim();
+      if (!name) { return; }
+      try {
+        this.mintPending = true;
+        await ADMINDATA.createApiKey(name);
+        this.newKeyName = '';
+        iziToast.success({ title: 'API key created', position: 'topCenter', timeout: 3000 });
+      } catch (err) {
+        iziToast.error({ title: 'Failed to create API key', position: 'topCenter', timeout: 3500 });
+      } finally {
+        this.mintPending = false;
+      }
+    },
+    revokeKey: function(k) {
+      iziToast.question({
+        timeout: 20000, close: false, overlayClose: true, overlay: true,
+        displayMode: 'once', id: 'api-key-revoke', zindex: 99999, layout: 2,
+        title: `Revoke API key "${k.name || '(unnamed)'}"?`,
+        message: 'Any client using this key will stop working. You cannot undo this.',
+        position: 'center',
+        buttons: [
+          [`<button><b>Revoke</b></button>`, async (instance, toast) => {
+            try {
+              await ADMINDATA.revokeApiKey(k.id);
+              iziToast.success({ title: 'Key revoked', position: 'topCenter', timeout: 2500 });
+            } catch (err) {
+              iziToast.error({ title: 'Failed to revoke key', position: 'topCenter', timeout: 3500 });
+            } finally {
+              instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
+            }
+          }, true],
+          [`<button>Cancel</button>`, (instance, toast) => {
+            instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
+          }],
+        ]
+      });
+    },
     applyMode: async function() {
       const mode = this.selectedMode;
       const port = this.selectedPort;

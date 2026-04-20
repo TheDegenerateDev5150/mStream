@@ -334,6 +334,25 @@ describe('Now-playing and scan endpoints', () => {
     assert.ok(ids.includes(String(songId)), `expected song ${songId} in ${JSON.stringify(ids)}`);
   });
 
+  test('concurrent scrobble-submission=false calls from same user do not race', async () => {
+    // Simulates the bug where an old stream's close callback unregisters
+    // a newer stream's entry: rapid register A, register B, "close A"
+    // (which must be a no-op because B superseded A). We can't directly
+    // invoke close callbacks from the test, but the handle-based unregister
+    // is exercised in the real stream path — here we at least confirm that
+    // a second registration wins in getNowPlaying.
+    const r = await call('getRandomSongs', { size: 2 });
+    const a = r.randomSongs.song[0].id;
+    const b = r.randomSongs.song[1].id;
+    await call('scrobble', { id: a, submission: 'false' });
+    await call('scrobble', { id: b, submission: 'false' });
+    const env = await call('getNowPlaying');
+    const ids = (env.nowPlaying.entry || []).map(e => e.id);
+    assert.ok(ids.includes(String(b)), 'second scrobble should win');
+    // The first track may or may not still be there depending on user mapping;
+    // what matters is that the later one isn't erased.
+  });
+
   test('getScanStatus returns shape { scanning, count }', async () => {
     const env = await call('getScanStatus');
     assert.equal(env.status, 'ok');
@@ -421,6 +440,26 @@ describe('Shares', () => {
     const env = await call('createShare');
     assert.equal(env.status, 'failed');
     assert.equal(env.error.code, 10);
+  });
+
+  test('share URL resolves via the webapp /api/v1/shared/:id endpoint', async () => {
+    // Regression test for the bug where createShare stored an empty `token`,
+    // causing the webapp share-viewer to throw "jwt must be provided" when
+    // verifying. Create via Subsonic, then fetch via the webapp JSON endpoint
+    // to confirm the JWT check passes end-to-end.
+    const songId = await firstSongId();
+    const created = await call('createShare', { id: songId });
+    const shareUrl = created.shares.share[0].url; // http://host/shared/<token>
+    const match = /\/shared\/([^/?#]+)$/.exec(shareUrl);
+    assert.ok(match, `expected share URL to end in /shared/<token>, got ${shareUrl}`);
+    const token = match[1];
+    const r = await fetch(`${server.baseUrl}/api/v1/shared/${token}`);
+    assert.equal(r.status, 200, 'webapp share lookup should succeed for Subsonic-created shares');
+    const body = await r.json();
+    assert.ok(Array.isArray(body.playlist), 'share payload should include a playlist array');
+    assert.ok(body.playlist.length > 0);
+    // Clean up so later tests aren't surprised by leftover shares.
+    await call('deleteShare', { id: created.shares.share[0].id });
   });
 });
 

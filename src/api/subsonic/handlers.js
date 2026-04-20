@@ -19,6 +19,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import winston from 'winston';
 import { nanoid } from 'nanoid';
+import jwt from 'jsonwebtoken';
 import * as db from '../../db/manager.js';
 import * as config from '../../state/config.js';
 import * as dbQueue from '../../db/task-queue.js';
@@ -664,11 +665,14 @@ export function stream(req, res) {
   const track = resolveTrackForPlayback(req, parsed.id);
   if (!track) { return res.status(404).end(); }
 
-  // Register now-playing so getNowPlaying can surface it. Cleared on socket close.
+  // Register now-playing so getNowPlaying can surface it. HEAD is a probe,
+  // not real playback — skip registration. The handle-based unregister
+  // protects against a slow-closing old stream from wiping a newer one out
+  // of the map when the same user has overlapping playbacks.
   if (req.method !== 'HEAD') {
     try {
-      nowPlaying.register(req.user.id, req.user.username, track.row.id);
-      const off = () => nowPlaying.unregister(req.user.id);
+      const handle = nowPlaying.register(req.user.id, req.user.username, track.row.id);
+      const off = () => nowPlaying.unregister(handle);
       req.on('close', off);
       res.on('close', off);
     } catch { /* non-fatal */ }
@@ -1860,15 +1864,31 @@ export function createShare(req, res) {
   if (!filepaths.length) { return SubErr.NOT_FOUND(req, res, 'Song'); }
 
   const shareId = nanoid(10);
+  // Subsonic sends `expires` as ms-since-epoch; mStream stores seconds-since-
+  // epoch in shared_playlists.expires. Derive JWT options from the same value
+  // so the JWT expiry and DB expiry agree.
   const expiresMs = parseInt(req.query.expires, 10);
-  const expires = Number.isFinite(expiresMs) && expiresMs > 0
-    ? Math.floor(expiresMs / 1000)
-    : null;
+  const hasExpiry = Number.isFinite(expiresMs) && expiresMs > Date.now();
+  const expires = hasExpiry ? Math.floor(expiresMs / 1000) : null;
+
+  // The webapp share-viewer (src/api/shared.js) verifies this JWT on every
+  // lookup — an empty string here would throw "jwt must be provided" and
+  // break browser access. Match the shape that /api/v1/share produces so
+  // both code paths yield interchangeable rows.
+  const tokenData = {
+    playlistId: shareId,
+    shareToken: true,
+    username:   req.user.username,
+  };
+  const jwtOptions = hasExpiry
+    ? { expiresIn: Math.max(1, Math.floor((expiresMs - Date.now()) / 1000)) }
+    : {};
+  const token = jwt.sign(tokenData, config.program.secret, jwtOptions);
 
   db.getDB().prepare(`
     INSERT INTO shared_playlists (share_id, playlist_json, user_id, expires, token)
     VALUES (?, ?, ?, ?, ?)
-  `).run(shareId, JSON.stringify(filepaths), req.user.id, expires, '');
+  `).run(shareId, JSON.stringify(filepaths), req.user.id, expires, token);
 
   const row = db.getDB().prepare(`
     SELECT s.*, u.username FROM shared_playlists s
