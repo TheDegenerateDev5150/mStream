@@ -18,6 +18,23 @@ let systemUpdateID = 1;
 // to, its callback URLs, expiry, and a per-subscription event sequence number.
 const subscribers = new Map();
 
+// Hard upper bound on RequestedCount for Browse/Search. DIDL responses grow
+// roughly linearly in number of items; this keeps a single response from
+// consuming excessive memory (~5MB at 512 bytes/item and this cap).
+const MAX_BROWSE_COUNT = 10000;
+
+// Hard cap on concurrent GENA subscribers. Each entry is tiny but we still
+// don't want a malicious client to grow the Map without bound by SUBSCRIBEing
+// repeatedly without UNSUBSCRIBEing.
+const MAX_SUBSCRIBERS = 256;
+
+// Build a Map<library_id, library> for O(1) lookups inside track loops.
+function libraryIndex(libraries) {
+  const m = new Map();
+  for (const lib of libraries) { m.set(lib.id, lib); }
+  return m;
+}
+
 // ── XML / SOAP helpers ───────────────────────────────────────────────────────
 
 // Characters forbidden in XML 1.0 content: C0 control chars except TAB, LF, CR.
@@ -38,9 +55,20 @@ function xmlEscape(str) {
     .replace(/'/g, '&apos;');
 }
 
+// Reverse of xmlEscape — converts XML entities back to raw characters so
+// field values (especially SearchCriteria) reflect what the client meant.
+function xmlUnescape(str) {
+  return str
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
 function extractSoapField(body, field) {
   const m = body.match(new RegExp(`<(?:[^:>]+:)?${field}[^>]*>([\\s\\S]*?)<\\/(?:[^:>]+:)?${field}>`, 'i'));
-  return m ? m[1].trim() : '';
+  return m ? xmlUnescape(m[1].trim()) : '';
 }
 
 function soapEnvelope(serviceNs, actionName, innerXml) {
@@ -875,10 +903,15 @@ function handleBrowse(body, res) {
   const objectId   = extractSoapField(body, 'ObjectID');
   const browseFlag = extractSoapField(body, 'BrowseFlag');
   const startIdx   = Math.max(0, parseInt(extractSoapField(body, 'StartingIndex') || '0', 10) || 0);
-  const reqCount   = Math.max(0, parseInt(extractSoapField(body, 'RequestedCount') || '0', 10) || 0);
+  // UPnP: RequestedCount=0 means "as many as the server wants to return".
+  // We treat that as MAX_BROWSE_COUNT so one request can't generate an
+  // unbounded response. Explicit counts are likewise capped.
+  const rawCount   = Math.max(0, parseInt(extractSoapField(body, 'RequestedCount') || '0', 10) || 0);
+  const reqCount   = rawCount === 0 ? MAX_BROWSE_COUNT : Math.min(rawCount, MAX_BROWSE_COUNT);
   const sortTerms  = parseSortCriteria(extractSoapField(body, 'SortCriteria'));
 
   const libraries = db.getAllLibraries();
+  const libById = libraryIndex(libraries);
 
   // ── Root container — wraps everything in a single "Music" child ──────────
   // Matches the layout of MiniDLNA / Plex / Jellyfin: renderers expect a
@@ -899,7 +932,12 @@ function handleBrowse(body, res) {
 
   // ── Music container — libraries + virtual "Recently Added/Played/..." ────
   if (objectId === 'music') {
-    const playlists = getAllPlaylists();
+    // N libraries + 7 fixed virtual containers (Recently Added, Recently
+    // Played, Most Played, Favorites, Shuffle, By Year, Playlists).
+    const musicTotal = libraries.length + 7;
+    if (browseFlag === 'BrowseMetadata') {
+      return sendBrowseResponse(res, didlWrapper(simpleContainer('music', '0', 'Music', musicTotal)), 1, 1);
+    }
     const musicChildren = [
       ...libraries.map(lib => libraryContainer(lib, 'music', getLibraryTrackCount(lib.id))),
       recentContainer('music', getRecentCount()),
@@ -908,13 +946,10 @@ function handleBrowse(body, res) {
       simpleContainer('favorites',    'music', 'Favorites',       getFavoriteCount()),
       simpleContainer('shuffle',      'music', 'Shuffle',         getShuffleCount()),
       simpleContainer('years',        'music', 'By Year',         getYears().length),
-      playlistsContainer('music', playlists.length),
+      playlistsContainer('music', getAllPlaylists().length),
     ];
-    if (browseFlag === 'BrowseMetadata') {
-      return sendBrowseResponse(res, didlWrapper(simpleContainer('music', '0', 'Music', musicChildren.length)), 1, 1);
-    }
     const slice = paginate(musicChildren, startIdx, reqCount);
-    return sendBrowseResponse(res, didlWrapper(slice.join('')), slice.length, musicChildren.length);
+    return sendBrowseResponse(res, didlWrapper(slice.join('')), slice.length, musicTotal);
   }
 
   // ── Samsung BASICVIEW audio root ──────────────────────────────────────────
@@ -952,7 +987,7 @@ function handleBrowse(body, res) {
     }
     const tracks = getRecentTracks(startIdx, reqCount);
     const items = tracks.map(t => {
-      const lib = libraries.find(l => l.id === t.library_id);
+      const lib = libById.get(t.library_id);
       return lib ? trackItem(t, lib.name, 'recent') : '';
     }).filter(Boolean);
     return sendBrowseResponse(res, didlWrapper(items.join('')), items.length, totalRecent);
@@ -967,7 +1002,7 @@ function handleBrowse(body, res) {
     }
     const rows = getRows(startIdx, reqCount);
     const items = rows.map(t => {
-      const lib = libraries.find(l => l.id === t.library_id);
+      const lib = libById.get(t.library_id);
       return lib ? trackItem(t, lib.name, id) : '';
     }).filter(Boolean);
     return sendBrowseResponse(res, didlWrapper(items.join('')), items.length, total);
@@ -998,7 +1033,7 @@ function handleBrowse(body, res) {
     }
     const tracks = getYearTracks(year, startIdx, reqCount);
     const items = tracks.map(t => {
-      const lib = libraries.find(l => l.id === t.library_id);
+      const lib = libById.get(t.library_id);
       return lib ? trackItem(t, lib.name, objectId) : '';
     }).filter(Boolean);
     return sendBrowseResponse(res, didlWrapper(items.join('')), items.length, total);
@@ -1008,7 +1043,7 @@ function handleBrowse(body, res) {
   const libMatch = objectId.match(/^lib-(\d+)$/);
   if (libMatch) {
     const libId = parseInt(libMatch[1], 10);
-    const lib = libraries.find(l => l.id === libId);
+    const lib = libById.get(libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     if (browseFlag === 'BrowseMetadata') {
@@ -1024,7 +1059,7 @@ function handleBrowse(body, res) {
   const foldersMatch = objectId.match(/^folders-(\d+)$/);
   if (foldersMatch) {
     const libId = parseInt(foldersMatch[1], 10);
-    const lib = libraries.find(l => l.id === libId);
+    const lib = libById.get(libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     const allTracks = getAllLibraryTracks(libId);
@@ -1046,7 +1081,7 @@ function handleBrowse(body, res) {
   const artistsMatch = objectId.match(/^artists-(\d+)$/);
   if (artistsMatch) {
     const libId = parseInt(artistsMatch[1], 10);
-    const lib = libraries.find(l => l.id === libId);
+    const lib = libById.get(libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     const artists = getLibraryArtists(libId);
@@ -1063,7 +1098,7 @@ function handleBrowse(body, res) {
   const albumArtistsMatch = objectId.match(/^albumartists-(\d+)$/);
   if (albumArtistsMatch) {
     const libId = parseInt(albumArtistsMatch[1], 10);
-    const lib = libraries.find(l => l.id === libId);
+    const lib = libById.get(libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     const albumArtists = getLibraryAlbumArtists(libId);
@@ -1089,7 +1124,7 @@ function handleBrowse(body, res) {
   if (aartistMatch) {
     const libId    = parseInt(aartistMatch[1], 10);
     const artistId = parseInt(aartistMatch[2], 10);
-    const lib = libraries.find(l => l.id === libId);
+    const lib = libById.get(libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     if (browseFlag === 'BrowseMetadata') {
@@ -1111,7 +1146,7 @@ function handleBrowse(body, res) {
   const albumsMatch = objectId.match(/^albums-(\d+)$/);
   if (albumsMatch) {
     const libId = parseInt(albumsMatch[1], 10);
-    const lib = libraries.find(l => l.id === libId);
+    const lib = libById.get(libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     const albums = getLibraryAlbums(libId);
@@ -1128,7 +1163,7 @@ function handleBrowse(body, res) {
   const genresMatch = objectId.match(/^genres-(\d+)$/);
   if (genresMatch) {
     const libId = parseInt(genresMatch[1], 10);
-    const lib = libraries.find(l => l.id === libId);
+    const lib = libById.get(libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     const genres = getLibraryGenres(libId);
@@ -1145,7 +1180,7 @@ function handleBrowse(body, res) {
   const tracksMatch = objectId.match(/^tracks-(\d+)$/);
   if (tracksMatch) {
     const libId = parseInt(tracksMatch[1], 10);
-    const lib = libraries.find(l => l.id === libId);
+    const lib = libById.get(libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     const total = getLibraryTrackCount(libId);
@@ -1164,7 +1199,7 @@ function handleBrowse(body, res) {
   if (dirMatch) {
     const libId = parseInt(dirMatch[1], 10);
     const relPath = decodeRelPath(dirMatch[2]);
-    const lib = libraries.find(l => l.id === libId);
+    const lib = libById.get(libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     const allTracks = getAllLibraryTracks(libId);
@@ -1193,7 +1228,7 @@ function handleBrowse(body, res) {
   if (artistMatch) {
     const libId    = parseInt(artistMatch[1], 10);
     const artistId = parseInt(artistMatch[2], 10);
-    const lib = libraries.find(l => l.id === libId);
+    const lib = libById.get(libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     if (browseFlag === 'BrowseMetadata') {
@@ -1212,7 +1247,7 @@ function handleBrowse(body, res) {
   if (albumMatch) {
     const libId   = parseInt(albumMatch[1], 10);
     const albumId = parseInt(albumMatch[2], 10);
-    const lib = libraries.find(l => l.id === libId);
+    const lib = libById.get(libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     const tracks = getAlbumTracks(libId, albumId);
@@ -1232,7 +1267,7 @@ function handleBrowse(body, res) {
   if (genreMatch) {
     const libId = parseInt(genreMatch[1], 10);
     const genre = decodeRelPath(genreMatch[2]);
-    const lib = libraries.find(l => l.id === libId);
+    const lib = libById.get(libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     if (browseFlag === 'BrowseMetadata') {
@@ -1252,7 +1287,7 @@ function handleBrowse(body, res) {
     const libId    = parseInt(gartistMatch[1], 10);
     const artistId = parseInt(gartistMatch[2], 10);
     const genre    = decodeRelPath(gartistMatch[3]);
-    const lib = libraries.find(l => l.id === libId);
+    const lib = libById.get(libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     if (browseFlag === 'BrowseMetadata') {
@@ -1304,7 +1339,7 @@ function handleBrowse(body, res) {
     `).get(trackId);
     if (!row) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
-    const lib = libraries.find(l => l.id === row.library_id);
+    const lib = libById.get(row.library_id);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
     if (browseFlag === 'BrowseDirectChildren') {
@@ -1406,10 +1441,12 @@ function handleSearch(body, res) {
   const objectId  = extractSoapField(body, 'ContainerID') || extractSoapField(body, 'ObjectID') || '0';
   const criteria  = extractSoapField(body, 'SearchCriteria');
   const startIdx  = Math.max(0, parseInt(extractSoapField(body, 'StartingIndex') || '0', 10) || 0);
-  const reqCount  = Math.max(0, parseInt(extractSoapField(body, 'RequestedCount') || '0', 10) || 0);
+  const rawCount  = Math.max(0, parseInt(extractSoapField(body, 'RequestedCount') || '0', 10) || 0);
+  const reqCount  = rawCount === 0 ? MAX_BROWSE_COUNT : Math.min(rawCount, MAX_BROWSE_COUNT);
   const sortTerms = parseSortCriteria(extractSoapField(body, 'SortCriteria'));
 
   const libraries = db.getAllLibraries();
+  const libById = libraryIndex(libraries);
 
   const libParams = [];
   let libFilter = '';
@@ -1451,7 +1488,7 @@ function handleSearch(body, res) {
   `).all(...whereParams, ...libParams, limit, startIdx);
 
   const items = rows.map(row => {
-    const lib = libraries.find(l => l.id === row.library_id);
+    const lib = libById.get(row.library_id);
     return lib ? trackItem(row, lib.name, objectId) : '';
   }).filter(Boolean).join('');
 
@@ -1686,6 +1723,11 @@ function cleanExpiredSubscribers() {
   }
 }
 
+// Periodic cleanup in case no one is bumping SystemUpdateID or subscribing —
+// otherwise expired subscribers could linger in the Map indefinitely. unref()
+// so this timer doesn't keep the process alive on shutdown.
+setInterval(cleanExpiredSubscribers, 60_000).unref();
+
 function cdsPropertySet() {
   // ContainerUpdateIDs would list specific changed containers; we don't track
   // them at that granularity, so it's left empty — clients that care will fall
@@ -1766,6 +1808,12 @@ function handleSubscribe(req, res, service) {
     return res.status(412).end();
   }
 
+  // Defence against a client churning new subscriptions without renewing or
+  // unsubscribing. 503 "Service Unavailable" per UPnP 1.0 §4.1.2.
+  if (subscribers.size >= MAX_SUBSCRIBERS) {
+    return res.status(503).end();
+  }
+
   const sid = `uuid:${crypto.randomUUID()}`;
   const sub = { service, callbacks, expiresAt: Date.now() + timeout * 1000, seq: 0 };
   subscribers.set(sid, sub);
@@ -1804,10 +1852,14 @@ export function setup(mstream, { checkMode = true } = {}) {
   // Time-seek support: intercept /media requests with TimeSeekRange headers
   // BEFORE the auth wall and the express.static mounts. Without a header the
   // middleware just calls next() and the normal static handler takes over.
-  mstream.use('/media', (req, res, next) => {
-    if (!modeOk()) { return next(); }
-    timeSeekMiddleware(req, res, next);
-  });
+  // Only mount on the main app — dlna-server.js mounts its own copy for the
+  // separate-port server, so registering here too would double-invoke it.
+  if (checkMode) {
+    mstream.use('/media', (req, res, next) => {
+      if (!modeOk()) { return next(); }
+      timeSeekMiddleware(req, res, next);
+    });
+  }
 
   // Device description
   mstream.get('/dlna/device.xml', (req, res) => {

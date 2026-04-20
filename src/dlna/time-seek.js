@@ -11,6 +11,7 @@
  * file handler serves byte-ranges normally.
  */
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import winston from 'winston';
@@ -47,6 +48,12 @@ export function timeSeekMiddleware(req, res, next) {
   const header = req.headers['timeseekrange.dlna.org'];
   if (!header) { return next(); }
 
+  // Only GET and HEAD are meaningful here — reject anything else before we
+  // bother parsing the rest of the request.
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    return res.status(405).end();
+  }
+
   const start = parseNptStart(header);
   if (start === null || start < 0) { return res.status(400).end(); }
 
@@ -69,6 +76,11 @@ export function timeSeekMiddleware(req, res, next) {
   if (!resolved.startsWith(rootResolved + path.sep) && resolved !== rootResolved) {
     return res.status(403).end();
   }
+
+  // Verify the file is actually there before promising a 200. Without this,
+  // a stale DB row (file deleted but scan hasn't caught up) would produce a
+  // 200 OK followed by an empty body once ffmpeg fails to open the input.
+  if (!fs.existsSync(resolved)) { return res.status(404).end(); }
 
   // Look up duration so we can emit the TimeSeekRange response header.
   const relPath = fileParts.join('/');
