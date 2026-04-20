@@ -205,6 +205,57 @@ function recentContainer(parentId, childCount) {
   </container>`;
 }
 
+// Standard DLNA-style multi-view layout: each library exposes five sibling
+// sub-containers (Folders, Artists, Albums, Genres, All Tracks) simultaneously.
+// The `dlna.browse` config picks which one is listed first — clients that
+// auto-drill into the first child respect the user's preference.
+const VIEW_ORDER_BY_MODE = {
+  dirs:   ['folders', 'artists', 'albums', 'genres', 'tracks'],
+  artist: ['artists', 'albums', 'genres', 'folders', 'tracks'],
+  album:  ['albums', 'artists', 'genres', 'folders', 'tracks'],
+  genre:  ['genres', 'artists', 'albums', 'folders', 'tracks'],
+  flat:   ['tracks', 'folders', 'artists', 'albums', 'genres'],
+};
+const VIEW_TITLES = {
+  folders: 'Folders',
+  artists: 'Artists',
+  albums:  'Albums',
+  genres:  'Genres',
+  tracks:  'All Tracks',
+};
+const VIEW_UPNP_CLASS = {
+  folders: 'object.container.storageFolder',
+  artists: 'object.container',
+  albums:  'object.container',
+  genres:  'object.container',
+  tracks:  'object.container',
+};
+
+function viewContainer(libId, view, childCount) {
+  return `
+  <container id="${view}-${libId}" parentID="lib-${libId}" restricted="1" childCount="${childCount}">
+    <dc:title>${xmlEscape(VIEW_TITLES[view])}</dc:title>
+    <upnp:class>${VIEW_UPNP_CLASS[view]}</upnp:class>
+  </container>`;
+}
+
+function libraryViewContainers(libId) {
+  const mode = config.program.dlna.browse || 'dirs';
+  const order = VIEW_ORDER_BY_MODE[mode] || VIEW_ORDER_BY_MODE.dirs;
+  // Counts are required per UPnP. Folders needs a filepath scan — the others
+  // are fast aggregate queries.
+  const allTracks = getAllLibraryTracks(libId);
+  const { dirs: rootDirs, items: rootItems } = dirChildren(allTracks, '');
+  const counts = {
+    folders: rootDirs.length + rootItems.length,
+    artists: getLibraryArtists(libId).length,
+    albums:  getLibraryAlbums(libId).length,
+    genres:  getLibraryGenres(libId).length,
+    tracks:  allTracks.length,
+  };
+  return order.map(v => viewContainer(libId, v, counts[v]));
+}
+
 function trackItem(track, libName, parentId) {
   const base = getBaseUrl();
   const mediaUrl = `${base}/media/${encodeURIComponent(libName)}/${filePathToUrlPath(track.filepath)}`;
@@ -662,60 +713,108 @@ function handleBrowse(body, res) {
     return sendBrowseResponse(res, didlWrapper(items.join('')), items.length, totalRecent);
   }
 
-  // ── Library container ─────────────────────────────────────────────────────
+  // ── Library container — lists the five view sub-containers ───────────────
   const libMatch = objectId.match(/^lib-(\d+)$/);
   if (libMatch) {
     const libId = parseInt(libMatch[1], 10);
     const lib = libraries.find(l => l.id === libId);
     if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
 
-    const browse = config.program.dlna.browse;
+    if (browseFlag === 'BrowseMetadata') {
+      return sendBrowseResponse(res, didlWrapper(libraryContainer(lib, '0', 5)), 1, 1);
+    }
+
+    const children = libraryViewContainers(libId);
+    const slice = paginate(children, startIdx, reqCount);
+    return sendBrowseResponse(res, didlWrapper(slice.join('')), slice.length, children.length);
+  }
+
+  // ── Folders view — top-level directory entries for a library ─────────────
+  const foldersMatch = objectId.match(/^folders-(\d+)$/);
+  if (foldersMatch) {
+    const libId = parseInt(foldersMatch[1], 10);
+    const lib = libraries.find(l => l.id === libId);
+    if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+
+    const allTracks = getAllLibraryTracks(libId);
+    const { dirs, items } = dirChildren(allTracks, '');
 
     if (browseFlag === 'BrowseMetadata') {
-      let childCount;
-      if (browse === 'dirs') {
-        const at = getAllLibraryTracks(libId);
-        const { dirs, items } = dirChildren(at, '');
-        childCount = dirs.length + items.length;
-      } else if (browse === 'artist') {
-        childCount = getLibraryArtists(libId).length;
-      } else if (browse === 'album') {
-        childCount = getLibraryAlbums(libId).length;
-      } else if (browse === 'genre') {
-        childCount = getLibraryGenres(libId).length;
-      } else {
-        childCount = getLibraryTrackCount(libId);
-      }
-      return sendBrowseResponse(res, didlWrapper(libraryContainer(lib, '0', childCount)), 1, 1);
+      return sendBrowseResponse(res, didlWrapper(viewContainer(libId, 'folders', dirs.length + items.length)), 1, 1);
     }
 
-    if (browse === 'dirs') {
-      const allTracks = getAllLibraryTracks(libId);
-      const { dirs, items } = dirChildren(allTracks, '');
-      const children = [
-        ...dirs.map(d => dirContainer(libId, d, objectId, dirChildCount(allTracks, d))),
-        ...items.map(t => trackItem(t, lib.name, objectId)),
-      ];
-      const slice = paginate(children, startIdx, reqCount);
-      return sendBrowseResponse(res, didlWrapper(slice.join('')), slice.length, children.length);
+    const children = [
+      ...dirs.map(d => dirContainer(libId, d, objectId, dirChildCount(allTracks, d))),
+      ...items.map(t => trackItem(t, lib.name, objectId)),
+    ];
+    const slice = paginate(children, startIdx, reqCount);
+    return sendBrowseResponse(res, didlWrapper(slice.join('')), slice.length, children.length);
+  }
+
+  // ── Artists view — all artists in a library ──────────────────────────────
+  const artistsMatch = objectId.match(/^artists-(\d+)$/);
+  if (artistsMatch) {
+    const libId = parseInt(artistsMatch[1], 10);
+    const lib = libraries.find(l => l.id === libId);
+    if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+
+    const artists = getLibraryArtists(libId);
+
+    if (browseFlag === 'BrowseMetadata') {
+      return sendBrowseResponse(res, didlWrapper(viewContainer(libId, 'artists', artists.length)), 1, 1);
     }
-    if (browse === 'artist') {
-      const artists = getLibraryArtists(libId);
-      const slice = paginate(artists, startIdx, reqCount);
-      return sendBrowseResponse(res, didlWrapper(slice.map(a => artistContainer(libId, a, objectId)).join('')), slice.length, artists.length);
+
+    const slice = paginate(artists, startIdx, reqCount);
+    return sendBrowseResponse(res, didlWrapper(slice.map(a => artistContainer(libId, a, objectId)).join('')), slice.length, artists.length);
+  }
+
+  // ── Albums view — all albums in a library ────────────────────────────────
+  const albumsMatch = objectId.match(/^albums-(\d+)$/);
+  if (albumsMatch) {
+    const libId = parseInt(albumsMatch[1], 10);
+    const lib = libraries.find(l => l.id === libId);
+    if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+
+    const albums = getLibraryAlbums(libId);
+
+    if (browseFlag === 'BrowseMetadata') {
+      return sendBrowseResponse(res, didlWrapper(viewContainer(libId, 'albums', albums.length)), 1, 1);
     }
-    if (browse === 'album') {
-      const albums = getLibraryAlbums(libId);
-      const slice = paginate(albums, startIdx, reqCount);
-      return sendBrowseResponse(res, didlWrapper(slice.map(al => albumContainer(libId, al, objectId)).join('')), slice.length, albums.length);
+
+    const slice = paginate(albums, startIdx, reqCount);
+    return sendBrowseResponse(res, didlWrapper(slice.map(al => albumContainer(libId, al, objectId)).join('')), slice.length, albums.length);
+  }
+
+  // ── Genres view — all genres in a library ────────────────────────────────
+  const genresMatch = objectId.match(/^genres-(\d+)$/);
+  if (genresMatch) {
+    const libId = parseInt(genresMatch[1], 10);
+    const lib = libraries.find(l => l.id === libId);
+    if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+
+    const genres = getLibraryGenres(libId);
+
+    if (browseFlag === 'BrowseMetadata') {
+      return sendBrowseResponse(res, didlWrapper(viewContainer(libId, 'genres', genres.length)), 1, 1);
     }
-    if (browse === 'genre') {
-      const genres = getLibraryGenres(libId);
-      const slice = paginate(genres, startIdx, reqCount);
-      return sendBrowseResponse(res, didlWrapper(slice.map(g => genreContainer(libId, g, objectId)).join('')), slice.length, genres.length);
-    }
-    // flat (default)
+
+    const slice = paginate(genres, startIdx, reqCount);
+    return sendBrowseResponse(res, didlWrapper(slice.map(g => genreContainer(libId, g, objectId)).join('')), slice.length, genres.length);
+  }
+
+  // ── All-Tracks view — flat, sortable track list ──────────────────────────
+  const tracksMatch = objectId.match(/^tracks-(\d+)$/);
+  if (tracksMatch) {
+    const libId = parseInt(tracksMatch[1], 10);
+    const lib = libraries.find(l => l.id === libId);
+    if (!lib) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
+
     const total = getLibraryTrackCount(libId);
+
+    if (browseFlag === 'BrowseMetadata') {
+      return sendBrowseResponse(res, didlWrapper(viewContainer(libId, 'tracks', total)), 1, 1);
+    }
+
     const orderBy = buildOrderBy(sortTerms, 'al.name, t.disc_number, t.track_number, t.title');
     const tracks = getLibraryTracks(libId, startIdx, reqCount, orderBy);
     return sendBrowseResponse(res, didlWrapper(tracks.map(t => trackItem(t, lib.name, objectId)).join('')), tracks.length, total);
@@ -735,7 +834,7 @@ function handleBrowse(body, res) {
     if (browseFlag === 'BrowseMetadata') {
       const lastSlash = relPath.lastIndexOf('/');
       const parentRel = lastSlash === -1 ? '' : relPath.slice(0, lastSlash);
-      const parentId  = parentRel ? `dir-${libId}-${encodeRelPath(parentRel)}` : `lib-${libId}`;
+      const parentId  = parentRel ? `dir-${libId}-${encodeRelPath(parentRel)}` : `folders-${libId}`;
       return sendBrowseResponse(res, didlWrapper(dirContainer(libId, relPath, parentId, dirs.length + items.length)), 1, 1);
     }
 
@@ -761,7 +860,7 @@ function handleBrowse(body, res) {
     if (browseFlag === 'BrowseMetadata') {
       const artist = getArtistById(libId, artistId);
       if (!artist) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
-      return sendBrowseResponse(res, didlWrapper(artistContainer(libId, artist, `lib-${libId}`)), 1, 1);
+      return sendBrowseResponse(res, didlWrapper(artistContainer(libId, artist, `artists-${libId}`)), 1, 1);
     }
 
     const albums = getArtistAlbums(libId, artistId);
@@ -782,7 +881,7 @@ function handleBrowse(body, res) {
     if (browseFlag === 'BrowseMetadata') {
       if (!tracks.length) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
       const album = { id: albumId, name: tracks[0].album_name || 'Unknown Album', track_count: tracks.length, album_art_file: tracks.find(t => t.album_art_file)?.album_art_file || null };
-      return sendBrowseResponse(res, didlWrapper(albumContainer(libId, album, `lib-${libId}`)), 1, 1);
+      return sendBrowseResponse(res, didlWrapper(albumContainer(libId, album, `albums-${libId}`)), 1, 1);
     }
 
     const slice = paginate(tracks, startIdx, reqCount);
@@ -800,7 +899,7 @@ function handleBrowse(body, res) {
     if (browseFlag === 'BrowseMetadata') {
       const g = getGenreByName(libId, genre);
       if (!g) { return sendXml(res, soapError('701', 'No Such Object'), 500); }
-      return sendBrowseResponse(res, didlWrapper(genreContainer(libId, g, `lib-${libId}`)), 1, 1);
+      return sendBrowseResponse(res, didlWrapper(genreContainer(libId, g, `genres-${libId}`)), 1, 1);
     }
 
     const artists = getGenreArtists(libId, genre);
@@ -872,7 +971,7 @@ function handleBrowse(body, res) {
     if (browseFlag === 'BrowseDirectChildren') {
       return sendBrowseResponse(res, didlWrapper(''), 0, 0);
     }
-    return sendBrowseResponse(res, didlWrapper(trackItem(row, lib.name, `lib-${lib.id}`)), 1, 1);
+    return sendBrowseResponse(res, didlWrapper(trackItem(row, lib.name, `tracks-${lib.id}`)), 1, 1);
   }
 
   sendXml(res, soapError('701', 'No Such Object'), 500);
