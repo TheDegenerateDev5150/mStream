@@ -491,12 +491,13 @@ fn set_track_genres(conn: &Connection, track_id: i64, genre_str: Option<&str>) -
 // test/audio-hash-parity.test.mjs. Any change to the byte-range logic must
 // land in both implementations simultaneously.
 
-fn md5_range(
-    file: &mut fs::File, start: u64, end: u64,
-) -> Result<String, Box<dyn std::error::Error>> {
+// Feed a single [start, end) byte range into an existing md5 context.
+fn feed_range(
+    ctx: &mut md5::Context, file: &mut fs::File, start: u64, end: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if end <= start { return Ok(()); }
     file.seek(SeekFrom::Start(start))?;
     let mut remaining = end - start;
-    let mut ctx = md5::Context::new();
     let mut buf = [0u8; 65536];
     while remaining > 0 {
         let chunk = buf.len().min(remaining as usize);
@@ -505,12 +506,25 @@ fn md5_range(
         ctx.consume(&buf[..n]);
         remaining -= n as u64;
     }
+    Ok(())
+}
+
+// Hash the concatenation of a list of byte ranges. For single-range formats
+// the slice has one element; for Ogg we pass one entry per audio page payload.
+fn hash_ranges(
+    file: &mut fs::File, ranges: &[(u64, u64)],
+) -> Result<String, Box<dyn std::error::Error>> {
+    let mut ctx = md5::Context::new();
+    for &(start, end) in ranges {
+        feed_range(&mut ctx, file, start, end)?;
+    }
     Ok(format!("{:x}", ctx.compute()))
 }
 
-// MP3 audio range: between the ID3v2 header (if present) and the ID3v1
-// footer (if present). See the JS mirror for spec references.
-fn mp3_audio_range(file: &mut fs::File, file_size: u64) -> Option<(u64, u64)> {
+// MP3 & AAC (ADTS): strip ID3v2 prefix + ID3v1 suffix + APEv2 suffix.
+// See src/db/audio-hash.js for the spec references — this impl mirrors
+// `mp3OrAacAudioRange` byte-for-byte.
+fn mp3_or_aac_audio_range(file: &mut fs::File, file_size: u64) -> Option<Vec<(u64, u64)>> {
     if file_size < 10 { return None; }
 
     let mut head = [0u8; 10];
@@ -525,7 +539,7 @@ fn mp3_audio_range(file: &mut fs::File, file_size: u64) -> Option<(u64, u64)> {
             ((head[8] & 0x7f) as u64) << 7  |
              (head[9] & 0x7f) as u64;
         start = 10 + tag_size;
-        if head[5] & 0x10 != 0 { start += 10; }  // footer flag
+        if head[5] & 0x10 != 0 { start += 10; }
     }
 
     let mut end: u64 = file_size;
@@ -536,30 +550,25 @@ fn mp3_audio_range(file: &mut fs::File, file_size: u64) -> Option<(u64, u64)> {
         if trailer == *b"TAG" { end = file_size - 128; }
     }
 
-    // APEv2 footer (8-byte signature at end - 32, or end - 32 - 128 if ID3v1 present).
     if end >= 32 {
         let footer_at = end - 32;
-        let mut probe = [0u8; 8];
+        let mut full = [0u8; 32];
         file.seek(SeekFrom::Start(footer_at)).ok()?;
-        if file.read_exact(&mut probe).is_ok() && &probe == b"APETAGEX" {
-            let mut full = [0u8; 32];
-            file.seek(SeekFrom::Start(footer_at)).ok()?;
-            if file.read_exact(&mut full).is_ok() {
-                let sz = u32::from_le_bytes([full[12], full[13], full[14], full[15]]) as u64;
-                let flags = u32::from_le_bytes([full[20], full[21], full[22], full[23]]);
-                let has_header = (flags & 0x8000_0000) != 0;
-                let ape_total = sz + if has_header { 32 } else { 0 };
-                if end >= ape_total { end -= ape_total; }
-            }
+        if file.read_exact(&mut full).is_ok() && &full[..8] == b"APETAGEX" {
+            let sz = u32::from_le_bytes([full[12], full[13], full[14], full[15]]) as u64;
+            let flags = u32::from_le_bytes([full[20], full[21], full[22], full[23]]);
+            let has_header = (flags & 0x8000_0000) != 0;
+            let ape_total = sz + if has_header { 32 } else { 0 };
+            if end >= ape_total { end -= ape_total; }
         }
     }
 
     if start >= end { return None; }
-    Some((start, end))
+    Some(vec![(start, end)])
 }
 
 // FLAC: walk metadata blocks until last_flag set, then audio follows.
-fn flac_audio_range(file: &mut fs::File, file_size: u64) -> Option<(u64, u64)> {
+fn flac_audio_range(file: &mut fs::File, file_size: u64) -> Option<Vec<(u64, u64)>> {
     if file_size < 4 { return None; }
     let mut magic = [0u8; 4];
     file.seek(SeekFrom::Start(0)).ok()?;
@@ -579,15 +588,123 @@ fn flac_audio_range(file: &mut fs::File, file_size: u64) -> Option<(u64, u64)> {
         if cursor > file_size { return None; }
     }
     if cursor >= file_size { return None; }
-    Some((cursor, file_size))
+    Some(vec![(cursor, file_size)])
 }
 
-fn audio_range_for_ext(
+// WAV (RIFF/WAVE): walk chunks, return the `data` chunk payload. Other
+// chunks (LIST/INFO, ID3, bext, iXML) are skipped.
+fn wav_audio_range(file: &mut fs::File, file_size: u64) -> Option<Vec<(u64, u64)>> {
+    if file_size < 12 { return None; }
+    let mut hdr = [0u8; 12];
+    file.seek(SeekFrom::Start(0)).ok()?;
+    file.read_exact(&mut hdr).ok()?;
+    if &hdr[0..4] != b"RIFF" || &hdr[8..12] != b"WAVE" { return None; }
+
+    let mut cursor: u64 = 12;
+    let mut chunk_hdr = [0u8; 8];
+    while cursor + 8 <= file_size {
+        file.seek(SeekFrom::Start(cursor)).ok()?;
+        if file.read_exact(&mut chunk_hdr).is_err() { return None; }
+        let id = &chunk_hdr[0..4];
+        let size = u32::from_le_bytes([chunk_hdr[4], chunk_hdr[5], chunk_hdr[6], chunk_hdr[7]]) as u64;
+        let payload_start = cursor + 8;
+        let payload_end = (payload_start + size).min(file_size);
+        if id == b"data" { return Some(vec![(payload_start, payload_end)]); }
+        // WAV chunks are word-aligned; odd-length payloads pad with one byte.
+        cursor = payload_start + size + (size & 1);
+    }
+    None
+}
+
+// Ogg: walk pages; hash payloads of audio pages (from first page with
+// granule_position > 0 onwards). Page headers are NOT hashed — their
+// page_sequence_number drifts when header pages change size.
+fn ogg_audio_range(file: &mut fs::File, file_size: u64) -> Option<Vec<(u64, u64)>> {
+    if file_size < 27 { return None; }
+    let mut ranges = Vec::new();
+    let mut audio_started = false;
+    let mut cursor: u64 = 0;
+    let mut page_hdr = [0u8; 27];
+
+    while cursor + 27 <= file_size {
+        file.seek(SeekFrom::Start(cursor)).ok()?;
+        if file.read_exact(&mut page_hdr).is_err() { break; }
+        if &page_hdr[0..4] != b"OggS" { break; }
+        let granule = i64::from_le_bytes([
+            page_hdr[6], page_hdr[7], page_hdr[8], page_hdr[9],
+            page_hdr[10], page_hdr[11], page_hdr[12], page_hdr[13],
+        ]);
+        let page_segments = page_hdr[26] as usize;
+        let mut seg_table = vec![0u8; page_segments];
+        if file.read_exact(&mut seg_table).is_err() { return None; }
+        let payload_size: u64 = seg_table.iter().map(|&b| b as u64).sum();
+        let payload_start = cursor + 27 + page_segments as u64;
+        let payload_end = payload_start + payload_size;
+        if payload_end > file_size { return None; }  // truncated
+
+        if audio_started {
+            ranges.push((payload_start, payload_end));
+        } else if granule > 0 {
+            audio_started = true;
+            ranges.push((payload_start, payload_end));
+        }
+        // granule == 0 or -1: pre-audio header region, skip.
+
+        cursor = payload_end;
+    }
+
+    if ranges.is_empty() { None } else { Some(ranges) }
+}
+
+// MP4 / M4A / M4B: walk atom tree, hash `mdat` payload(s). `moov` (where
+// metadata lives) is skipped automatically. Supports 64-bit extended
+// sizes (size == 1) and extends-to-EOF (size == 0).
+fn mp4_audio_range(file: &mut fs::File, file_size: u64) -> Option<Vec<(u64, u64)>> {
+    if file_size < 8 { return None; }
+    let mut ranges = Vec::new();
+    let mut cursor: u64 = 0;
+    let mut atom_hdr = [0u8; 16];
+
+    while cursor + 8 <= file_size {
+        let to_read = 16usize.min((file_size - cursor) as usize);
+        file.seek(SeekFrom::Start(cursor)).ok()?;
+        if file.read(&mut atom_hdr[..to_read]).ok()? < 8 { break; }
+        let sz32 = u32::from_be_bytes([atom_hdr[0], atom_hdr[1], atom_hdr[2], atom_hdr[3]]);
+        let type_bytes = &atom_hdr[4..8];
+
+        let (header_len, atom_end): (u64, u64) = if sz32 == 1 {
+            // 64-bit extended size follows at bytes 8..16.
+            if to_read < 16 { break; }
+            let sz64 = u64::from_be_bytes([
+                atom_hdr[8], atom_hdr[9], atom_hdr[10], atom_hdr[11],
+                atom_hdr[12], atom_hdr[13], atom_hdr[14], atom_hdr[15],
+            ]);
+            (16, cursor + sz64)
+        } else if sz32 == 0 {
+            (8, file_size)
+        } else {
+            (8, cursor + sz32 as u64)
+        };
+        if atom_end > file_size || atom_end < cursor + header_len { break; }
+
+        if type_bytes == b"mdat" && atom_end > cursor + header_len {
+            ranges.push((cursor + header_len, atom_end));
+        }
+        cursor = atom_end;
+    }
+
+    if ranges.is_empty() { None } else { Some(ranges) }
+}
+
+fn audio_ranges_for_ext(
     file: &mut fs::File, ext: &str, file_size: u64,
-) -> Option<(u64, u64)> {
+) -> Option<Vec<(u64, u64)>> {
     match ext {
-        "mp3"  => mp3_audio_range(file, file_size),
-        "flac" => flac_audio_range(file, file_size),
+        "mp3" | "aac"            => mp3_or_aac_audio_range(file, file_size),
+        "flac"                   => flac_audio_range(file, file_size),
+        "wav"                    => wav_audio_range(file, file_size),
+        "ogg" | "opus"           => ogg_audio_range(file, file_size),
+        "m4a" | "m4b" | "mp4"    => mp4_audio_range(file, file_size),
         _ => None,
     }
 }
@@ -610,9 +727,9 @@ fn compute_hashes(
         format!("{:x}", ctx.compute())
     };
 
-    let audio_hash = match audio_range_for_ext(&mut file, ext, file_size) {
-        Some((start, end)) => Some(md5_range(&mut file, start, end)?),
-        None => None,
+    let audio_hash = match audio_ranges_for_ext(&mut file, ext, file_size) {
+        Some(ranges) if !ranges.is_empty() => Some(hash_ranges(&mut file, &ranges)?),
+        _ => None,
     };
 
     Ok((file_hash, audio_hash))

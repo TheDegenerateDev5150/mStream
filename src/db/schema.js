@@ -74,9 +74,12 @@ export const SCHEMA_V1 = `
     -- audio payload region, skipping tag metadata. It is the PREFERRED
     -- identity key for user-facing state (stars, ratings, play counts,
     -- bookmarks, play queue) because it is stable across tag edits,
-    -- album-art changes, and ReplayGain rewrites. NULL for formats the
-    -- scanner does not yet parse (ogg, opus, m4a, m4b, wav, aac); in that
-    -- case user_* tables fall back to file_hash.
+    -- album-art changes, and ReplayGain rewrites. Populated by the
+    -- scanner for mp3, flac, wav, ogg, opus, aac, m4a, m4b, and mp4 —
+    -- every format mStream currently supports. Still NULL for rows
+    -- written before migration V14 or for any file the format-specific
+    -- extractor couldn't parse (corrupt/truncated); user_* tables fall
+    -- back to file_hash via COALESCE in that case.
     --
     -- Both scanners (src/db/scanner.mjs and rust-parser/src/main.rs) must
     -- produce byte-identical hashes for the same input file — enforced

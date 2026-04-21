@@ -80,30 +80,36 @@ function runRustHash(rustBin, filepath) {
   });
 }
 
-// Each format gets the simplest possible ffmpeg recipe that produces a
-// valid file — we don't care about audio content, just about what shape
-// the scanner will see in the real world.
+// Each format gets the simplest ffmpeg recipe that produces a valid file
+// with plausible metadata — matches what the scanner will see in the real
+// world. audioHashSupported=true means the extractor must emit a non-null
+// audio_hash AND that hash must differ from file_hash (otherwise the
+// extractor didn't actually strip any metadata region).
 const FORMATS = [
-  // MP3 with ID3v2 tags — the mainstream case, audio_hash extractor active.
   { ext: 'mp3',  audioHashSupported: true,
     ffArgs: ['-c:a', 'libmp3lame', '-b:a', '64k', '-id3v2_version', '3',
              '-metadata', 'title=MP3 Fixture', '-metadata', 'artist=Tester'] },
-
-  // FLAC — lossless container, audio_hash extractor active.
   { ext: 'flac', audioHashSupported: true,
     ffArgs: ['-c:a', 'flac',
              '-metadata', 'title=FLAC Fixture', '-metadata', 'artist=Tester'] },
-
-  // Formats the extractor does NOT yet handle — both sides must return null
-  // for audio_hash, and file_hash must still match.
-  { ext: 'wav',  audioHashSupported: false, ffArgs: ['-c:a', 'pcm_s16le'] },
-  { ext: 'ogg',  audioHashSupported: false,
-    ffArgs: ['-c:a', 'libvorbis', '-metadata', 'title=OGG Fixture'] },
-  { ext: 'opus', audioHashSupported: false,
-    ffArgs: ['-c:a', 'libopus', '-b:a', '64k', '-f', 'opus'] },
-  { ext: 'm4a',  audioHashSupported: false,
+  { ext: 'wav',  audioHashSupported: true,
+    // Raw PCM wav; data-chunk-only hash will differ from whole-file hash
+    // because of the 12-byte RIFF/WAVE header + fmt chunk.
+    ffArgs: ['-c:a', 'pcm_s16le'] },
+  { ext: 'ogg',  audioHashSupported: true,
+    ffArgs: ['-c:a', 'libvorbis', '-metadata', 'title=OGG Fixture',
+             '-metadata', 'artist=Tester'] },
+  { ext: 'opus', audioHashSupported: true,
+    ffArgs: ['-c:a', 'libopus', '-b:a', '64k', '-f', 'opus',
+             '-metadata', 'title=Opus Fixture'] },
+  { ext: 'm4a',  audioHashSupported: true,
     ffArgs: ['-c:a', 'aac', '-b:a', '64k', '-movflags', '+faststart',
-             '-metadata', 'title=M4A Fixture'] },
+             '-metadata', 'title=M4A Fixture', '-metadata', 'artist=Tester'] },
+  // .aac as raw ADTS — no container tags by default from ffmpeg, so the
+  // stripped region is empty and audio_hash equals file_hash. That is
+  // expected and correct; no assertion that they differ.
+  { ext: 'aac',  audioHashSupported: true, allowEqualToFileHash: true,
+    ffArgs: ['-c:a', 'aac', '-b:a', '64k', '-f', 'adts'] },
 ];
 
 let tmpDir;
@@ -145,11 +151,13 @@ describe('JS ↔ Rust audio-hash parity across all supported formats', () => {
         assert.ok(rust.audioHash, `${fmt.ext}: Rust audio_hash should be set`);
         assert.equal(js.audioHash, rust.audioHash,
           `${fmt.ext}: audio_hash diverged (js=${js.audioHash}, rust=${rust.audioHash})`);
-        // And audio_hash must differ from file_hash — otherwise the extractor
-        // silently matched the whole file (e.g. returned the full range), which
-        // would defeat the purpose.
-        assert.notEqual(js.audioHash, js.fileHash,
-          `${fmt.ext}: audio_hash equals file_hash — extractor didn't strip any region`);
+        // audio_hash must differ from file_hash so we know the extractor
+        // actually stripped a region — unless the format carries no tags
+        // by default (raw ADTS, which ffmpeg emits without any ID3 wrapper).
+        if (!fmt.allowEqualToFileHash) {
+          assert.notEqual(js.audioHash, js.fileHash,
+            `${fmt.ext}: audio_hash equals file_hash — extractor didn't strip any region`);
+        }
       } else {
         assert.equal(js.audioHash, null,
           `${fmt.ext}: JS audio_hash should be null (extractor not implemented)`);
@@ -211,4 +219,69 @@ describe('JS ↔ Rust audio-hash parity across all supported formats', () => {
     assert.equal(rustA.audioHash, rustB.audioHash);
     assert.equal(jsA.audioHash, rustA.audioHash);
   });
+
+  // ── Tag-rewrite stability for every supported format ─────────────────
+  // Parametrised so each format's exercise uses the same assertions:
+  // same audio input + different tags → file_hash diverges, audio_hash
+  // stays stable between the two files AND between JS and Rust.
+  //
+  // Each entry gives:
+  //   ext:         file extension / scanner format key
+  //   baseArgs:    ffmpeg codec/container args that DON'T depend on tags
+  //   tagsA:       tag metadata flags for the "before" file
+  //   tagsB:       tag metadata flags for the "after" (edited) file;
+  //                also deliberately longer/different text so the tag
+  //                region grows, to stress the "payload position drifts"
+  //                edge case (matters for Ogg and MP4).
+  const TAG_REWRITE_CASES = [
+    { ext: 'wav',
+      baseArgs: ['-c:a', 'pcm_s16le'],
+      // WAV + ffmpeg writes metadata into an INFO LIST chunk.
+      tagsA: ['-metadata', 'title=First', '-metadata', 'artist=A'],
+      tagsB: ['-metadata', 'title=Second longer title', '-metadata', 'artist=B with description',
+              '-metadata', 'comment=Added a long trailing comment to grow the LIST chunk'] },
+    { ext: 'ogg',
+      baseArgs: ['-c:a', 'libvorbis'],
+      tagsA: ['-metadata', 'title=A', '-metadata', 'artist=One'],
+      tagsB: ['-metadata', 'title=Second with a much longer title that will push the comment packet across more bytes',
+              '-metadata', 'artist=Two', '-metadata', 'album=Adding an album tag too'] },
+    { ext: 'opus',
+      baseArgs: ['-c:a', 'libopus', '-b:a', '64k', '-f', 'opus'],
+      tagsA: ['-metadata', 'title=A'],
+      tagsB: ['-metadata', 'title=Second longer title', '-metadata', 'artist=B'] },
+    { ext: 'm4a',
+      baseArgs: ['-c:a', 'aac', '-b:a', '64k', '-movflags', '+faststart'],
+      tagsA: ['-metadata', 'title=First', '-metadata', 'artist=A'],
+      tagsB: ['-metadata', 'title=Second with more text', '-metadata', 'artist=B',
+              '-metadata', 'album=Yet another album tag'] },
+  ];
+
+  for (const c of TAG_REWRITE_CASES) {
+    test(`${c.ext} audio_hash survives a tag rewrite`, async (t) => {
+      if (!fsSync.existsSync(FFMPEG)) { return t.skip(); }
+      if (!rustBin)                   { return t.skip(); }
+
+      const a = path.join(tmpDir, `tagA.${c.ext}`);
+      const b = path.join(tmpDir, `tagB.${c.ext}`);
+      const common = ['-nostdin', '-y', '-loglevel', 'error',
+                      '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo', '-t', '1',
+                      ...c.baseArgs];
+      await runFfmpeg([...common, ...c.tagsA, a]);
+      await runFfmpeg([...common, ...c.tagsB, b]);
+
+      const jsA = await computeHashes(a);
+      const jsB = await computeHashes(b);
+      const rustA = await runRustHash(rustBin, a);
+      const rustB = await runRustHash(rustBin, b);
+
+      assert.notEqual(jsA.fileHash, jsB.fileHash,
+        `${c.ext}: file_hash should differ when tags differ`);
+      assert.equal(jsA.audioHash, jsB.audioHash,
+        `${c.ext}: JS audio_hash should be stable across a tag rewrite (A=${jsA.audioHash}, B=${jsB.audioHash})`);
+      assert.equal(rustA.audioHash, rustB.audioHash,
+        `${c.ext}: Rust audio_hash should be stable across a tag rewrite`);
+      assert.equal(jsA.audioHash, rustA.audioHash,
+        `${c.ext}: JS and Rust should agree on audio_hash`);
+    });
+  }
 });
