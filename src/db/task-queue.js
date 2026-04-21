@@ -151,8 +151,31 @@ function attachScanHandlers(forkedScan, scanObj) {
     stdoutBuffer = '';
   });
 
-  forkedScan.stderr.on('data', (data) => {
-    winston.error(`File scan error: ${data}`);
+  // Line-buffer stderr the same way as stdout. Scanner lines prefixed with
+  // "Warning:" are recoverable (metadata parse failures fall back to null
+  // tags; the track still gets indexed) and are logged at warn level so a
+  // library with malformed ID3 tags doesn't flood error-level log streams.
+  // Anything else on stderr is treated as a real error.
+  let stderrBuffer = '';
+  const handleStderrLine = (line) => {
+    if (!line) { return; }
+    if (line.startsWith('Warning:')) {
+      winston.warn(`File scan: ${line}`);
+    } else {
+      winston.error(`File scan error: ${line}`);
+    }
+  };
+  forkedScan.stderr.on('data', (chunk) => {
+    stderrBuffer += chunk.toString();
+    const lines = stderrBuffer.split(/\r?\n/);
+    stderrBuffer = lines.pop() || '';
+    for (const line of lines) {
+      handleStderrLine(line.trim());
+    }
+  });
+  forkedScan.stderr.on('end', () => {
+    if (stderrBuffer.trim()) { handleStderrLine(stderrBuffer.trim()); }
+    stderrBuffer = '';
   });
 }
 

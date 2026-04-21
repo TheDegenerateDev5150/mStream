@@ -4,6 +4,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use lofty::config::{ParseOptions, ParsingMode};
 use lofty::prelude::*;
 use lofty::probe::Probe;
 use lofty::tag::{ItemKey, ItemValue};
@@ -225,7 +226,12 @@ fn process_one(
     let mut aa_file: Option<String> = None;
     let mut duration_sec: Option<f64> = None;
 
-    match Probe::open(filepath).and_then(|p| p.read()) {
+    // Use Relaxed parsing so malformed frames (e.g. odd-length UTF-16 strings,
+    // invalid year lengths) get dropped individually instead of failing the
+    // whole file. Bulk rips with a broken tagger can otherwise lose all
+    // metadata for hundreds of tracks from one bad frame each.
+    let parse_opts = ParseOptions::new().parsing_mode(ParsingMode::Relaxed);
+    match Probe::open(filepath).and_then(|p| p.options(parse_opts).read()) {
         Ok(tagged_file) => {
             // Get duration from audio properties
             let dur = tagged_file.properties().duration();
