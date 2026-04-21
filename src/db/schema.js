@@ -305,16 +305,6 @@ export const SCHEMA_V12 = `
   CREATE INDEX IF NOT EXISTS idx_user_bookmarks_user ON user_bookmarks(user_id);
 `;
 
-export const SCHEMA_V14 = `
-  -- Dual-hash identity: audio_hash complements file_hash (see schema_v1
-  -- comments on the tracks table). audio_hash hashes just the audio
-  -- payload region, so it stays stable across tag edits. Populated by
-  -- the scanner for MP3 + FLAC today; NULL for formats we don't parse
-  -- yet — user_* tables fall back to file_hash in that case.
-  ALTER TABLE tracks ADD COLUMN audio_hash TEXT;
-  CREATE INDEX IF NOT EXISTS idx_tracks_audio_hash ON tracks(audio_hash);
-`;
-
 export const SCHEMA_V13 = `
   -- OpenSubsonic getPlayQueue / savePlayQueue: one row per user storing
   -- their current across-device play queue. track_hashes_json is a JSON
@@ -328,6 +318,16 @@ export const SCHEMA_V13 = `
     changed_by         TEXT,
     track_hashes_json  TEXT    NOT NULL
   );
+`;
+
+export const SCHEMA_V14 = `
+  -- Dual-hash identity: audio_hash complements file_hash (see schema_v1
+  -- comments on the tracks table). audio_hash hashes just the audio
+  -- payload region, so it stays stable across tag edits. Populated by
+  -- the scanner for MP3 + FLAC today; NULL for formats we don't parse
+  -- yet — user_* tables fall back to file_hash in that case.
+  ALTER TABLE tracks ADD COLUMN audio_hash TEXT;
+  CREATE INDEX IF NOT EXISTS idx_tracks_audio_hash ON tracks(audio_hash);
 `;
 
 // rescanRequired: true — marks migrations that change the tracks table schema
