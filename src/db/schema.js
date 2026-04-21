@@ -1,7 +1,7 @@
 // SQLite schema definitions and migration system for mStream.
 // Uses PRAGMA user_version for tracking which migrations have been applied.
 
-export const SCHEMA_VERSION = 14;
+export const SCHEMA_VERSION = 16;
 
 export const SCHEMA_V1 = `
   -- Users
@@ -333,6 +333,31 @@ export const SCHEMA_V14 = `
   CREATE INDEX IF NOT EXISTS idx_tracks_audio_hash ON tracks(audio_hash);
 `;
 
+export const SCHEMA_V15 = `
+  -- Playlist visibility flag, for Subsonic getPlaylists.public. 0 = owner
+  -- only (default), 1 = visible to every authenticated user. mStream has
+  -- no server-wide "public" concept beyond shared_playlists (link-based),
+  -- so this is per-user opt-in.
+  ALTER TABLE playlists ADD COLUMN public INTEGER NOT NULL DEFAULT 0;
+
+  -- Subsonic share description: free-text label set by createShare and
+  -- updateShare, displayed by clients in share-list views. Distinct from
+  -- playlist_json (the shared-track list) so updateShare can rewrite one
+  -- without the other.
+  ALTER TABLE shared_playlists ADD COLUMN description TEXT;
+`;
+
+export const SCHEMA_V16 = `
+  -- Additional audio-format fields populated by the scanner, exposed
+  -- through the Subsonic song object (OpenSubsonic extended fields).
+  -- Clients that render per-track "24/96 FLAC" style quality badges read
+  -- these. NULL for rows written before V16; the next force-rescan
+  -- populates them from the embedded audio properties.
+  ALTER TABLE tracks ADD COLUMN sample_rate  INTEGER;
+  ALTER TABLE tracks ADD COLUMN channels     INTEGER;
+  ALTER TABLE tracks ADD COLUMN bit_depth    INTEGER;
+`;
+
 // rescanRequired: true — marks migrations that change the tracks table schema
 // and need a force rescan to populate new fields. When applied, a marker file
 // is written so the next boot triggers rescanAll() instead of scanAll().
@@ -351,4 +376,6 @@ export const MIGRATIONS = [
   { version: 12, sql: SCHEMA_V12 },
   { version: 13, sql: SCHEMA_V13 },
   { version: 14, sql: SCHEMA_V14, rescanRequired: true },
+  { version: 15, sql: SCHEMA_V15 },
+  { version: 16, sql: SCHEMA_V16, rescanRequired: true },
 ];

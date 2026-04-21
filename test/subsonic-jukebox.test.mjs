@@ -229,10 +229,13 @@ describe('jukeboxControl transport', () => {
     assert.deepEqual(JSON.parse(vol.body), { volume: 0.42 });
   });
 
-  test('setGain out of range returns error 0', async () => {
+  test('setGain out of range returns error 10 (invalid parameter)', async () => {
     const env = await call('jukeboxControl', { action: 'setGain', gain: 2.5 });
     assert.equal(env.status, 'failed');
-    assert.equal(env.error.code, 0);
+    // Error code audit (Subsonic API polish pass): out-of-range gain is
+    // an invalid parameter value, mapped to spec code 10 rather than
+    // the non-specific code 0.
+    assert.equal(env.error.code, 10);
   });
 });
 
@@ -290,9 +293,10 @@ describe('jukeboxControl when rust-server-audio is unavailable', () => {
 // the stub" teardown doesn't affect it. We don't need the stub here since
 // the handler short-circuits on unknown-action before any proxy call.
 describe('jukeboxControl unknown action', () => {
-  test('returns a generic error (code 0)', async () => {
+  test('returns error 10 for an invalid action parameter', async () => {
     const env = await call('jukeboxControl', { action: 'nonsense' });
     assert.equal(env.status, 'failed');
-    assert.equal(env.error.code, 0);
+    // Unknown `action=` is treated as an invalid parameter value.
+    assert.equal(env.error.code, 10);
   });
 });

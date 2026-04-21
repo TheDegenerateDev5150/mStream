@@ -198,9 +198,15 @@ function arrayParam(v) {
 // t.duration, t.format, t.file_size, t.bitrate, t.year, t.genre,
 // t.album_art_file, t.created_at, t.library_id, a.name AS artist_name,
 // a.id AS artist_id, al.name AS album_name, al.id AS album_id.
+//
+// OpenSubsonic extended fields (sampleRate, channelCount, bitDepth,
+// replayGain) are emitted when present — they require the query to also
+// select t.sample_rate, t.channels, t.bit_depth, t.replaygain_track_db.
+// Missing columns simply produce undefined entries that the XML/JSON
+// renderer drops.
 function songFromRow(row) {
   const suffix = suffixFor(row.filepath, row.format);
-  return {
+  const out = {
     id:          String(row.id),
     parent:      row.album_id != null ? encAlbum(row.album_id) : undefined,
     isDir:       false,
@@ -223,6 +229,16 @@ function songFromRow(row) {
     artistId:    row.artist_id != null ? encArtist(row.artist_id) : undefined,
     type:        'music',
   };
+  // OpenSubsonic optional fields — present only when the row carries them.
+  if (row.sample_rate != null)          { out.samplingRate  = row.sample_rate; }
+  if (row.channels != null)             { out.channelCount  = row.channels; }
+  if (row.bit_depth != null)            { out.bitDepth      = row.bit_depth; }
+  if (row.replaygain_track_db != null)  {
+    // OpenSubsonic `replayGain` is a nested object; expose the track gain.
+    // Album gain would need a second column — deferred.
+    out.replayGain = { trackGain: row.replaygain_track_db };
+  }
+  return out;
 }
 
 // ── System ──────────────────────────────────────────────────────────────────
@@ -380,6 +396,7 @@ export function getAlbum(req, res) {
     SELECT t.id, t.filepath, t.title, t.track_number, t.disc_number, t.duration,
            t.format, t.file_size, t.bitrate, t.year, t.genre, t.album_art_file,
            t.created_at, t.library_id,
+           t.replaygain_track_db, t.sample_rate, t.channels, t.bit_depth,
            a.id AS artist_id, a.name AS artist_name,
            al.id AS album_id, al.name AS album_name
     FROM tracks t
@@ -416,6 +433,7 @@ export function getSong(req, res) {
     SELECT t.id, t.filepath, t.title, t.track_number, t.disc_number, t.duration,
            t.format, t.file_size, t.bitrate, t.year, t.genre, t.album_art_file,
            t.created_at, t.library_id,
+           t.replaygain_track_db, t.sample_rate, t.channels, t.bit_depth,
            a.id AS artist_id, a.name AS artist_name,
            al.id AS album_id, al.name AS album_name
     FROM tracks t
@@ -523,6 +541,7 @@ export function getMusicDirectory(req, res) {
       SELECT t.id, t.filepath, t.title, t.track_number, t.disc_number, t.duration,
              t.format, t.file_size, t.bitrate, t.year, t.genre, t.album_art_file,
              t.created_at, t.library_id,
+           t.replaygain_track_db, t.sample_rate, t.channels, t.bit_depth,
              a.id AS artist_id, a.name AS artist_name,
              al.id AS album_id, al.name AS album_name
       FROM tracks t
@@ -754,6 +773,19 @@ export function search3(req, res) {
   }
 
   const { clause, params } = libraryScope(req);
+  // Optional `musicFolderId` narrows the search to a single library the
+  // user can see. Unknown or inaccessible folder id → return empty (the
+  // spec doesn't mandate an error code here).
+  const folder = decodeId(req.query.musicFolderId, 'folder');
+  let scope = clause;
+  const scopeParams = [...params];
+  if (folder) {
+    if (!req.user.vpaths.some(name => db.getAllLibraries().some(l => l.id === folder.id && l.name === name))) {
+      return sendOk(req, res, { searchResult3: {} });
+    }
+    scope = `${clause} AND t.library_id = ?`;
+    scopeParams.push(folder.id);
+  }
   const like = `%${q}%`;
 
   const d = db.getDB();
@@ -762,11 +794,11 @@ export function search3(req, res) {
     FROM artists a
     JOIN albums al ON al.artist_id = a.id
     JOIN tracks t  ON t.album_id = al.id
-    WHERE ${clause} AND LOWER(a.name) LIKE ?
+    WHERE ${scope} AND LOWER(a.name) LIKE ?
     GROUP BY a.id
     ORDER BY a.name COLLATE NOCASE
     LIMIT ? OFFSET ?
-  `).all(...params, like, artistCount, artistOffset);
+  `).all(...scopeParams, like, artistCount, artistOffset);
 
   const albums = d.prepare(`
     SELECT DISTINCT al.id, al.name, al.year, al.album_art_file, al.artist_id,
@@ -774,25 +806,26 @@ export function search3(req, res) {
     FROM albums al
     LEFT JOIN artists a ON a.id = al.artist_id
     JOIN tracks t ON t.album_id = al.id
-    WHERE ${clause} AND LOWER(al.name) LIKE ?
+    WHERE ${scope} AND LOWER(al.name) LIKE ?
     GROUP BY al.id
     ORDER BY al.name COLLATE NOCASE
     LIMIT ? OFFSET ?
-  `).all(...params, like, albumCount, albumOffset);
+  `).all(...scopeParams, like, albumCount, albumOffset);
 
   const songs = d.prepare(`
     SELECT t.id, t.filepath, t.title, t.track_number, t.disc_number, t.duration,
            t.format, t.file_size, t.bitrate, t.year, t.genre, t.album_art_file,
            t.created_at, t.library_id,
+           t.replaygain_track_db, t.sample_rate, t.channels, t.bit_depth,
            a.id AS artist_id, a.name AS artist_name,
            al.id AS album_id, al.name AS album_name
     FROM tracks t
     LEFT JOIN artists a  ON a.id = t.artist_id
     LEFT JOIN albums  al ON al.id = t.album_id
-    WHERE ${clause} AND LOWER(t.title) LIKE ?
+    WHERE ${scope} AND LOWER(t.title) LIKE ?
     ORDER BY t.title COLLATE NOCASE
     LIMIT ? OFFSET ?
-  `).all(...params, like, songCount, songOffset);
+  `).all(...scopeParams, like, songCount, songOffset);
 
   sendOk(req, res, {
     searchResult3: {
@@ -828,35 +861,52 @@ export function search2(req, res) { search3(req, res); }
 //   submission=true  → "completed play" (update stats)
 // We only increment counts on submission=true.
 export function scrobble(req, res) {
-  const parsed = decodeId(req.query.id, 'song');
-  if (!parsed) { return SubErr.MISSING_PARAM(req, res, 'id'); }
-  const submission = req.query.submission !== 'false'; // default true per spec
+  // Spec: both `id` and `time` are repeatable for bulk scrobble. When
+  // `time` is shorter than `id` (or missing entirely), unmatched entries
+  // fall back to "now". submission=false is the "now playing" hint and
+  // never bumps play counts.
+  const songIds = arrayParam(req.query.id)
+    .map(v => decodeId(v, 'song')?.id)
+    .filter(Number.isFinite);
+  if (!songIds.length) { return SubErr.MISSING_PARAM(req, res, 'id'); }
 
-  // submission=false is the "now playing" signal — register the user as
-  // currently playing this track but don't bump play_count.
+  const times = arrayParam(req.query.time).map(v => parseInt(v, 10));
+  const submission = req.query.submission !== 'false';
+
+  // submission=false (now-playing): Subsonic spec says a scrobble without
+  // submission shouldn't register more than one track. We honour the
+  // last id in the list (matching the fork behaviour documented in the
+  // spec's "reference implementation").
   if (!submission) {
-    nowPlaying.register(req.user.id, req.user.username, parsed.id);
+    const lastId = songIds[songIds.length - 1];
+    nowPlaying.register(req.user.id, req.user.username, lastId);
     return sendOk(req, res);
   }
 
-  const hash = trackFileHash(parsed.id);
-  if (!hash) { return SubErr.NOT_FOUND(req, res, 'Song'); }
-
-  // Subsonic passes milliseconds since epoch; we store an ISO-ish datetime.
-  const ms = parseInt(req.query.time, 10);
-  const when = Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 19) : null;
-
-  // Bump play_count; set last_played to the supplied time or now.
   const d = db.getDB();
-  d.prepare('INSERT OR IGNORE INTO user_metadata (user_id, track_hash) VALUES (?, ?)')
-    .run(req.user.id, hash);
-  d.prepare(`
+  const insert = d.prepare('INSERT OR IGNORE INTO user_metadata (user_id, track_hash) VALUES (?, ?)');
+  const update = d.prepare(`
     UPDATE user_metadata
     SET play_count = COALESCE(play_count, 0) + 1,
         last_played = COALESCE(?, datetime('now'))
     WHERE user_id = ? AND track_hash = ?
-  `).run(when, req.user.id, hash);
+  `);
 
+  let anyMissing = false;
+  for (let i = 0; i < songIds.length; i++) {
+    const hash = trackFileHash(songIds[i]);
+    if (!hash) { anyMissing = true; continue; }
+    const ms = times[i];
+    const when = Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 19) : null;
+    insert.run(req.user.id, hash);
+    update.run(when, req.user.id, hash);
+  }
+
+  // If EVERY id was unresolvable, return 70 Not Found. A mixed batch
+  // still returns ok — clients get the successfully-recorded ones.
+  if (anyMissing && songIds.every(id => !trackFileHash(id))) {
+    return SubErr.NOT_FOUND(req, res, 'Song');
+  }
   sendOk(req, res);
 }
 
@@ -943,7 +993,9 @@ export function setRating(req, res) {
   if (!parsed) { return SubErr.MISSING_PARAM(req, res, 'id'); }
   const rating = parseInt(req.query.rating, 10);
   if (!Number.isFinite(rating) || rating < 0 || rating > 5) {
-    return SubErr.GENERIC(req, res, 'rating must be 0..5');
+    // Subsonic spec says rating must be 0..5; a value outside that range
+    // is a missing/invalid parameter (code 10) rather than a server error (0).
+    return SubErr.GENERIC_CODE(req, res, 10, 'rating must be 0..5');
   }
   const hash = trackFileHash(parsed.id);
   if (!hash) { return SubErr.NOT_FOUND(req, res, 'Song'); }
@@ -958,6 +1010,7 @@ function starredSongRows(req) {
     SELECT t.id, t.filepath, t.title, t.track_number, t.disc_number, t.duration,
            t.format, t.file_size, t.bitrate, t.year, t.genre, t.album_art_file,
            t.created_at, t.library_id,
+           t.replaygain_track_db, t.sample_rate, t.channels, t.bit_depth,
            a.id AS artist_id, a.name AS artist_name,
            al.id AS album_id, al.name AS album_name
     FROM tracks t
@@ -1169,6 +1222,7 @@ export function getRandomSongs(req, res) {
     SELECT t.id, t.filepath, t.title, t.track_number, t.disc_number, t.duration,
            t.format, t.file_size, t.bitrate, t.year, t.genre, t.album_art_file,
            t.created_at, t.library_id,
+           t.replaygain_track_db, t.sample_rate, t.channels, t.bit_depth,
            a.id AS artist_id, a.name AS artist_name,
            al.id AS album_id, al.name AS album_name
     FROM tracks t
@@ -1200,6 +1254,7 @@ export function getSongsByGenre(req, res) {
     SELECT t.id, t.filepath, t.title, t.track_number, t.disc_number, t.duration,
            t.format, t.file_size, t.bitrate, t.year, t.genre, t.album_art_file,
            t.created_at, t.library_id,
+           t.replaygain_track_db, t.sample_rate, t.channels, t.bit_depth,
            a.id AS artist_id, a.name AS artist_name,
            al.id AS album_id, al.name AS album_name
     FROM tracks t
@@ -1228,9 +1283,11 @@ function filepathForSong(trackId) {
   return row ? `${row.vpath}/${row.rel}` : null;
 }
 
+// Fetch a single playlist. Visibility: the owner always sees it;
+// other users only see playlists flagged public (added in V15).
 function playlistMeta(playlistId, userId) {
   return db.getDB().prepare(`
-    SELECT p.id, p.name, p.created_at, p.user_id, u.username,
+    SELECT p.id, p.name, p.created_at, p.user_id, p.public, u.username,
            (SELECT COUNT(*) FROM playlist_tracks WHERE playlist_id = p.id) AS songCount,
            (SELECT COALESCE(SUM(t.duration), 0) FROM playlist_tracks pt
               JOIN libraries l ON l.name =
@@ -1243,7 +1300,7 @@ function playlistMeta(playlistId, userId) {
                      ELSE '' END
               WHERE pt.playlist_id = p.id) AS duration
     FROM playlists p JOIN users u ON u.id = p.user_id
-    WHERE p.id = ? AND p.user_id = ?
+    WHERE p.id = ? AND (p.user_id = ? OR p.public = 1)
   `).get(playlistId, userId);
 }
 
@@ -1252,7 +1309,7 @@ function playlistSummary(row) {
     id:        `pl-${row.id}`,
     name:      row.name,
     owner:     row.username,
-    public:    false, // mStream has no public-flag concept yet
+    public:    !!row.public,
     songCount: row.songCount,
     duration:  Math.round(row.duration || 0),
     created:   isoUtc(row.created_at),
@@ -1267,12 +1324,15 @@ function decodePlaylistId(raw) {
 }
 
 export function getPlaylists(req, res) {
+  // Show the caller's own playlists plus any playlist flagged public.
+  // Subsonic's semantics are user-global for public, so every user sees
+  // every public playlist regardless of owner.
   const rows = db.getDB().prepare(`
-    SELECT p.id, p.name, p.created_at, p.user_id, u.username,
+    SELECT p.id, p.name, p.created_at, p.user_id, p.public, u.username,
            (SELECT COUNT(*) FROM playlist_tracks WHERE playlist_id = p.id) AS songCount,
            0 AS duration
     FROM playlists p JOIN users u ON u.id = p.user_id
-    WHERE p.user_id = ?
+    WHERE p.user_id = ? OR p.public = 1
     ORDER BY p.name COLLATE NOCASE
   `).all(req.user.id);
   sendOk(req, res, { playlists: { playlist: rows.map(playlistSummary) } });
@@ -1289,6 +1349,7 @@ export function getPlaylist(req, res) {
     SELECT t.id, t.filepath, t.title, t.track_number, t.disc_number, t.duration,
            t.format, t.file_size, t.bitrate, t.year, t.genre, t.album_art_file,
            t.created_at, t.library_id,
+           t.replaygain_track_db, t.sample_rate, t.channels, t.bit_depth,
            a.id AS artist_id, a.name AS artist_name,
            al.id AS album_id, al.name AS album_name
     FROM playlist_tracks pt
@@ -1331,8 +1392,11 @@ export function createPlaylist(req, res) {
 
   if (updatePlaylistId != null) {
     // Subsonic overloads createPlaylist: passing playlistId replaces contents.
+    // Only the owner can mutate — public-playlist visibility (V15) doesn't
+    // grant edit rights.
     const meta = playlistMeta(updatePlaylistId, req.user.id);
     if (!meta) { return SubErr.NOT_FOUND(req, res, 'Playlist'); }
+    if (meta.user_id !== req.user.id) { return SubErr.NOT_AUTHORIZED(req, res); }
     d.prepare('DELETE FROM playlist_tracks WHERE playlist_id = ?').run(updatePlaylistId);
     addSongsToPlaylist(updatePlaylistId, songIds, 0);
     if (name) { d.prepare('UPDATE playlists SET name = ? WHERE id = ?').run(name, updatePlaylistId); }
@@ -1351,10 +1415,17 @@ export function updatePlaylist(req, res) {
   if (id == null) { return SubErr.MISSING_PARAM(req, res, 'playlistId'); }
   const meta = playlistMeta(id, req.user.id);
   if (!meta) { return SubErr.NOT_FOUND(req, res, 'Playlist'); }
+  // Public visibility doesn't grant edit rights — only the owner can mutate.
+  if (meta.user_id !== req.user.id) { return SubErr.NOT_AUTHORIZED(req, res); }
 
   const d = db.getDB();
   if (req.query.name) { d.prepare('UPDATE playlists SET name = ? WHERE id = ?').run(String(req.query.name), id); }
-  // `public` and `comment` are accepted but ignored (no schema for them yet).
+  // V15 added the `public` column — honour the flag. Subsonic `comment`
+  // is still accepted but dropped (no column for it).
+  if ('public' in req.query) {
+    const pub = req.query.public === 'true' ? 1 : 0;
+    d.prepare('UPDATE playlists SET public = ? WHERE id = ?').run(pub, id);
+  }
 
   // Remove entries by zero-based index (into current sorted position list).
   const removeIdx = arrayParam(req.query.songIndexToRemove).map(v => parseInt(v, 10)).filter(Number.isFinite);
@@ -1392,14 +1463,28 @@ export function deletePlaylist(req, res) {
 // across phases. Each entry is { name, versions: [numbers] }.
 
 const OPENSUBSONIC_EXTENSIONS = [
-  { name: 'formPost',          versions: [1] },    // POST bodies accepted on every endpoint
-  { name: 'apiKeyAuthentication', versions: [1] }, // `apiKey=` auth
-  { name: 'transcodeOffset',   versions: [1] },    // `timeOffset` supported on stream
-  { name: 'httpHeaders',       versions: [1] },    // HEAD + Content-Length estimate
+  { name: 'formPost',             versions: [1] },  // POST bodies accepted on every endpoint
+  { name: 'apiKeyAuthentication', versions: [1] },  // `apiKey=` auth
+  { name: 'transcodeOffset',      versions: [1] },  // `timeOffset` supported on stream
+  { name: 'httpHeaders',          versions: [1] },  // HEAD + Content-Length estimate
+  { name: 'tokenInfo',            versions: [1] },  // tokenInfo endpoint (validates API key)
 ];
 
 export function getOpenSubsonicExtensions(req, res) {
   sendOk(req, res, { openSubsonicExtensions: OPENSUBSONIC_EXTENSIONS });
+}
+
+// OpenSubsonic `tokenInfo`: clients use this to validate their API key
+// and discover which user they're authenticated as without having to
+// make a full getUser round-trip. Hit by the subsonicAuth middleware
+// before we get here, so `req.user` is already populated — all we do
+// is echo the identity + timestamps.
+export function tokenInfo(req, res) {
+  sendOk(req, res, {
+    tokenInfo: {
+      username: req.user.username,
+    },
+  });
 }
 
 // ── Phase 3: User management ───────────────────────────────────────────────
@@ -1522,7 +1607,10 @@ export async function deleteUser(req, res) {
   const username = String(req.query.username || '').trim();
   if (!username) { return SubErr.MISSING_PARAM(req, res, 'username'); }
   if (username === req.user.username) {
-    return SubErr.GENERIC(req, res, 'Cannot delete the currently authenticated user.');
+    // Self-deletion isn't a supported operation — use code 50 (not
+    // authorized for this operation) rather than a generic server error.
+    return SubErr.GENERIC_CODE(req, res, 50,
+      'Cannot delete the currently authenticated user.');
   }
   try {
     await adminUtil.deleteUser(username);
@@ -1564,6 +1652,7 @@ function songQueryBase() {
     SELECT t.id, t.filepath, t.title, t.track_number, t.disc_number, t.duration,
            t.format, t.file_size, t.bitrate, t.year, t.genre, t.album_art_file,
            t.created_at, t.library_id,
+           t.replaygain_track_db, t.sample_rate, t.channels, t.bit_depth,
            a.id AS artist_id, a.name AS artist_name,
            al.id AS album_id, al.name AS album_name
     FROM tracks t
@@ -1827,6 +1916,7 @@ function shareRowToPayload(row, sharePrefix) {
     SELECT t.id, t.filepath, t.title, t.track_number, t.disc_number, t.duration,
            t.format, t.file_size, t.bitrate, t.year, t.genre, t.album_art_file,
            t.created_at, t.library_id,
+           t.replaygain_track_db, t.sample_rate, t.channels, t.bit_depth,
            a.id AS artist_id, a.name AS artist_name,
            al.id AS album_id, al.name AS album_name
     FROM tracks t
@@ -1865,7 +1955,7 @@ function shareUrlPrefix(req) {
 export function getShares(req, res) {
   const rows = db.getDB().prepare(`
     SELECT s.id, s.share_id, s.playlist_json, s.user_id, s.expires, s.created_at,
-           u.username
+           s.description, u.username
     FROM shared_playlists s
     LEFT JOIN users u ON u.id = s.user_id
     ${req.user.admin ? '' : 'WHERE s.user_id = ?'}
@@ -1874,7 +1964,7 @@ export function getShares(req, res) {
 
   const prefix = shareUrlPrefix(req);
   sendOk(req, res, {
-    shares: { share: rows.map(r => shareRowToPayload({ ...r, description: null }, prefix)) },
+    shares: { share: rows.map(r => shareRowToPayload(r, prefix)) },
   });
 }
 
@@ -1885,13 +1975,17 @@ export function createShare(req, res) {
   const filepaths = songIds.map(id => filepathForSong(id)).filter(Boolean);
   if (!filepaths.length) { return SubErr.NOT_FOUND(req, res, 'Song'); }
 
-  const shareId = nanoid(10);
-  // Subsonic sends `expires` as ms-since-epoch; mStream stores seconds-since-
-  // epoch in shared_playlists.expires. Derive JWT options from the same value
-  // so the JWT expiry and DB expiry agree.
+  // Subsonic sends `expires` as ms-since-epoch. Reject past timestamps —
+  // an already-expired share is a client bug we'd rather surface than
+  // silently store. Null/missing/zero = no expiry.
   const expiresMs = parseInt(req.query.expires, 10);
+  if (Number.isFinite(expiresMs) && expiresMs > 0 && expiresMs <= Date.now()) {
+    return SubErr.GENERIC_CODE(req, res, 10, '`expires` must be in the future');
+  }
   const hasExpiry = Number.isFinite(expiresMs) && expiresMs > Date.now();
   const expires = hasExpiry ? Math.floor(expiresMs / 1000) : null;
+  const description = req.query.description ? String(req.query.description) : null;
+  const shareId = nanoid(10);
 
   // The webapp share-viewer (src/api/shared.js) verifies this JWT on every
   // lookup — an empty string here would throw "jwt must be provided" and
@@ -1908,16 +2002,16 @@ export function createShare(req, res) {
   const token = jwt.sign(tokenData, config.program.secret, jwtOptions);
 
   db.getDB().prepare(`
-    INSERT INTO shared_playlists (share_id, playlist_json, user_id, expires, token)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(shareId, JSON.stringify(filepaths), req.user.id, expires, token);
+    INSERT INTO shared_playlists (share_id, playlist_json, user_id, expires, token, description)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(shareId, JSON.stringify(filepaths), req.user.id, expires, token, description);
 
   const row = db.getDB().prepare(`
     SELECT s.*, u.username FROM shared_playlists s
     LEFT JOIN users u ON u.id = s.user_id WHERE s.share_id = ?
   `).get(shareId);
   sendOk(req, res, {
-    shares: { share: [shareRowToPayload({ ...row, description: req.query.description || null }, shareUrlPrefix(req))] },
+    shares: { share: [shareRowToPayload(row, shareUrlPrefix(req))] },
   });
 }
 
@@ -1930,13 +2024,18 @@ export function updateShare(req, res) {
   if (!row) { return SubErr.NOT_FOUND(req, res, 'Share'); }
   if (row.user_id !== req.user.id && !req.user.admin) { return SubErr.NOT_AUTHORIZED(req, res); }
 
-  // Only `expires` is persistable — mStream's schema doesn't store a
-  // description column. We accept `description` silently so clients don't
-  // error out, but it won't round-trip.
   if ('expires' in req.query) {
     const ms = parseInt(req.query.expires, 10);
+    if (Number.isFinite(ms) && ms > 0 && ms <= Date.now()) {
+      return SubErr.GENERIC_CODE(req, res, 10, '`expires` must be in the future');
+    }
     const expires = Number.isFinite(ms) && ms > 0 ? Math.floor(ms / 1000) : null;
     db.getDB().prepare('UPDATE shared_playlists SET expires = ? WHERE share_id = ?').run(expires, shareId);
+  }
+  // V15 added the `description` column — persist what the client sent.
+  if ('description' in req.query) {
+    const desc = req.query.description === '' ? null : String(req.query.description);
+    db.getDB().prepare('UPDATE shared_playlists SET description = ? WHERE share_id = ?').run(desc, shareId);
   }
   sendOk(req, res);
 }
@@ -2063,6 +2162,7 @@ export function getPlayQueue(req, res) {
     SELECT t.id, t.filepath, t.title, t.track_number, t.disc_number, t.duration,
            t.format, t.file_size, t.bitrate, t.year, t.genre, t.album_art_file,
            t.created_at, t.library_id, t.file_hash, t.audio_hash,
+           t.replaygain_track_db, t.sample_rate, t.channels, t.bit_depth,
            a.id AS artist_id, a.name AS artist_name,
            al.id AS album_id, al.name AS album_name
     FROM tracks t
@@ -2204,6 +2304,7 @@ function queueToSongEntries(req, queueVpaths) {
     SELECT t.id, t.filepath, t.title, t.track_number, t.disc_number, t.duration,
            t.format, t.file_size, t.bitrate, t.year, t.genre, t.album_art_file,
            t.created_at, t.library_id,
+           t.replaygain_track_db, t.sample_rate, t.channels, t.bit_depth,
            a.id AS artist_id, a.name AS artist_name,
            al.id AS album_id, al.name AS album_name
     FROM tracks t
@@ -2325,7 +2426,8 @@ export async function jukeboxControl(req, res) {
   if (action === 'setGain') {
     const gain = parseFloat(req.query.gain);
     if (!Number.isFinite(gain) || gain < 0 || gain > 1) {
-      return SubErr.GENERIC(req, res, 'gain must be between 0.0 and 1.0');
+      // Invalid parameter value — surface as code 10 (missing/invalid param).
+      return SubErr.GENERIC_CODE(req, res, 10, 'gain must be between 0.0 and 1.0');
     }
     const r = await proxyOrFail(req, res, 'POST', '/volume', { volume: gain });
     if (!r) { return; }
@@ -2342,7 +2444,9 @@ export async function jukeboxControl(req, res) {
     return sendJukeboxPlaylist(req, res);
   }
 
-  return SubErr.GENERIC(req, res, `Unknown jukebox action: ${action}`);
+  // Unknown `action=` — treat as invalid parameter (code 10) rather than
+  // a generic server error.
+  return SubErr.GENERIC_CODE(req, res, 10, `Unknown jukebox action: ${action}`);
 }
 
 async function sendJukeboxStatus(req, res) {

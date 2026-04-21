@@ -83,8 +83,8 @@ const stmts = {
   insertTrack: db.prepare(
     `INSERT OR REPLACE INTO tracks (filepath, library_id, title, artist_id, album_id, track_number,
      disc_number, year, duration, format, file_hash, audio_hash, album_art_file, genre,
-     replaygain_track_db, modified, scan_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     replaygain_track_db, sample_rate, channels, bit_depth, modified, scan_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ),
   deleteOldTracks: db.prepare(
     'DELETE FROM tracks WHERE library_id = ? AND scan_id != ?'
@@ -254,9 +254,17 @@ async function parseMyFile(absolutePath, modified) {
     const parsed = await parseFile(absolutePath, { skipCovers: loadJson.skipImg });
     songInfo = parsed.common;
     songInfo.duration = parsed.format?.duration || null;
+    // OpenSubsonic extended audio-format fields. music-metadata exposes
+    // these as part of parsed.format — store what's available; missing
+    // values stay NULL and clients just don't render the corresponding
+    // quality badge.
+    songInfo.sampleRate = Number.isFinite(parsed.format?.sampleRate) ? parsed.format.sampleRate : null;
+    songInfo.channels   = Number.isFinite(parsed.format?.numberOfChannels) ? parsed.format.numberOfChannels : null;
+    songInfo.bitDepth   = Number.isFinite(parsed.format?.bitsPerSample) ? parsed.format.bitsPerSample : null;
   } catch (err) {
     console.error(`Warning: metadata parse error on ${absolutePath}: ${err.message}`);
-    songInfo = { track: { no: null, of: null }, disk: { no: null, of: null }, duration: null };
+    songInfo = { track: { no: null, of: null }, disk: { no: null, of: null }, duration: null,
+                 sampleRate: null, channels: null, bitDepth: null };
   }
 
   songInfo.modified = modified;
@@ -302,6 +310,9 @@ function insertTrack(song) {
     song.aaFile || null,
     song.genre || null,
     song.replaygain_track_gain?.dB || null,
+    song.sampleRate || null,
+    song.channels || null,
+    song.bitDepth || null,
     song.modified,
     loadJson.scanId
   );

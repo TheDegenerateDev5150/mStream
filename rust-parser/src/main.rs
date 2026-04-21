@@ -264,6 +264,11 @@ fn process_one(
     let mut rg_track_db: Option<f64> = None;
     let mut aa_file: Option<String> = None;
     let mut duration_sec: Option<f64> = None;
+    // OpenSubsonic extended audio-format fields. Populated from lofty's
+    // audio properties below; NULL when unavailable.
+    let mut sample_rate: Option<i64> = None;
+    let mut channels: Option<i64> = None;
+    let mut bit_depth: Option<i64> = None;
 
     // Use Relaxed parsing so malformed frames (e.g. odd-length UTF-16 strings,
     // invalid year lengths) get dropped individually instead of failing the
@@ -272,11 +277,17 @@ fn process_one(
     let parse_opts = ParseOptions::new().parsing_mode(ParsingMode::Relaxed);
     match Probe::open(filepath).and_then(|p| p.options(parse_opts).read()) {
         Ok(tagged_file) => {
-            // Get duration from audio properties
-            let dur = tagged_file.properties().duration();
+            // Get duration + extended audio properties.
+            let props = tagged_file.properties();
+            let dur = props.duration();
             if !dur.is_zero() {
                 duration_sec = Some(dur.as_secs_f64());
             }
+            if let Some(sr) = props.sample_rate() { sample_rate = Some(sr as i64); }
+            if let Some(ch) = props.channels() {
+                if ch > 0 { channels = Some(ch as i64); }
+            }
+            if let Some(bd) = props.bit_depth() { bit_depth = Some(bd as i64); }
 
             let tag = tagged_file.primary_tag().or_else(|| tagged_file.first_tag());
             if let Some(tag) = tag {
@@ -331,12 +342,13 @@ fn process_one(
     conn.execute(
         "INSERT OR REPLACE INTO tracks (filepath, library_id, title, artist_id, album_id, track_number,
          disc_number, year, duration, format, file_hash, audio_hash, album_art_file, genre,
-         replaygain_track_db, modified, scan_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         replaygain_track_db, sample_rate, channels, bit_depth, modified, scan_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rusqlite::params![
             rel_path, config.library_id, title, artist_id, album_id,
             track_num, disc_num, year, duration_sec, ext, hash, audio_hash,
-            aa_file, genre, rg_track_db, mod_time, config.scan_id
+            aa_file, genre, rg_track_db, sample_rate, channels, bit_depth,
+            mod_time, config.scan_id
         ],
     )?;
 

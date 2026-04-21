@@ -137,4 +137,9 @@ export const SubErr = {
   NOT_AUTHORIZED:  (req, res) => sendError(req, res, 50, 'User is not authorized for the given operation.'),
   NOT_FOUND:       (req, res, what = 'Requested data') => sendError(req, res, 70, `${what} not found.`),
   GENERIC:         (req, res, msg = 'A generic error occurred.') => sendError(req, res, 0, msg),
+  // GENERIC_CODE: emit a specific Subsonic error code with a custom
+  // message — for paths where we want a spec-defined code (e.g. 10
+  // "missing parameter" with richer wording than SubErr.MISSING_PARAM)
+  // without adding a new top-level shortcut.
+  GENERIC_CODE:    (req, res, code, msg) => sendError(req, res, code, msg),
 };

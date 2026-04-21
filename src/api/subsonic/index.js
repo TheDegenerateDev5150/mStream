@@ -26,6 +26,7 @@ const METHODS = {
   getLicense:        H.getLicense,
   getMusicFolders:   H.getMusicFolders,
   getOpenSubsonicExtensions: H.getOpenSubsonicExtensions,
+  tokenInfo:                 H.tokenInfo,
 
   // Browsing
   getIndexes:        H.getIndexes,
