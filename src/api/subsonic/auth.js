@@ -92,6 +92,14 @@ export async function subsonicAuth(req, res, next) {
 
   // 2. Token auth — not supported (server-side plaintext not available).
   if (q.t && q.s) {
+    // Record the attempt so the admin panel can surface "this user's
+    // client is trying token auth; mint them an API key" warnings.
+    recordTokenAuthAttempt({
+      username: q.u ? String(q.u) : null,
+      client:   q.c ? String(q.c) : null,
+      at:       Date.now(),
+      ua:       req.get?.('user-agent') || null,
+    });
     return SubErr.TOKEN_UNSUPPORTED(req, res);
   }
 
@@ -111,6 +119,37 @@ export async function subsonicAuth(req, res, next) {
   }
 
   return SubErr.MISSING_PARAM(req, res, 'u/p or apiKey');
+}
+
+// ── Token-auth attempt ring buffer ─────────────────────────────────────────
+//
+// Real-world Subsonic clients often default to token auth (md5(password +
+// salt) + salt). mStream can't support that — we store PBKDF2 hashes, not
+// the plaintext needed to compute the server-side digest. We reject with
+// error 41, but users whose clients silently retry with token-only auth
+// get a confusing "invalid credentials" loop with no guidance.
+//
+// Log each attempt in a small ring buffer so the admin panel can show
+// "these users tried token auth recently — mint them an API key so their
+// client starts working." Process-local; not persisted across restarts.
+
+const TOKEN_ATTEMPT_LIMIT = 50;
+const tokenAuthAttempts = [];
+
+function recordTokenAuthAttempt(entry) {
+  tokenAuthAttempts.push(entry);
+  if (tokenAuthAttempts.length > TOKEN_ATTEMPT_LIMIT) {
+    tokenAuthAttempts.shift();
+  }
+}
+
+export function listTokenAuthAttempts() {
+  // Return most-recent first. Copy the array so callers can't mutate.
+  return tokenAuthAttempts.slice().reverse();
+}
+
+export function clearTokenAuthAttempts() {
+  tokenAuthAttempts.length = 0;
 }
 
 // ── API key helpers (used by admin endpoints) ───────────────────────────────

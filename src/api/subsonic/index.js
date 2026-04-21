@@ -18,7 +18,8 @@ import { SubErr } from './response.js';
 import * as H from './handlers.js';
 
 // Map Subsonic method names to handler functions. Keep this flat — adding a
-// new endpoint is a one-line change.
+// new endpoint is a one-line change. Exported (via `listImplementedMethods`)
+// for the admin-panel "X of Y implemented" card.
 const METHODS = {
   // System
   ping:              H.ping,
@@ -106,6 +107,14 @@ const METHODS = {
   getLyricsBySongId: H.getLyricsBySongId,
   jukeboxControl:    H.jukeboxControl,
 };
+
+// Names of every implemented Subsonic method. Used by the admin panel
+// to show "N methods implemented" and by docs/tests that enumerate the
+// server surface. Sorted so the list is stable regardless of object
+// literal iteration order.
+export function listImplementedMethods() {
+  return Object.keys(METHODS).sort();
+}
 
 export function setup(mstream) {
   // Single handler for both `/rest/:method` and `/rest/:method.view`. We
