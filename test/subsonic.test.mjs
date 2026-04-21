@@ -155,7 +155,9 @@ describe('System endpoints', () => {
     const env = await call('ping');
     assert.equal(env.status, 'ok');
     assert.equal(env.version, '1.16.1');
-    assert.equal(env.serverVersion, '6.3.0');
+    // serverVersion echoes package.json — don't hard-code so a version
+    // bump in master (or here) doesn't break this test.
+    assert.match(env.serverVersion, /^\d+\.\d+\.\d+/);
   });
 
   test('getLicense returns valid=true', async () => {
