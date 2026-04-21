@@ -1,0 +1,4331 @@
+openapi: 3.0.3
+info:
+  title: mStream API
+  version: "1"
+  description: |
+    REST API for the [mStream](https://github.com/IrosTheBeggar/mStream) music streaming server.
+
+    ## Authentication
+
+    Most endpoints require a JWT bearer token. Tokens are issued by `POST /api/v1/auth/login` and
+    can be supplied via any of (checked in order):
+
+    1. Request body field `token`
+    2. Query parameter `token`
+    3. HTTP header `x-access-token`
+    4. Cookie `x-access-token`
+
+    ### Public mode
+
+    If no users exist in the database, all requests are authenticated as a virtual public user with
+    full library access — no token required. This is the default for fresh installs.
+
+    ### Special tokens
+
+    - **Admin tokens** have `admin: true` in the payload and are required for every `/api/v1/admin/*` endpoint.
+    - **Jukebox tokens** (`jukebox: true`) are short-lived and bound to an active remote-control session.
+    - **Shared-playlist tokens** (`shareToken: true`) restrict file access to the tracks in one specific shared playlist.
+    - **Federation invite tokens** (`invite: true`) can only call `POST /api/v1/federation/invite/exchange`.
+
+    ## Errors
+
+    Errors use the shape `{ "error": "<message>" }`. Status codes:
+
+    | Code | Meaning |
+    |------|---------|
+    | 400  | Bad request (invalid input) |
+    | 401  | Unauthenticated |
+    | 403  | Forbidden (Joi validation error, missing permission) |
+    | 404  | Resource not found |
+    | 405  | Admin API locked |
+    | 500  | Server error |
+    | 503  | External dependency unavailable (ffmpeg, rust audio server) |
+
+    ## Virtual paths (vpaths)
+
+    Libraries are mounted under named vpaths (e.g. `music`, `audiobooks`). Filepaths in request/response
+    bodies are `<vpath>/<relative/path/within/library>`. The server translates these to absolute paths
+    internally and enforces per-user library access on every request.
+  license:
+    name: GPL-3.0
+    url: https://www.gnu.org/licenses/gpl-3.0.en.html
+
+servers:
+  - url: http://localhost:3000
+    description: Default local server
+  - url: "{scheme}://{host}:{port}"
+    description: Self-hosted instance
+    variables:
+      scheme:
+        enum: [http, https]
+        default: http
+      host:
+        default: localhost
+      port:
+        default: "3000"
+
+tags:
+  - name: Auth
+    description: Login and token issuance.
+  - name: System
+    description: Server bootstrap, API discovery.
+  - name: Library
+    description: Artists, albums, genres, tracks — browsing the music database.
+  - name: Search
+    description: Full-text search across the library.
+  - name: Stats
+    description: Play counts, ratings, recently-played, Wrapped.
+  - name: Playlists
+    description: Saved playlists (create, load, modify).
+  - name: Smart Playlists
+    description: Rule-based dynamic playlists (Velvet UI).
+  - name: Shared Playlists
+    description: Public shareable playlist links.
+  - name: File Explorer
+    description: Directory browsing, upload, M3U parsing.
+  - name: Download
+    description: Multi-file ZIP downloads.
+  - name: Transcode
+    description: On-the-fly audio transcoding via ffmpeg.
+  - name: Album Art
+    description: Album art search, upload, serving.
+  - name: Waveform
+    description: Per-track waveform data for the progress bar.
+  - name: Cue Points
+    description: Bookmarks/markers within tracks.
+  - name: User Settings
+    description: Client-persisted preferences and queue state.
+  - name: Scrobbler - Last.fm
+    description: Last.fm scrobbling integration.
+  - name: Scrobbler - ListenBrainz
+    description: ListenBrainz scrobbling integration.
+  - name: Discogs
+    description: Discogs lookup for album art and metadata.
+  - name: Server Playback
+    description: Proxy to the bundled Rust audio player.
+  - name: Jukebox
+    description: Remote-control mode via WebSocket-backed REST.
+  - name: YouTube DL
+    description: Download YouTube audio into the library.
+  - name: Admin - Config
+    description: Server-level settings (address, port, UI, secret).
+  - name: Admin - Scanner
+    description: Scanner parameters and manual scan triggers.
+  - name: Admin - Users
+    description: User CRUD and permission management.
+  - name: Admin - Libraries
+    description: Library (vpath) CRUD.
+  - name: Admin - Transcode
+    description: Transcode defaults and ffmpeg setup.
+  - name: Admin - DLNA
+    description: DLNA server configuration.
+  - name: Admin - SSL
+    description: SSL certificate management.
+  - name: Admin - Logs
+    description: Server log download.
+  - name: Admin - Discogs
+    description: Discogs API credentials.
+  - name: Admin - Shared
+    description: Shared-playlist administration.
+  - name: Admin - File Explorer
+    description: Unrestricted filesystem browsing (admin only).
+  - name: Federation
+    description: Mesh-sync between mStream instances via Syncthing.
+
+security:
+  - bearerAuth: []
+  - cookieAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Pass the JWT in the `x-access-token` header. Despite the OpenAPI "bearer" label,
+        the value does NOT include a `Bearer ` prefix — it's the raw token.
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: x-access-token
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable error message.
+      example:
+        error: Authentication Error
+
+    Empty:
+      type: object
+      description: Empty success response — the operation completed with no additional data.
+      example: {}
+
+    Metadata:
+      type: object
+      description: Shared track metadata shape used across nearly every library endpoint.
+      properties:
+        filepath:
+          type: string
+          description: Virtual path (`<vpath>/<rel>`).
+        metadata:
+          type: object
+          properties:
+            title:
+              type: string
+              nullable: true
+            artist:
+              type: string
+              nullable: true
+            album:
+              type: string
+              nullable: true
+            track:
+              type: integer
+              nullable: true
+            disk:
+              type: integer
+              nullable: true
+            year:
+              type: integer
+              nullable: true
+            hash:
+              type: string
+              nullable: true
+              description: Content hash (used as a stable ID across re-scans).
+            album-art:
+              type: string
+              nullable: true
+              description: Filename in the album-art cache directory. Serve via `GET /album-art/{file}`.
+            rating:
+              type: integer
+              minimum: 0
+              maximum: 10
+              nullable: true
+            play-count:
+              type: integer
+              nullable: true
+            last-played:
+              type: string
+              format: date-time
+              nullable: true
+            replaygain-track:
+              type: number
+              nullable: true
+              description: Track-level ReplayGain adjustment in dB.
+
+    Album:
+      type: object
+      properties:
+        name:
+          type: string
+        artist:
+          type: string
+          nullable: true
+        year:
+          type: integer
+          nullable: true
+        album_art_file:
+          type: string
+          nullable: true
+
+    Library:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+          description: Virtual path (vpath).
+        root_path:
+          type: string
+          description: Absolute filesystem path.
+        type:
+          type: string
+          enum: [music, audio-books]
+
+    User:
+      type: object
+      properties:
+        admin:
+          type: boolean
+        vpaths:
+          type: array
+          items:
+            type: string
+        allowMkdir:
+          type: boolean
+        allowUpload:
+          type: boolean
+        allowFileModify:
+          type: boolean
+
+    IgnoreVPaths:
+      type: object
+      properties:
+        ignoreVPaths:
+          type: array
+          items:
+            type: string
+          description: Libraries (vpaths) to exclude from the query.
+
+    ScanOptions:
+      type: object
+      properties:
+        skipImg:
+          type: boolean
+        scanInterval:
+          type: number
+        bootScanDelay:
+          type: number
+        maxConcurrentTasks:
+          type: integer
+        compressImage:
+          type: boolean
+        scanCommitInterval:
+          type: integer
+        autoAlbumArt:
+          type: boolean
+        albumArtWriteToFolder:
+          type: boolean
+        albumArtWriteToFile:
+          type: boolean
+        albumArtServices:
+          type: array
+          items:
+            type: string
+            enum: [musicbrainz, itunes, deezer]
+
+  responses:
+    EmptySuccess:
+      description: Operation succeeded.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Empty" }
+    Unauthorized:
+      description: Auth required or token invalid.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: Validation error or permission denied.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    AdminLocked:
+      description: Admin API disabled (either by configuration or because the user is not an admin).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ServerError:
+      description: Server error.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+paths:
+
+  # ── System ───────────────────────────────────────────────────────────────
+
+  /:
+    get:
+      tags: [System]
+      summary: Main webapp
+      description: Serves the main webapp HTML. Redirects to `/login` if users exist and the request is unauthenticated.
+      security: []
+      responses:
+        "200":
+          description: HTML page.
+          content:
+            text/html:
+              schema: { type: string }
+
+  /admin:
+    get:
+      tags: [System]
+      summary: Admin panel webapp
+      description: Serves the admin panel HTML. Access-controlled the same way as `/`.
+      security: []
+      responses:
+        "200":
+          description: HTML page.
+          content:
+            text/html:
+              schema: { type: string }
+
+  /api:
+    get:
+      tags: [System]
+      summary: API version discovery
+      description: Returns the server version and the list of available API versions.
+      security: []
+      responses:
+        "200":
+          description: Version info.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  server:
+                    type: string
+                    description: Server version (from package.json).
+                  apiVersions:
+                    type: array
+                    items: { type: string }
+              example:
+                server: "6.4.2"
+                apiVersions: ["1"]
+
+  /api/v1/ping:
+    get:
+      tags: [System]
+      summary: Bootstrap payload
+      description: |
+        Returns everything the webapp needs on load: the user's libraries, their playlists,
+        transcode capabilities, and server-level flags. Called once after login.
+      responses:
+        "200":
+          description: Bootstrap info.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  vpaths:
+                    type: array
+                    items: { type: string }
+                  playlists:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                  transcode:
+                    oneOf:
+                      - type: boolean
+                        enum: [false]
+                      - type: object
+                        properties:
+                          defaultCodec: { type: string }
+                          defaultBitrate: { type: string }
+                  noMkdir: { type: boolean }
+                  noUpload: { type: boolean }
+                  noFileModify: { type: boolean }
+                  supportedAudioFiles:
+                    type: object
+                    additionalProperties: { type: boolean }
+                  vpathMetaData:
+                    type: object
+                    additionalProperties:
+                      type: object
+                      properties:
+                        type: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ── Auth ─────────────────────────────────────────────────────────────────
+
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in
+      description: |
+        Authenticates with username + password. On success returns a JWT token and sets it as
+        an `x-access-token` cookie with a 5-year max age. On failure, the response is delayed
+        by 800ms to slow down brute-force attempts.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string }
+      responses:
+        "200":
+          description: Authenticated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string, description: "JWT." }
+                  vpaths:
+                    type: array
+                    items: { type: string }
+        "401":
+          description: Login failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  # ── Library ──────────────────────────────────────────────────────────────
+
+  /api/v1/db/status:
+    get:
+      tags: [Library]
+      summary: Library status
+      description: Total track count across the user's accessible libraries and whether a scan is currently running.
+      responses:
+        "200":
+          description: Status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  totalFileCount: { type: integer }
+                  locked:
+                    type: boolean
+                    description: True while a scan is in progress.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/db/metadata:
+    post:
+      tags: [Library]
+      summary: Get metadata for a single track
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filepath]
+              properties:
+                filepath:
+                  type: string
+                  description: Virtual path.
+      responses:
+        "200":
+          description: Metadata for the requested file.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Metadata" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/db/metadata/batch:
+    post:
+      tags: [Library]
+      summary: Get metadata for multiple tracks
+      description: Request body is a bare JSON array of virtual paths.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { type: string }
+      responses:
+        "200":
+          description: Map of filepath → metadata.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: { $ref: "#/components/schemas/Metadata" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/db/artists:
+    get: &artistsOp
+      tags: [Library]
+      summary: List all artists
+      description: Unique artist names from the user's accessible libraries, case-insensitive sort.
+      responses:
+        "200":
+          description: Artists.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  artists:
+                    type: array
+                    items: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      <<: *artistsOp
+      requestBody:
+        description: Optional `ignoreVPaths` filter.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IgnoreVPaths" }
+
+  /api/v1/db/artists-albums:
+    post:
+      tags: [Library]
+      summary: List one artist's albums
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - type: object
+                  required: [artist]
+                  properties:
+                    artist: { type: string }
+                - { $ref: "#/components/schemas/IgnoreVPaths" }
+      responses:
+        "200":
+          description: Albums.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  albums:
+                    type: array
+                    items: { $ref: "#/components/schemas/Album" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/db/artists-albums-multi:
+    post:
+      tags: [Library]
+      summary: List albums across several artists
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [artists]
+              properties:
+                artists:
+                  type: array
+                  items: { type: string }
+      responses:
+        "200":
+          description: Albums.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  albums:
+                    type: array
+                    items: { $ref: "#/components/schemas/Album" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/db/albums:
+    get: &albumsOp
+      tags: [Library]
+      summary: List all albums
+      responses:
+        "200":
+          description: Albums.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  albums:
+                    type: array
+                    items: { $ref: "#/components/schemas/Album" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      <<: *albumsOp
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IgnoreVPaths" }
+
+  /api/v1/db/album-songs:
+    post:
+      tags: [Library]
+      summary: List tracks in an album
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - type: object
+                  required: [album]
+                  properties:
+                    album: { type: string }
+                    artist: { type: string }
+                    year: { type: integer }
+                - { $ref: "#/components/schemas/IgnoreVPaths" }
+      responses:
+        "200":
+          description: Tracks.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Metadata" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/db/genres:
+    get: &genresOp
+      tags: [Library]
+      summary: List all genres
+      responses:
+        "200":
+          description: Genres.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  genres:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        track_count: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      <<: *genresOp
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IgnoreVPaths" }
+
+  /api/v1/db/genre-songs:
+    post:
+      tags: [Library]
+      summary: List tracks in a genre
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - type: object
+                  required: [genre]
+                  properties:
+                    genre: { type: string }
+                - { $ref: "#/components/schemas/IgnoreVPaths" }
+      responses:
+        "200":
+          description: Tracks.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Metadata" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/db/genre-groups:
+    get:
+      tags: [Library]
+      summary: Genre groups (Velvet)
+      description: Alternative genre listing used by the Velvet UI.
+      responses:
+        "200":
+          description: Genres with counts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  genres:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        genre: { type: string }
+                        count: { type: integer }
+                  groups: { type: object, nullable: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/db/genre/albums:
+    post:
+      tags: [Library]
+      summary: Albums in a genre (Velvet)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [genre]
+              properties:
+                genre: { type: string }
+      responses:
+        "200":
+          description: Albums.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  albums:
+                    type: array
+                    items: { $ref: "#/components/schemas/Album" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/db/genre/songs:
+    post:
+      tags: [Library]
+      summary: Songs in a genre (Velvet)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [genre]
+              properties:
+                genre: { type: string }
+      responses:
+        "200":
+          description: Tracks.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Metadata" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/db/decades:
+    get:
+      tags: [Library]
+      summary: List decades (Velvet)
+      responses:
+        "200":
+          description: Decades with counts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  decades:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        decade: { type: integer }
+                        cnt: { type: integer }
+                        albums: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/db/decade/albums:
+    post:
+      tags: [Library]
+      summary: Albums in a decade (Velvet)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decade]
+              properties:
+                decade: { type: integer }
+      responses:
+        "200":
+          description: Albums.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  albums:
+                    type: array
+                    items: { $ref: "#/components/schemas/Album" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/db/decade/songs:
+    post:
+      tags: [Library]
+      summary: Songs in a decade (Velvet)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decade]
+              properties:
+                decade: { type: integer }
+      responses:
+        "200":
+          description: Tracks.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Metadata" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/db/songs-by-artists:
+    post:
+      tags: [Library]
+      summary: Random tracks by the given artists (Velvet)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [artists]
+              properties:
+                artists:
+                  type: array
+                  items: { type: string }
+                limit: { type: integer }
+      responses:
+        "200":
+          description: Tracks.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Metadata" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/db/random-songs:
+    post:
+      tags: [Library]
+      summary: Get a random song
+      description: Returns one random song, optionally filtered by rating. `ignoreList` tracks
+        already-seen IDs so the caller can deduplicate across repeated calls.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              allOf:
+                - type: object
+                  properties:
+                    minRating: { type: integer, minimum: 0, maximum: 10 }
+                    ignoreList:
+                      type: array
+                      items: { type: integer }
+                    ignorePercentage: { type: number }
+                - { $ref: "#/components/schemas/IgnoreVPaths" }
+      responses:
+        "200":
+          description: Random song.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  songs:
+                    type: array
+                    items: { $ref: "#/components/schemas/Metadata" }
+                  ignoreList:
+                    type: array
+                    items: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/albums/browse:
+    get:
+      tags: [Library]
+      summary: Browse all albums (Velvet)
+      responses:
+        "200":
+          description: Albums and series.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  albums:
+                    type: array
+                    items:
+                      allOf:
+                        - { $ref: "#/components/schemas/Album" }
+                        - type: object
+                          properties:
+                            id: { type: integer }
+                            track_count: { type: integer }
+                            displayName: { type: string }
+                  series:
+                    type: array
+                    items: { type: object }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/files/art:
+    get:
+      tags: [Library]
+      summary: Get the album art filename for a track
+      parameters:
+        - name: fp
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Album art filename.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  file:
+                    type: string
+                    description: Filename in the album-art cache (serve via `/album-art/{file}`).
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ── Search ───────────────────────────────────────────────────────────────
+
+  /api/v1/db/search:
+    post:
+      tags: [Search]
+      summary: Full-text search
+      description: Searches artist names, album names, track titles, and filepaths. Each category
+        returns up to 30 matches.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - type: object
+                  required: [search]
+                  properties:
+                    search: { type: string }
+                    noArtists: { type: boolean }
+                    noAlbums: { type: boolean }
+                    noTitles: { type: boolean }
+                    noFiles: { type: boolean }
+                - { $ref: "#/components/schemas/IgnoreVPaths" }
+      responses:
+        "200":
+          description: Search results.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  artists:
+                    type: array
+                    items: { type: string }
+                  albums:
+                    type: array
+                    items: { $ref: "#/components/schemas/Album" }
+                  title:
+                    type: array
+                    items: { $ref: "#/components/schemas/Metadata" }
+                  files:
+                    type: array
+                    items: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ── Stats ────────────────────────────────────────────────────────────────
+
+  /api/v1/db/rated:
+    get: &ratedOp
+      tags: [Stats]
+      summary: Get tracks the user has rated
+      description: Tracks rated > 0, sorted highest first.
+      responses:
+        "200":
+          description: Rated tracks.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Metadata" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      <<: *ratedOp
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IgnoreVPaths" }
+
+  /api/v1/db/rate-song:
+    post:
+      tags: [Stats]
+      summary: Rate a track
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filepath, rating]
+              properties:
+                filepath: { type: string }
+                rating:
+                  type: integer
+                  minimum: 0
+                  maximum: 10
+                  nullable: true
+                  description: 0–10, or `null` to clear the rating.
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/db/recent/added:
+    post:
+      tags: [Stats]
+      summary: Recently added tracks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - type: object
+                  required: [limit]
+                  properties:
+                    limit: { type: integer, minimum: 1 }
+                - { $ref: "#/components/schemas/IgnoreVPaths" }
+      responses:
+        "200":
+          description: Tracks.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Metadata" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/db/stats/recently-played:
+    post:
+      tags: [Stats]
+      summary: Recently played tracks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - type: object
+                  required: [limit]
+                  properties:
+                    limit: { type: integer, minimum: 1 }
+                - { $ref: "#/components/schemas/IgnoreVPaths" }
+      responses:
+        "200":
+          description: Tracks.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Metadata" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/db/stats/most-played:
+    post:
+      tags: [Stats]
+      summary: Most played tracks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - type: object
+                  required: [limit]
+                  properties:
+                    limit: { type: integer, minimum: 1 }
+                - { $ref: "#/components/schemas/IgnoreVPaths" }
+      responses:
+        "200":
+          description: Tracks.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Metadata" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/db/stats/log-play:
+    post:
+      tags: [Stats]
+      summary: Log a play
+      description: Increments play-count and updates last-played for a track.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filePath]
+              properties:
+                filePath: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/db/stats/reset-play-counts:
+    post:
+      tags: [Stats]
+      summary: Reset play counts for all tracks
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/db/stats/reset-recently-played:
+    post:
+      tags: [Stats]
+      summary: Clear recently-played history
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/user/wrapped:
+    get:
+      tags: [Stats]
+      summary: Spotify-style Wrapped stats (Velvet)
+      description: Aggregated listening statistics for a period.
+      parameters:
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [weekly, monthly, quarterly, half-yearly, yearly]
+            default: monthly
+        - name: offset
+          in: query
+          description: 0 = current period, 1 = previous, etc.
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: Wrapped payload.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  period_label: { type: string }
+                  total_plays: { type: integer }
+                  total_listening_ms: { type: integer }
+                  unique_songs: { type: integer }
+                  pause_count: { type: integer }
+                  skip_rate: { type: number }
+                  library_coverage_pct: { type: number }
+                  completion_rate: { type: number }
+                  new_discoveries: { type: integer }
+                  top_songs:
+                    type: array
+                    items: { $ref: "#/components/schemas/Metadata" }
+                  top_artists:
+                    type: array
+                    items: { type: object }
+                  listening_by_hour:
+                    type: array
+                    items: { type: integer }
+                  listening_by_weekday:
+                    type: array
+                    items: { type: integer }
+                  top_listening_day: { type: string }
+                  personality: { type: string }
+                  longest_session: { type: integer }
+                  avg_session_length_ms: { type: number }
+                  fun_facts: { type: array, items: { type: string } }
+                  radio: { type: object }
+                  podcast: { type: object }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/user/wrapped/periods:
+    get:
+      tags: [Stats]
+      summary: Available Wrapped periods (Velvet)
+      responses:
+        "200":
+          description: Periods.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    period: { type: string }
+                    offset: { type: integer }
+                    label: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/wrapped/play-start:
+    post:
+      tags: [Stats]
+      summary: Log the start of a play (Velvet)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filePath]
+              properties:
+                filePath: { type: string }
+                sessionId: { type: string }
+                source: { type: string }
+      responses:
+        "200":
+          description: Event id (or null if not tracked).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  eventId:
+                    type: string
+                    nullable: true
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/wrapped/play-stop:
+    post:
+      tags: [Stats]
+      summary: Log a play stop (Velvet)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [eventId, playedMs]
+              properties:
+                eventId: { type: string }
+                playedMs: { type: integer }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+
+  /api/v1/wrapped/play-end:
+    post:
+      tags: [Stats]
+      summary: Log a natural play end (Velvet)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [eventId, playedMs]
+              properties:
+                eventId: { type: string }
+                playedMs: { type: integer }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+
+  /api/v1/wrapped/play-skip:
+    post:
+      tags: [Stats]
+      summary: Log an explicit skip (Velvet)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [eventId, playedMs]
+              properties:
+                eventId: { type: string }
+                playedMs: { type: integer }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+
+  /api/v1/wrapped/pause:
+    post:
+      tags: [Stats]
+      summary: Increment pause count (Velvet)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [eventId]
+              properties:
+                eventId: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+
+  # ── Playlists ────────────────────────────────────────────────────────────
+
+  /api/v1/playlist/load:
+    post:
+      tags: [Playlists]
+      summary: Load a playlist
+      description: Returns the playlist's tracks with full metadata.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [playlistname]
+              properties:
+                playlistname: { type: string }
+      responses:
+        "200":
+          description: Tracks with a stable per-entry `id` for the playlist-tracks row.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  allOf:
+                    - { $ref: "#/components/schemas/Metadata" }
+                    - type: object
+                      properties:
+                        id: { oneOf: [ { type: integer }, { type: string } ] }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/playlist/delete:
+    post:
+      tags: [Playlists]
+      summary: Delete a playlist
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [playlistname]
+              properties:
+                playlistname: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/playlist/add-song:
+    post:
+      tags: [Playlists]
+      summary: Add a song to a playlist
+      description: Creates the playlist if it doesn't exist.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [song, playlist]
+              properties:
+                song: { type: string, description: "Virtual path." }
+                playlist: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/playlist/remove-song:
+    post:
+      tags: [Playlists]
+      summary: Remove a track from a playlist
+      description: Uses the per-entry `id` returned by `POST /playlist/load`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id:
+                  oneOf:
+                    - { type: integer }
+                    - { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/playlist/new:
+    post:
+      tags: [Playlists]
+      summary: Create an empty playlist
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "400":
+          description: Playlist already exists.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/playlist/save:
+    post:
+      tags: [Playlists]
+      summary: Create or overwrite a playlist with a list of tracks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, songs]
+              properties:
+                title: { type: string }
+                songs:
+                  type: array
+                  items: { type: string, description: "Virtual path." }
+                live:
+                  type: boolean
+                  description: Whether this is a live-synced queue.
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/playlist/rename:
+    post:
+      tags: [Playlists]
+      summary: Rename a playlist
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [oldName, newName]
+              properties:
+                oldName: { type: string }
+                newName: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "400":
+          description: New name already in use.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/playlist/getall:
+    get:
+      tags: [Playlists]
+      summary: List the user's playlists
+      responses:
+        "200":
+          description: Playlists.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ── Smart Playlists ──────────────────────────────────────────────────────
+
+  /api/v1/smart-playlists:
+    get:
+      tags: [Smart Playlists]
+      summary: List smart playlists (Velvet)
+      responses:
+        "200":
+          description: Smart playlists.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  playlists:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        name: { type: string }
+                        filters: { type: object }
+                        sort: { type: string }
+                        limit_n: { type: integer, nullable: true }
+    post:
+      tags: [Smart Playlists]
+      summary: Create a smart playlist (Velvet)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                filters: { type: object }
+                sort: { type: string }
+                limit: { type: integer }
+      responses:
+        "200":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+
+  /api/v1/smart-playlists/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: integer }
+    put:
+      tags: [Smart Playlists]
+      summary: Update a smart playlist (Velvet)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                filters: { type: object }
+                sort: { type: string }
+                limit: { type: integer }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+    delete:
+      tags: [Smart Playlists]
+      summary: Delete a smart playlist (Velvet)
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+
+  /api/v1/smart-playlists/run:
+    post:
+      tags: [Smart Playlists]
+      summary: Execute a smart-playlist query (Velvet)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filters]
+              properties:
+                filters: { type: object }
+                sort: { type: string }
+                limit: { type: integer }
+      responses:
+        "200":
+          description: Matching tracks.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  songs:
+                    type: array
+                    items: { $ref: "#/components/schemas/Metadata" }
+
+  /api/v1/smart-playlists/count:
+    post:
+      tags: [Smart Playlists]
+      summary: Count tracks matching a smart-playlist query (Velvet)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filters]
+              properties:
+                filters: { type: object }
+      responses:
+        "200":
+          description: Count.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+
+  # ── Shared Playlists ─────────────────────────────────────────────────────
+
+  /shared/{playlistId}:
+    get:
+      tags: [Shared Playlists]
+      summary: Shared-playlist viewer page
+      description: Public HTML page for viewing a shared playlist.
+      security: []
+      parameters:
+        - name: playlistId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: HTML.
+          content:
+            text/html:
+              schema: { type: string }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/shared/{playlistId}:
+    get:
+      tags: [Shared Playlists]
+      summary: Fetch shared-playlist data
+      description: Returns the playlist contents and a restricted JWT that can only play those tracks.
+      security: []
+      parameters:
+        - name: playlistId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Playlist data and token.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  playlist:
+                    type: array
+                    items: { type: string }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/share:
+    post:
+      tags: [Shared Playlists]
+      summary: Create a shareable link
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [playlist]
+              properties:
+                playlist:
+                  type: array
+                  items: { type: string }
+                time:
+                  type: integer
+                  description: Expiry in days. Omit for an eternal link.
+      responses:
+        "200":
+          description: Share info.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  playlistId: { type: string }
+                  playlist:
+                    type: array
+                    items: { type: string }
+                  user: { type: string }
+                  expires:
+                    type: integer
+                    nullable: true
+                  token: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/share/list:
+    get:
+      tags: [Shared Playlists]
+      summary: List the user's shared playlists (Velvet)
+      responses:
+        "200":
+          description: Share records.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    playlistId: { type: string }
+                    songCount: { type: integer }
+                    expires:
+                      type: integer
+                      nullable: true
+                    createdAt: { type: string }
+
+  /api/v1/share/{id}:
+    delete:
+      tags: [Shared Playlists]
+      summary: Delete a shared playlist (Velvet)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+
+  # ── File Explorer ────────────────────────────────────────────────────────
+
+  /api/v1/file-explorer:
+    post:
+      tags: [File Explorer]
+      summary: Browse a directory within the user's libraries
+      description: Pass an empty string or `~` to list vpaths / home.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [directory]
+              properties:
+                directory:
+                  type: string
+                sort:
+                  type: boolean
+                  default: true
+                pullMetadata:
+                  type: boolean
+                  default: false
+      responses:
+        "200":
+          description: Directory listing.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  path: { type: string }
+                  directories: { type: array, items: { type: object } }
+                  files: { type: array, items: { type: object } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/file-explorer/recursive:
+    post:
+      tags: [File Explorer]
+      summary: Recursively list all audio files under a directory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [directory]
+              properties:
+                directory: { type: string }
+      responses:
+        "200":
+          description: Array of virtual paths.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/file-explorer/mkdir:
+    post:
+      tags: [File Explorer]
+      summary: Create a directory
+      description: Requires per-user mkdir permission. Recursive.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [directory]
+              properties:
+                directory: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/file-explorer/upload:
+    post:
+      tags: [File Explorer]
+      summary: Upload a file
+      description: |
+        Multipart form upload via busboy. Target directory goes in the `data-location` header.
+        Requires per-user upload permission. Filenames are sanitized to prevent path traversal.
+      parameters:
+        - name: data-location
+          in: header
+          required: true
+          schema: { type: string }
+          description: Target directory as virtual path.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/file-explorer/m3u:
+    post:
+      tags: [File Explorer]
+      summary: Parse an M3U playlist file
+      description: Returns resolved paths for each entry, sanitized against directory traversal.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path: { type: string }
+      responses:
+        "200":
+          description: Parsed entries.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  files:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        type: { type: string }
+                        name: { type: string }
+                        path: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ── Download ─────────────────────────────────────────────────────────────
+
+  /api/v1/download/m3u:
+    post:
+      tags: [Download]
+      summary: Download an M3U playlist + all its tracks as a ZIP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path: { type: string }
+      responses:
+        "200":
+          description: ZIP archive.
+          content:
+            application/zip:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/download/directory:
+    post:
+      tags: [Download]
+      summary: Download a directory as a ZIP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [directory]
+              properties:
+                directory: { type: string }
+      responses:
+        "200":
+          description: ZIP archive.
+          content:
+            application/zip:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/download/shared:
+    get:
+      tags: [Download]
+      summary: Download all files in a shared playlist
+      description: Requires a shared-playlist token (issued by `GET /api/v1/shared/{playlistId}`).
+      responses:
+        "200":
+          description: ZIP archive.
+          content:
+            application/zip:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/download/zip:
+    post:
+      tags: [Download]
+      summary: Download an arbitrary list of files as a ZIP
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [fileArray]
+              properties:
+                fileArray:
+                  type: string
+                  description: JSON-stringified array of virtual paths.
+      responses:
+        "200":
+          description: ZIP archive.
+          content:
+            application/zip:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ── Transcode ────────────────────────────────────────────────────────────
+
+  /transcode/{filepath}:
+    get:
+      tags: [Transcode]
+      summary: Transcode audio on the fly
+      description: |
+        Streams a transcoded version of the audio file. Streaming begins before transcoding
+        finishes. Results are cached for the song's duration plus 2 minutes.
+      parameters:
+        - name: filepath
+          in: path
+          required: true
+          description: Virtual path (may contain `/`).
+          schema: { type: string }
+        - name: codec
+          in: query
+          schema:
+            type: string
+            enum: [mp3, opus, aac]
+        - name: bitrate
+          in: query
+          schema:
+            type: string
+            enum: ["64k", "96k", "128k", "192k"]
+      responses:
+        "200":
+          description: Transcoded audio stream.
+          headers:
+            Content-Type: { schema: { type: string } }
+            Content-Length: { schema: { type: integer } }
+            Accept-Ranges: { schema: { type: string } }
+          content:
+            audio/*:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "503":
+          description: ffmpeg not available.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  # ── Album Art ────────────────────────────────────────────────────────────
+
+  /album-art/{file}:
+    get:
+      tags: [Album Art]
+      summary: Serve a cached album-art file
+      security: []
+      parameters:
+        - name: file
+          in: path
+          required: true
+          schema: { type: string }
+        - name: compress
+          in: query
+          description: '`zl` = large thumbnail, `zs` = small thumbnail. Omit for full-size.'
+          schema:
+            type: string
+            enum: [zl, zs]
+      responses:
+        "200":
+          description: Image.
+          content:
+            image/*:
+              schema: { type: string, format: binary }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/album-art/search:
+    post:
+      tags: [Album Art]
+      summary: Search external services for album art
+      description: Queries MusicBrainz, iTunes, and Deezer.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                artist: { type: string }
+                album: { type: string }
+      responses:
+        "200":
+          description: Search results.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        service: { type: string, enum: [musicbrainz, itunes, deezer] }
+                        url: { type: string }
+                        label: { type: string }
+                  ffmpegAvailable: { type: boolean }
+
+  /api/v1/album-art/set-from-url:
+    post:
+      tags: [Album Art]
+      summary: Download album art from a URL and apply it
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filepath, url]
+              properties:
+                filepath: { type: string }
+                url: { type: string, format: uri }
+                writeToFolder: { type: boolean, default: false }
+                writeToFile:
+                  type: boolean
+                  default: false
+                  description: Embed into the ID3 tag (needs ffmpeg and write permission).
+      responses:
+        "200":
+          description: Success.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, enum: [true] }
+        "400": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/album-art/upload:
+    post:
+      tags: [Album Art]
+      summary: Upload album art as base64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filepath, image]
+              properties:
+                filepath: { type: string }
+                image:
+                  type: string
+                  description: Base64-encoded image.
+                writeToFolder: { type: boolean, default: false }
+                writeToFile: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Success.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, enum: [true] }
+
+  /api/v1/album-art/ffmpeg-status:
+    get:
+      tags: [Album Art]
+      summary: Check ffmpeg availability
+      responses:
+        "200":
+          description: Availability.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  available: { type: boolean }
+
+  # ── Waveform ─────────────────────────────────────────────────────────────
+
+  /api/v1/db/waveform:
+    get:
+      tags: [Waveform]
+      summary: Get waveform peaks for a track
+      description: 800 bars, 0–255 each. Generated on demand and cached.
+      parameters:
+        - name: filepath
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Waveform data.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  waveform:
+                    type: array
+                    items: { type: integer, minimum: 0, maximum: 255 }
+                    minItems: 800
+                    maxItems: 800
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ── Cue Points ───────────────────────────────────────────────────────────
+
+  /api/v1/db/cuepoints:
+    get:
+      tags: [Cue Points]
+      summary: List cue points for a track (Velvet)
+      parameters:
+        - name: fp
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Cue points.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cuepoints:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        no: { type: integer }
+                        title: { type: string, nullable: true }
+                        t: { type: number, description: "Position in seconds." }
+                        color: { type: string, nullable: true }
+    post:
+      tags: [Cue Points]
+      summary: Create a cue point (Velvet)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filepath, position]
+              properties:
+                filepath: { type: string }
+                position: { type: number, description: "Seconds from start." }
+                label: { type: string }
+                color: { type: string }
+      responses:
+        "200":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+
+  /api/v1/db/cuepoints/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: integer }
+    put:
+      tags: [Cue Points]
+      summary: Update a cue point (Velvet)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                position: { type: number }
+                label: { type: string }
+                color: { type: string }
+      responses:
+        "200":
+          description: Success.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, enum: [true] }
+    delete:
+      tags: [Cue Points]
+      summary: Delete a cue point (Velvet)
+      responses:
+        "200":
+          description: Success.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, enum: [true] }
+
+  # ── User Settings ────────────────────────────────────────────────────────
+
+  /api/v1/user/settings:
+    get:
+      tags: [User Settings]
+      summary: Get the user's UI preferences (Velvet)
+      responses:
+        "200":
+          description: Prefs and optional queue.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  prefs:
+                    type: object
+                    additionalProperties: { type: string }
+                  queue:
+                    type: array
+                    items: { type: string }
+    post:
+      tags: [User Settings]
+      summary: Save UI preferences / queue (Velvet)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prefs:
+                  type: object
+                  additionalProperties: { type: string }
+                queue:
+                  type: array
+                  items: { type: string }
+      responses:
+        "200":
+          description: Success.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, enum: [true] }
+
+  # ── Last.fm ──────────────────────────────────────────────────────────────
+
+  /api/v1/lastfm/status:
+    get:
+      tags: [Scrobbler - Last.fm]
+      summary: Last.fm integration status
+      responses:
+        "200":
+          description: Status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  serverEnabled: { type: boolean }
+                  hasApiKey: { type: boolean }
+                  linkedUser: { type: string, nullable: true }
+
+  /api/v1/lastfm/connect:
+    post:
+      tags: [Scrobbler - Last.fm]
+      summary: Link Last.fm account (Velvet)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lastfmUser, lastfmPassword]
+              properties:
+                lastfmUser: { type: string }
+                lastfmPassword: { type: string }
+      responses:
+        "200":
+          description: Linked.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, enum: [true] }
+
+  /api/v1/lastfm/disconnect:
+    post:
+      tags: [Scrobbler - Last.fm]
+      summary: Unlink Last.fm account
+      responses:
+        "200":
+          description: Unlinked.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, enum: [true] }
+
+  /api/v1/lastfm/test-login:
+    post:
+      tags: [Scrobbler - Last.fm]
+      summary: Validate Last.fm credentials before saving
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/lastfm/similar-artists:
+    get:
+      tags: [Scrobbler - Last.fm]
+      summary: Get similar artists from Last.fm
+      parameters:
+        - name: artist
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Similar artists.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  artists:
+                    type: array
+                    items: { type: string }
+
+  /api/v1/lastfm/scrobble-by-metadata:
+    post:
+      tags: [Scrobbler - Last.fm]
+      summary: Scrobble a play by metadata
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [track]
+              properties:
+                artist: { type: string }
+                album: { type: string }
+                track: { type: string }
+      responses:
+        "200":
+          description: Scrobbled or skipped if user isn't linked.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  scrobble:
+                    type: boolean
+                    nullable: true
+
+  /api/v1/lastfm/scrobble-by-filepath:
+    post:
+      tags: [Scrobbler - Last.fm]
+      summary: Scrobble a play by filepath
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filePath]
+              properties:
+                filePath: { type: string }
+      responses:
+        "200":
+          description: Scrobbled or skipped if user isn't linked.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  scrobble:
+                    type: boolean
+                    nullable: true
+
+  # ── ListenBrainz ─────────────────────────────────────────────────────────
+
+  /api/v1/listenbrainz/status:
+    get:
+      tags: [Scrobbler - ListenBrainz]
+      summary: ListenBrainz integration status
+      responses:
+        "200":
+          description: Status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  serverEnabled: { type: boolean }
+                  linked: { type: boolean }
+
+  /api/v1/listenbrainz/connect:
+    post:
+      tags: [Scrobbler - ListenBrainz]
+      summary: Link a ListenBrainz account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lbToken]
+              properties:
+                lbToken: { type: string }
+      responses:
+        "200":
+          description: Linked.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, enum: [true] }
+
+  /api/v1/listenbrainz/disconnect:
+    post:
+      tags: [Scrobbler - ListenBrainz]
+      summary: Unlink ListenBrainz
+      responses:
+        "200":
+          description: Unlinked.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, enum: [true] }
+
+  /api/v1/listenbrainz/playing-now:
+    post:
+      tags: [Scrobbler - ListenBrainz]
+      summary: Announce now-playing to ListenBrainz
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filePath]
+              properties:
+                filePath: { type: string }
+      responses:
+        "200":
+          description: Success.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, enum: [true] }
+
+  /api/v1/listenbrainz/scrobble-by-filepath:
+    post:
+      tags: [Scrobbler - ListenBrainz]
+      summary: Scrobble a completed track to ListenBrainz
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filePath]
+              properties:
+                filePath: { type: string }
+      responses:
+        "200":
+          description: Success.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, enum: [true] }
+
+  # ── Discogs ──────────────────────────────────────────────────────────────
+
+  /api/v1/discogs/coverart:
+    get:
+      tags: [Discogs]
+      summary: Search Discogs for album art
+      parameters:
+        - name: artist
+          in: query
+          schema: { type: string }
+        - name: title
+          in: query
+          schema: { type: string }
+        - name: album
+          in: query
+          schema: { type: string }
+        - name: year
+          in: query
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Choices.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  choices:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        releaseId: { type: string }
+                        releaseTitle: { type: string }
+                        year: { type: integer }
+                        thumbB64: { type: string }
+                        coverImage: { type: string }
+
+  /api/v1/deezer/search:
+    get:
+      tags: [Discogs]
+      summary: Search Deezer (part of the Discogs art-lookup flow)
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Deezer response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { type: object }
+
+  /api/v1/discogs/embed:
+    post:
+      tags: [Discogs]
+      summary: Embed album art from Discogs / Deezer / URL
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filepath]
+              properties:
+                filepath: { type: string }
+                releaseId: { type: string }
+                coverUrl: { type: string }
+      responses:
+        "200":
+          description: Success.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  aaFile: { type: string, description: "Filename of the cached art." }
+
+  # ── Server Playback (Rust audio proxy) ───────────────────────────────────
+
+  /api/v1/server-playback/pause:
+    post:
+      tags: [Server Playback]
+      summary: Pause playback
+      responses: { "200": { description: Proxied response from the Rust audio server. } }
+  /api/v1/server-playback/resume:
+    post:
+      tags: [Server Playback]
+      summary: Resume playback
+      responses: { "200": { description: Proxied response. } }
+  /api/v1/server-playback/stop:
+    post:
+      tags: [Server Playback]
+      summary: Stop and clear queue
+      responses: { "200": { description: Proxied response. } }
+  /api/v1/server-playback/next:
+    post:
+      tags: [Server Playback]
+      summary: Next track
+      responses: { "200": { description: Proxied response. } }
+  /api/v1/server-playback/previous:
+    post:
+      tags: [Server Playback]
+      summary: Previous track
+      responses: { "200": { description: Proxied response. } }
+  /api/v1/server-playback/loop:
+    post:
+      tags: [Server Playback]
+      summary: Toggle loop mode
+      responses: { "200": { description: Proxied response. } }
+  /api/v1/server-playback/seek:
+    post:
+      tags: [Server Playback]
+      summary: Seek
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                position: { type: number, description: "Seconds." }
+      responses: { "200": { description: Proxied response. } }
+  /api/v1/server-playback/volume:
+    post:
+      tags: [Server Playback]
+      summary: Set volume
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                volume: { type: number, minimum: 0, maximum: 1 }
+      responses: { "200": { description: Proxied response. } }
+  /api/v1/server-playback/shuffle:
+    post:
+      tags: [Server Playback]
+      summary: Shuffle queue
+      responses: { "200": { description: Proxied response. } }
+  /api/v1/server-playback/status:
+    get:
+      tags: [Server Playback]
+      summary: Get playback state
+      responses: { "200": { description: Proxied response. } }
+  /api/v1/server-playback/queue:
+    get:
+      tags: [Server Playback]
+      summary: Get the current queue
+      description: Absolute paths are translated back to virtual paths.
+      responses:
+        "200":
+          description: Queue.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  queue:
+                    type: array
+                    items: { type: string }
+  /api/v1/server-playback/play:
+    post:
+      tags: [Server Playback]
+      summary: Clear queue and play a file
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string }
+      responses:
+        "200": { description: Proxied response. }
+        "400": { $ref: "#/components/responses/Forbidden" }
+        "503":
+          description: Rust audio server unavailable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /api/v1/server-playback/queue/add:
+    post:
+      tags: [Server Playback]
+      summary: Add one file to the queue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string }
+      responses: { "200": { description: Proxied response. } }
+  /api/v1/server-playback/queue/add-many:
+    post:
+      tags: [Server Playback]
+      summary: Add multiple files to the queue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [files]
+              properties:
+                files:
+                  type: array
+                  items: { type: string }
+      responses: { "200": { description: Proxied response. } }
+  /api/v1/server-playback/queue/play-index:
+    post:
+      tags: [Server Playback]
+      summary: Jump to a queue index
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [index]
+              properties:
+                index: { type: integer }
+      responses: { "200": { description: Proxied response. } }
+  /api/v1/server-playback/queue/remove:
+    post:
+      tags: [Server Playback]
+      summary: Remove one track from the queue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [index]
+              properties:
+                index: { type: integer }
+      responses: { "200": { description: Proxied response. } }
+  /api/v1/server-playback/queue/clear:
+    post:
+      tags: [Server Playback]
+      summary: Clear the queue
+      responses: { "200": { description: Proxied response. } }
+
+  /server-remote:
+    get:
+      tags: [Server Playback]
+      summary: Server-audio webapp
+      description: Static HTML for the server-audio player mode.
+      security: []
+      responses:
+        "200":
+          description: HTML.
+          content:
+            text/html:
+              schema: { type: string }
+        "503":
+          description: Rust audio server unavailable.
+
+  # ── Jukebox ──────────────────────────────────────────────────────────────
+
+  /api/v1/jukebox/push-to-client:
+    post:
+      tags: [Jukebox]
+      summary: Send a command to a connected remote
+      description: Commands include `next`, `previous`, `playPause`, `play`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, command]
+              properties:
+                code: { type: string, description: "Jukebox code." }
+                command: { type: string }
+                file: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+
+  /api/v1/jukebox/update-playlist:
+    post:
+      tags: [Jukebox]
+      summary: Cache the current playlist for a jukebox code
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, playlist]
+              properties:
+                code: { type: string }
+                playlist: { type: array, items: { type: object } }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+
+  /api/v1/jukebox/update-now-playing:
+    post:
+      tags: [Jukebox]
+      summary: Cache the now-playing state for a jukebox code
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, nowPlaying]
+              properties:
+                code: { type: string }
+                nowPlaying:
+                  type: object
+                  properties:
+                    title: { type: string, nullable: true }
+                    artist: { type: string, nullable: true }
+                    album: { type: string, nullable: true }
+                    albumArt: { type: string, nullable: true }
+                    filepath: { type: string }
+                    playing: { type: boolean }
+                    index: { type: integer }
+                    currentTime: { type: number }
+                    duration: { type: number }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+
+  /api/v1/jukebox/does-code-exist:
+    post:
+      tags: [Jukebox]
+      summary: Check if a jukebox code is active
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+      responses:
+        "200":
+          description: Status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: boolean }
+                  token: { type: string }
+
+  /api/v1/jukebox/get-playlist:
+    get:
+      tags: [Jukebox]
+      summary: Fetch the cached playlist for a code
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Playlist.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  playlist:
+                    type: array
+                    items: { type: object }
+
+  /api/v1/jukebox/get-now-playing:
+    get:
+      tags: [Jukebox]
+      summary: Fetch the cached now-playing state
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Now-playing.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  nowPlaying:
+                    type: object
+                    nullable: true
+
+  /remote/{remoteId}:
+    get:
+      tags: [Jukebox]
+      summary: Serve the remote-control webapp
+      security: []
+      parameters:
+        - name: remoteId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: HTML.
+          content:
+            text/html:
+              schema: { type: string }
+
+  # ── YouTube DL ───────────────────────────────────────────────────────────
+
+  /api/v1/ytdl:
+    post:
+      tags: [YouTube DL]
+      summary: Start a YouTube download
+      description: |
+        Downloads the video's audio track, converts it to the requested format, and
+        drops it into the target directory. Requires upload permission. Returns
+        immediately — track progress via `GET /api/v1/ytdl/downloads`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [directory, url]
+              properties:
+                directory: { type: string }
+                url: { type: string, format: uri }
+                outputCodec:
+                  type: string
+                  enum: [mp3, opus, aac]
+                  default: mp3
+                metadata:
+                  type: object
+                  properties:
+                    title: { type: string }
+                    artist: { type: string }
+                    album: { type: string }
+                    year: { type: integer }
+      responses:
+        "200":
+          description: Download enqueued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+
+  /api/v1/ytdl/metadata:
+    get:
+      tags: [YouTube DL]
+      summary: Fetch YouTube video metadata
+      parameters:
+        - name: url
+          in: query
+          required: true
+          schema: { type: string, format: uri }
+      responses:
+        "200":
+          description: Metadata.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  title: { type: string, nullable: true }
+                  artist: { type: string, nullable: true }
+                  album: { type: string, nullable: true }
+                  year: { type: integer, nullable: true }
+                  thumbnail: { type: string, nullable: true }
+
+  /api/v1/ytdl/info:
+    get:
+      tags: [YouTube DL]
+      summary: Velvet-adapter for metadata fetch
+      parameters:
+        - name: url
+          in: query
+          required: true
+          schema: { type: string, format: uri }
+      responses:
+        "200":
+          description: Metadata (field `thumb` not `thumbnail`).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  title: { type: string, nullable: true }
+                  artist: { type: string, nullable: true }
+                  album: { type: string, nullable: true }
+                  thumb: { type: string, nullable: true }
+
+  /api/v1/ytdl/downloads:
+    get:
+      tags: [YouTube DL]
+      summary: List in-progress and recent downloads
+      responses:
+        "200":
+          description: Downloads.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  downloads:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        pid: { type: integer }
+                        url: { type: string }
+                        directory: { type: string }
+                        outputCodec: { type: string }
+                        status: { type: string }
+                        startTime: { type: integer }
+
+  /api/v1/ytdl/download:
+    post:
+      tags: [YouTube DL]
+      summary: Synchronous YouTube download (Velvet)
+      description: Blocks up to 5 minutes waiting for the download to finish.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, format: uri }
+                title: { type: string }
+                artist: { type: string }
+                album: { type: string }
+                format:
+                  type: string
+                  enum: [mp3, opus, aac]
+      responses:
+        "200":
+          description: Download complete.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  filePath: { type: string }
+                  vpath: { type: string }
+
+  # ── Admin - Scanner ──────────────────────────────────────────────────────
+
+  /api/v1/admin/db/params:
+    get:
+      tags: [Admin - Scanner]
+      summary: Get scanner parameters
+      responses:
+        "200":
+          description: Current scanner settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScanOptions" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/db/params/scan-interval:
+    post:
+      tags: [Admin - Scanner]
+      summary: Set scan interval
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scanInterval]
+              properties:
+                scanInterval: { type: integer, minimum: 0, description: "Hours. 0 disables scheduled rescans." }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/db/params/skip-img:
+    post:
+      tags: [Admin - Scanner]
+      summary: Set whether album art extraction is skipped
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [skipImg]
+              properties:
+                skipImg: { type: boolean }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/db/params/boot-scan-delay:
+    post:
+      tags: [Admin - Scanner]
+      summary: Set boot-scan delay
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [bootScanDelay]
+              properties:
+                bootScanDelay: { type: integer, minimum: 0, description: "Seconds." }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/db/params/max-concurrent-scans:
+    post:
+      tags: [Admin - Scanner]
+      summary: Set max concurrent scans
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [maxConcurrentTasks]
+              properties:
+                maxConcurrentTasks: { type: integer, minimum: 0 }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/db/params/compress-image:
+    post:
+      tags: [Admin - Scanner]
+      summary: Set whether album art thumbnails are generated
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [compressImage]
+              properties:
+                compressImage: { type: boolean }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/db/params/scan-commit-interval:
+    post:
+      tags: [Admin - Scanner]
+      summary: Set scanner commit cadence
+      description: Number of files between DB commits during a scan. Lower = shorter write-lock holds.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scanCommitInterval]
+              properties:
+                scanCommitInterval: { type: integer, minimum: 1 }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/db/params/auto-album-art:
+    post:
+      tags: [Admin - Scanner]
+      summary: Toggle auto album art lookup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [autoAlbumArt]
+              properties:
+                autoAlbumArt: { type: boolean }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/db/params/album-art-write-to-folder:
+    post:
+      tags: [Admin - Scanner]
+      summary: Write fetched cover art as `cover.jpg` in the album folder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [albumArtWriteToFolder]
+              properties:
+                albumArtWriteToFolder: { type: boolean }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/db/params/album-art-write-to-file:
+    post:
+      tags: [Admin - Scanner]
+      summary: Embed fetched cover art in audio files
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [albumArtWriteToFile]
+              properties:
+                albumArtWriteToFile: { type: boolean }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/db/params/album-art-services:
+    post:
+      tags: [Admin - Scanner]
+      summary: Select which services to query for album art
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [albumArtServices]
+              properties:
+                albumArtServices:
+                  type: array
+                  items:
+                    type: string
+                    enum: [musicbrainz, itunes, deezer]
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/db/force-compress-images:
+    post:
+      tags: [Admin - Scanner]
+      summary: Re-run the album-art thumbnail compressor over the whole library
+      responses:
+        "200":
+          description: Job status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  started: { type: boolean }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/db/generate-waveforms:
+    post:
+      tags: [Admin - Scanner]
+      summary: Generate waveform data for every track
+      responses:
+        "200":
+          description: Job status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  started: { type: boolean }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/db/scan/all:
+    post:
+      tags: [Admin - Scanner]
+      summary: Scan all libraries
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/db/scan/force-rescan:
+    post:
+      tags: [Admin - Scanner]
+      summary: Rescan all libraries ignoring mtimes
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/db/scan/stats:
+    get:
+      tags: [Admin - Scanner]
+      summary: Total track count in the DB
+      responses:
+        "200":
+          description: Count.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  fileCount: { type: integer }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/db/scan/progress:
+    get:
+      tags: [Admin - Scanner]
+      summary: Per-library scan progress (Velvet)
+      responses:
+        "200":
+          description: Progress entries — one per running scan.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    vpath: { type: string }
+                    pct: { type: number }
+                    scanned: { type: integer }
+                    expected: { type: integer, nullable: true }
+                    currentFile: { type: string, nullable: true }
+                    countingFound: { type: boolean }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  # ── Admin - Users ────────────────────────────────────────────────────────
+
+  /api/v1/admin/users:
+    get:
+      tags: [Admin - Users]
+      summary: List all users
+      responses:
+        "200":
+          description: Users keyed by username.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: { $ref: "#/components/schemas/User" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+    put:
+      tags: [Admin - Users]
+      summary: Create a user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password, vpaths]
+              properties:
+                username: { type: string }
+                password: { type: string }
+                vpaths:
+                  type: array
+                  items: { type: string }
+                admin: { type: boolean, default: false }
+                allowMkdir: { type: boolean, default: true }
+                allowUpload: { type: boolean, default: true }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+    delete:
+      tags: [Admin - Users]
+      summary: Delete a user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username]
+              properties:
+                username: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/users/password:
+    post:
+      tags: [Admin - Users]
+      summary: Change a user's password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/users/lastfm:
+    post:
+      tags: [Admin - Users]
+      summary: Set Last.fm credentials for a user
+      description: Note — the field names contain a typo (`lasftfm*`) that is preserved for backwards compatibility.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, lasftfmUser, lasftfmPassword]
+              properties:
+                username: { type: string }
+                lasftfmUser: { type: string }
+                lasftfmPassword: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/users/vpaths:
+    post:
+      tags: [Admin - Users]
+      summary: Update a user's library access list
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, vpaths]
+              properties:
+                username: { type: string }
+                vpaths:
+                  type: array
+                  items: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/users/access:
+    post:
+      tags: [Admin - Users]
+      summary: Update a user's role / permission flags
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, admin, allowMkdir, allowUpload]
+              properties:
+                username: { type: string }
+                admin: { type: boolean }
+                allowMkdir: { type: boolean }
+                allowUpload: { type: boolean }
+                allowFileModify: { type: boolean, default: true }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  # ── Admin - Libraries ────────────────────────────────────────────────────
+
+  /api/v1/admin/directories:
+    get:
+      tags: [Admin - Libraries]
+      summary: List all libraries
+      description: |
+        Returns one of two shapes depending on caller:
+        - Legacy (admin UI): `{ [vpath]: { root, type } }`
+        - Velvet UI: array of `{ name, root, type }` when fetched via the Velvet route.
+      responses:
+        "200":
+          description: Libraries.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    additionalProperties:
+                      type: object
+                      properties:
+                        root: { type: string }
+                        type: { type: string }
+                  - type: array
+                    items: { $ref: "#/components/schemas/Library" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/directory:
+    put:
+      tags: [Admin - Libraries]
+      summary: Add a library
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [directory, vpath]
+              properties:
+                directory: { type: string, description: "Absolute filesystem path." }
+                vpath:
+                  type: string
+                  pattern: "[a-zA-Z0-9-]+"
+                autoAccess: { type: boolean, default: false }
+                isAudioBooks: { type: boolean, default: false }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+    delete:
+      tags: [Admin - Libraries]
+      summary: Remove a library
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [vpath]
+              properties:
+                vpath:
+                  type: string
+                  pattern: "[a-zA-Z0-9-]+"
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  # ── Admin - Config ───────────────────────────────────────────────────────
+
+  /api/v1/admin/lock-api:
+    post:
+      tags: [Admin - Config]
+      summary: Lock or unlock the admin API
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lock]
+              properties:
+                lock: { type: boolean }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/config:
+    get:
+      tags: [Admin - Config]
+      summary: Get the server configuration
+      responses:
+        "200":
+          description: Config.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  address: { type: string }
+                  port: { type: integer }
+                  noUpload: { type: boolean }
+                  noMkdir: { type: boolean }
+                  noFileModify: { type: boolean }
+                  writeLogs: { type: boolean }
+                  secret:
+                    type: string
+                    description: Last 4 characters only (the full secret is never returned).
+                  ssl: { type: object }
+                  storage: { type: object }
+                  maxRequestSize: { type: string }
+                  autoBootServerAudio: { type: boolean }
+                  rustPlayerPort: { type: integer }
+                  ui: { type: string, enum: [default, velvet] }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/config/max-request-size:
+    post:
+      tags: [Admin - Config]
+      summary: Set max request body size
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [maxRequestSize]
+              properties:
+                maxRequestSize:
+                  type: string
+                  pattern: "[0-9]+(KB|MB)"
+                  example: "50MB"
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/config/ui:
+    post:
+      tags: [Admin - Config]
+      summary: Switch UI
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ui]
+              properties:
+                ui:
+                  type: string
+                  enum: [default, velvet]
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/config/port:
+    post:
+      tags: [Admin - Config]
+      summary: Change server port
+      description: Triggers a server restart.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [port]
+              properties:
+                port: { type: integer }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/config/address:
+    post:
+      tags: [Admin - Config]
+      summary: Change listen address
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [address]
+              properties:
+                address:
+                  type: string
+                  format: ipv4
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/config/noupload:
+    post:
+      tags: [Admin - Config]
+      summary: Enable/disable uploads server-wide
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [noUpload]
+              properties:
+                noUpload: { type: boolean }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/config/nomkdir:
+    post:
+      tags: [Admin - Config]
+      summary: Enable/disable directory creation server-wide
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [noMkdir]
+              properties:
+                noMkdir: { type: boolean }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/config/nofilemodify:
+    post:
+      tags: [Admin - Config]
+      summary: Enable/disable file modification server-wide
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [noFileModify]
+              properties:
+                noFileModify: { type: boolean }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/config/write-logs:
+    post:
+      tags: [Admin - Config]
+      summary: Enable/disable writing logs to disk
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [writeLogs]
+              properties:
+                writeLogs: { type: boolean }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/config/auto-boot-server-audio:
+    post:
+      tags: [Admin - Config]
+      summary: Toggle auto-start of the Rust audio server
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [autoBootServerAudio]
+              properties:
+                autoBootServerAudio: { type: boolean }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/config/rust-player-port:
+    post:
+      tags: [Admin - Config]
+      summary: Set the Rust audio server port
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rustPlayerPort]
+              properties:
+                rustPlayerPort: { type: integer, minimum: 1, maximum: 65535 }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/config/secret:
+    post:
+      tags: [Admin - Config]
+      summary: Regenerate the JWT secret
+      description: Invalidates every existing token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [strength]
+              properties:
+                strength:
+                  type: integer
+                  minimum: 1
+                  description: Byte length of the generated secret.
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  # ── Admin - Transcode ────────────────────────────────────────────────────
+
+  /api/v1/admin/transcode:
+    get:
+      tags: [Admin - Transcode]
+      summary: Get transcode configuration
+      responses:
+        "200":
+          description: Config + availability.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  defaultCodec: { type: string }
+                  defaultBitrate: { type: string }
+                  downloaded: { type: boolean, description: "Whether ffmpeg has been downloaded." }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/transcode/default-codec:
+    post:
+      tags: [Admin - Transcode]
+      summary: Set default transcode codec
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [defaultCodec]
+              properties:
+                defaultCodec: { type: string, enum: [mp3, opus, aac] }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/transcode/default-bitrate:
+    post:
+      tags: [Admin - Transcode]
+      summary: Set default transcode bitrate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [defaultBitrate]
+              properties:
+                defaultBitrate: { type: string, enum: ["64k", "96k", "128k", "192k"] }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/transcode/download:
+    post:
+      tags: [Admin - Transcode]
+      summary: Download the bundled ffmpeg binary
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  # ── Admin - DLNA ─────────────────────────────────────────────────────────
+
+  /api/v1/admin/dlna:
+    get:
+      tags: [Admin - DLNA]
+      summary: DLNA configuration
+      responses:
+        "200":
+          description: DLNA settings.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mode: { type: string, enum: [disabled, same-port, separate-port] }
+                  port: { type: integer }
+                  name: { type: string }
+                  uuid: { type: string }
+                  browse: { type: string, enum: [flat, dirs, artist, album, genre] }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/dlna/browse:
+    post:
+      tags: [Admin - DLNA]
+      summary: Set the DLNA default browse structure
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [browse]
+              properties:
+                browse: { type: string, enum: [flat, dirs, artist, album, genre] }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/dlna/mode:
+    post:
+      tags: [Admin - DLNA]
+      summary: Enable/disable DLNA
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode: { type: string, enum: [disabled, same-port, separate-port] }
+                port: { type: integer, minimum: 1, maximum: 65535 }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  # ── Admin - SSL ──────────────────────────────────────────────────────────
+
+  /api/v1/admin/ssl:
+    post:
+      tags: [Admin - SSL]
+      summary: Upload SSL certificate and key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cert, key]
+              properties:
+                cert: { type: string, description: "Path to cert file." }
+                key: { type: string, description: "Path to key file." }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+    delete:
+      tags: [Admin - SSL]
+      summary: Remove SSL certificates
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  # ── Admin - Logs ─────────────────────────────────────────────────────────
+
+  /api/v1/admin/logs/download:
+    get:
+      tags: [Admin - Logs]
+      summary: Download server logs as a ZIP
+      responses:
+        "200":
+          description: ZIP.
+          content:
+            application/zip:
+              schema: { type: string, format: binary }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  # ── Admin - Shared ───────────────────────────────────────────────────────
+
+  /api/v1/admin/db/shared:
+    get:
+      tags: [Admin - Shared]
+      summary: List every shared playlist on the server
+      responses:
+        "200":
+          description: Shared playlists.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+    delete:
+      tags: [Admin - Shared]
+      summary: Delete a shared playlist by id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/db/shared/expired:
+    delete:
+      tags: [Admin - Shared]
+      summary: Delete all expired shared playlists
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/db/shared/eternal:
+    delete:
+      tags: [Admin - Shared]
+      summary: Delete all non-expiring shared playlists
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  # ── Admin - File Explorer ────────────────────────────────────────────────
+
+  /api/v1/admin/file-explorer:
+    post:
+      tags: [Admin - File Explorer]
+      summary: Browse the entire filesystem (admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [directory]
+              properties:
+                directory: { type: string, description: "Absolute path, or `~` for home." }
+                joinDirectory: { type: string }
+      responses:
+        "200":
+          description: Listing.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  path: { type: string }
+                  directories: { type: array, items: { type: object } }
+                  files: { type: array, items: { type: object } }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/file-explorer/win-drives:
+    get:
+      tags: [Admin - File Explorer]
+      summary: List Windows drive letters
+      description: Returns an empty object on non-Windows hosts.
+      responses:
+        "200":
+          description: Drive letters.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: string, example: "C:\\" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  # ── Admin - Discogs ──────────────────────────────────────────────────────
+
+  /api/v1/admin/discogs/config:
+    get:
+      tags: [Admin - Discogs]
+      summary: Get Discogs configuration
+      responses:
+        "200":
+          description: Config.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled: { type: boolean }
+                  allowArtUpdate: { type: boolean }
+                  allowId3Edit: { type: boolean }
+                  apiKey: { type: string }
+                  apiSecret: { type: string, description: "Masked." }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+    post:
+      tags: [Admin - Discogs]
+      summary: Update Discogs configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean }
+                allowArtUpdate: { type: boolean }
+                apiKey: { type: string }
+                apiSecret: { type: string }
+      responses:
+        "200":
+          description: Success.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, enum: [true] }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  # ── Admin - ID3 tags (Velvet) ────────────────────────────────────────────
+
+  /api/v1/admin/tags/write:
+    post:
+      tags: [Admin - Scanner]
+      summary: Write ID3 tags to an audio file (Velvet)
+      description: Requires the `allowFileModify` permission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filepath]
+              properties:
+                filepath: { type: string }
+                title: { type: string }
+                artist: { type: string }
+                album: { type: string }
+                year: { type: integer }
+                genre: { type: string }
+                track: { type: integer }
+                disk: { type: integer }
+      responses:
+        "200":
+          description: Success.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, enum: [true] }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ── Federation ───────────────────────────────────────────────────────────
+
+  /api/v1/admin/federation/enable:
+    post:
+      tags: [Federation]
+      summary: Enable/disable federation
+      description: Rebuilds the Syncthing config with a 5s debounce.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enable]
+              properties:
+                enable: { type: boolean }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/federation/invite/accept:
+    post:
+      tags: [Federation]
+      summary: Accept a federation invite
+      description: Stub — not yet implemented.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, vpaths, invite, accessAll]
+              properties:
+                url: { type: string, format: uri }
+                vpaths:
+                  type: array
+                  items: { type: string }
+                invite: { type: string }
+                accessAll: { type: boolean }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+
+  /api/v1/federation/invite/generate:
+    post:
+      tags: [Federation]
+      summary: Generate a federation invite token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                vpaths:
+                  type: array
+                  items: { type: string }
+                url: { type: string, format: uri }
+      responses:
+        "200":
+          description: Invite token.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+
+  /api/v1/federation/stats:
+    get:
+      tags: [Federation]
+      summary: Federation device info
+      responses:
+        "200":
+          description: Device + UI address.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deviceId: { type: string }
+                  uiAddress: { type: string }
+
+  /api/v1/syncthing-proxy/{path}:
+    parameters:
+      - name: path
+        in: path
+        required: true
+        schema: { type: string }
+        description: Passed through. Use an empty string to address the Syncthing root.
+    get: &syncProxy
+      tags: [Federation]
+      summary: Proxy to Syncthing UI
+      description: Any HTTP method is accepted and passed through to the bundled Syncthing instance.
+      responses:
+        "200": { description: Proxied response. }
+    post: *syncProxy
+    put: *syncProxy
+    delete: *syncProxy
+    patch: *syncProxy
+
+  # ── Velvet stubs (not yet implemented) ───────────────────────────────────
+
+  /api/v1/radio/stations:
+    get:
+      tags: [Library]
+      summary: Radio stations (stub)
+      description: Radio isn't implemented yet — always returns `[]`.
+      responses:
+        "200":
+          description: Empty.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object }
+
+  /api/v1/radio/enabled:
+    get:
+      tags: [Library]
+      summary: Radio enabled flag (stub)
+      responses:
+        "200":
+          description: Status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled: { type: boolean, enum: [false] }
+
+  /api/v1/radio/schedules:
+    get:
+      tags: [Library]
+      summary: Radio schedules (stub)
+      responses:
+        "200":
+          description: Empty.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object }
+
+  /api/v1/podcast/feeds:
+    get:
+      tags: [Library]
+      summary: Podcast feeds (stub)
+      description: Podcasts aren't implemented yet.
+      responses:
+        "200":
+          description: Empty.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object }

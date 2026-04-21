@@ -17,7 +17,9 @@
     "wizard": "npm install --only=prod && node cli-boot-wrapper.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "build-rust": "cd rust-parser && cargo build --release"
+    "build-rust": "cd rust-parser && cargo build --release",
+    "docs:api": "redocly build-docs docs/openapi.yaml -o docs/api.html",
+    "docs:api:validate": "redocly lint docs/openapi.yaml"
   },
   "repository": {
     "type": "git",
@@ -126,6 +128,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@redocly/cli": "^2.29.0",
     "electron-builder": "^26.7.0",
     "eslint": "^10.0.0",
     "globals": "^17.3.0"
