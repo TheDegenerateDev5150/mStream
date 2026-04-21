@@ -551,9 +551,15 @@ describe('Tier 3 stubs', () => {
     assert.deepEqual(env.lyricsList.structuredLyrics, []);
   });
 
-  test('jukeboxControl politely declines with a generic error', async () => {
-    const env = await call('jukeboxControl', { action: 'start' });
+  test('jukeboxControl is admin-only (role check)', async () => {
+    // Full jukebox coverage lives in test/subsonic-jukebox.test.mjs; here
+    // we only spot-check that the handler enforces admin-only access for
+    // the default Phase-3 test harness setup (admin user).
+    const env = await call('jukeboxControl', { action: 'status' });
+    // Without a rust-server-audio stub wired in, the admin call reaches
+    // the proxy layer and surfaces error 30 (feature unavailable). That
+    // is: the stub decline from Phase 3 is gone; jukebox is real now.
     assert.equal(env.status, 'failed');
-    assert.equal(env.error.code, 0);
+    assert.equal(env.error.code, 30);
   });
 });

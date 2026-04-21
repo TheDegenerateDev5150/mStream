@@ -26,7 +26,8 @@ import * as dbQueue from '../../db/task-queue.js';
 import * as adminUtil from '../../util/admin.js';
 import { ffmpegBin } from '../../util/ffmpeg-bootstrap.js';
 import { serveAlbumArtFile } from '../album-art.js';
-import { sendOk, SubErr } from './response.js';
+import * as serverPlayback from '../server-playback.js';
+import { sendOk, sendError, SubErr } from './response.js';
 import * as nowPlaying from './now-playing.js';
 import { identiconFor } from './identicon.js';
 
@@ -1422,7 +1423,10 @@ function userToSubsonicShape(row, libNames) {
     commentRole:       false,
     podcastRole:       false,
     streamRole:        true,
-    jukeboxRole:       false,
+    // Server-side playback affects everyone in earshot of the rust-server-
+    // audio output, so jukebox control is admin-only. Non-admins still get
+    // error 50 from the handler; this flag just tells clients up-front.
+    jukeboxRole:       isAdmin,
     shareRole:         true,
     videoConversionRole: false,
     folder:            libNames,
@@ -2136,8 +2140,232 @@ export function getLyrics(req, res) {
 export function getLyricsBySongId(req, res) {
   sendOk(req, res, { lyricsList: { structuredLyrics: [] } });
 }
-export function jukeboxControl(req, res) {
-  // mStream's model is "every client is its own player" — a server-side
-  // jukebox doesn't fit. Politely decline.
-  return SubErr.GENERIC(req, res, 'Jukebox control is not supported by this server.');
+// ── Phase 4: Jukebox control ──────────────────────────────────────────────
+//
+// Backed by the rust-server-audio subsystem (src/api/server-playback.js).
+// Every Subsonic jukeboxControl action maps 1:1 to an existing HTTP
+// endpoint exposed by that subsystem, so this handler is a thin
+// translation layer: action-name dispatch, ID → filepath resolution,
+// status envelope shape-matching.
+//
+// Availability: requires autoBootServerAudio = true (or an externally-
+// started rust-server-audio binary). When the binary is not reachable,
+// the proxy calls throw and we surface a Subsonic error. Admin-only —
+// server-side playback affects anyone in earshot, so non-admin calls
+// are rejected with error 50.
+
+// Convert a Subsonic song ID to the "<vpath>/<relpath>" format expected
+// by /api/v1/server-playback/play et al. Returns null if the id doesn't
+// resolve or the caller can't see its library.
+function songIdToVpath(req, songId) {
+  const { clause, params } = libraryScope(req);
+  const row = db.getDB().prepare(`
+    SELECT t.filepath, l.name AS vpath
+    FROM tracks t JOIN libraries l ON l.id = t.library_id
+    WHERE t.id = ? AND ${clause}
+  `).get(songId, ...params);
+  return row ? `${row.vpath}/${row.filepath}` : null;
+}
+
+// Take the rust-server-audio status object and emit the Subsonic-shaped
+// jukeboxStatus / jukeboxPlaylist inner object. Subsonic uses integer
+// seconds for `position`, 0.0–1.0 gain, and `currentIndex` indexed from
+// zero (undefined when the queue is empty).
+function jukeboxStatusFromRust(status) {
+  const out = {
+    currentIndex: status.queue_length > 0 ? status.queue_index : -1,
+    playing:      !!status.playing,
+    gain:         typeof status.volume === 'number' ? status.volume : 1.0,
+    position:     Math.max(0, Math.floor(status.position || 0)),
+  };
+  return out;
+}
+
+// Resolve the current queue from rust-server-audio (which returns vpath
+// strings like "testlib/Icarus/01 - x.mp3") back to full Subsonic song
+// objects via the tracks table.
+function queueToSongEntries(req, queueVpaths) {
+  if (!queueVpaths?.length) { return []; }
+  // Split each vpath into { vpath, filepath } pairs, then batch-select
+  // tracks that match any of them. Order of results matches the input
+  // queue so clients render entries in the right order.
+  const pairs = queueVpaths.map(v => {
+    const slash = v.indexOf('/');
+    if (slash < 0) { return null; }
+    return { vpath: v.slice(0, slash), filepath: v.slice(slash + 1) };
+  }).filter(Boolean);
+  if (!pairs.length) { return []; }
+
+  const { clause, params } = libraryScope(req);
+  // Per-row lookup — the queue is small enough (few dozen entries at
+  // most) that a prepared statement in a loop is faster than building
+  // an IN (?,?,?) of tuples.
+  const stmt = db.getDB().prepare(`
+    SELECT t.id, t.filepath, t.title, t.track_number, t.disc_number, t.duration,
+           t.format, t.file_size, t.bitrate, t.year, t.genre, t.album_art_file,
+           t.created_at, t.library_id,
+           a.id AS artist_id, a.name AS artist_name,
+           al.id AS album_id, al.name AS album_name
+    FROM tracks t
+    JOIN libraries l ON l.id = t.library_id
+    LEFT JOIN artists a  ON a.id = t.artist_id
+    LEFT JOIN albums  al ON al.id = t.album_id
+    WHERE l.name = ? AND t.filepath = ? AND ${clause}
+  `);
+  const rows = [];
+  for (const p of pairs) {
+    const r = stmt.get(p.vpath, p.filepath, ...params);
+    if (r) { rows.push(r); }
+  }
+  return enrichSongsWithUserMeta(req, rows.map(songFromRow));
+}
+
+// Wrapper: call the rust-server-audio proxy and surface its failures as a
+// Subsonic error envelope rather than crashing the handler.
+async function proxyOrFail(req, res, method, path, body) {
+  try {
+    const r = await serverPlayback.proxyToRust(method, path, body);
+    return r;
+  } catch (err) {
+    winston.warn(`[subsonic jukebox] ${method} ${path} failed: ${err.message}`);
+    // Surface as error 30 ("feature requires server upgrade / not
+    // available on this server") — the closest semantically to "enable
+    // autoBootServerAudio first".
+    sendError(req, res, 30, `Jukebox unavailable: ${err.message}`);
+    return null;
+  }
+}
+
+export async function jukeboxControl(req, res) {
+  if (!req.user.admin) { return SubErr.NOT_AUTHORIZED(req, res); }
+
+  const action = String(req.query.action || 'status');
+
+  // ── Queue-mutating actions ──────────────────────────────────────────
+
+  if (action === 'set' || action === 'add') {
+    const songIds = arrayParam(req.query.id)
+      .map(v => decodeId(v, 'song')?.id)
+      .filter(Number.isFinite);
+    const files = songIds.map(id => songIdToVpath(req, id)).filter(Boolean);
+    if (!files.length && action === 'add') {
+      return SubErr.MISSING_PARAM(req, res, 'id');
+    }
+    // Resolve to absolute paths — /queue/add-many expects what
+    // server-playback's own route does: absolutes.
+    const abs = [];
+    for (const f of files) {
+      try { abs.push(serverPlayback.resolveFilePath(f, req.user)); }
+      catch { /* unresolvable — skip, don't 500 */ }
+    }
+    if (action === 'set') {
+      // `set` = clear + add — two proxy calls in sequence.
+      const r1 = await proxyOrFail(req, res, 'POST', '/queue/clear', {});
+      if (!r1) { return; }
+    }
+    if (abs.length) {
+      const r2 = await proxyOrFail(req, res, 'POST', '/queue/add-many', { files: abs });
+      if (!r2) { return; }
+    }
+    return sendJukeboxStatus(req, res);
+  }
+
+  if (action === 'clear') {
+    const r = await proxyOrFail(req, res, 'POST', '/queue/clear', {});
+    if (!r) { return; }
+    return sendJukeboxStatus(req, res);
+  }
+
+  if (action === 'remove') {
+    const index = parseInt(req.query.index, 10);
+    if (!Number.isFinite(index) || index < 0) {
+      return SubErr.MISSING_PARAM(req, res, 'index');
+    }
+    const r = await proxyOrFail(req, res, 'POST', '/queue/remove', { index });
+    if (!r) { return; }
+    return sendJukeboxStatus(req, res);
+  }
+
+  // ── Transport actions ───────────────────────────────────────────────
+
+  if (action === 'start') {
+    const r = await proxyOrFail(req, res, 'POST', '/resume', {});
+    if (!r) { return; }
+    return sendJukeboxStatus(req, res);
+  }
+
+  if (action === 'stop') {
+    const r = await proxyOrFail(req, res, 'POST', '/pause', {});
+    if (!r) { return; }
+    return sendJukeboxStatus(req, res);
+  }
+
+  if (action === 'skip') {
+    const index = parseInt(req.query.index, 10);
+    if (!Number.isFinite(index) || index < 0) {
+      return SubErr.MISSING_PARAM(req, res, 'index');
+    }
+    const r = await proxyOrFail(req, res, 'POST', '/queue/play-index', { index });
+    if (!r) { return; }
+    // Optional offset in seconds.
+    const offset = parseFloat(req.query.offset);
+    if (Number.isFinite(offset) && offset > 0) {
+      await proxyOrFail(req, res, 'POST', '/seek', { position: offset });
+      if (res.headersSent) { return; }
+    }
+    return sendJukeboxStatus(req, res);
+  }
+
+  if (action === 'shuffle') {
+    const r = await proxyOrFail(req, res, 'POST', '/shuffle', {});
+    if (!r) { return; }
+    return sendJukeboxStatus(req, res);
+  }
+
+  if (action === 'setGain') {
+    const gain = parseFloat(req.query.gain);
+    if (!Number.isFinite(gain) || gain < 0 || gain > 1) {
+      return SubErr.GENERIC(req, res, 'gain must be between 0.0 and 1.0');
+    }
+    const r = await proxyOrFail(req, res, 'POST', '/volume', { volume: gain });
+    if (!r) { return; }
+    return sendJukeboxStatus(req, res);
+  }
+
+  // ── Read actions ────────────────────────────────────────────────────
+
+  if (action === 'status') {
+    return sendJukeboxStatus(req, res);
+  }
+
+  if (action === 'get') {
+    return sendJukeboxPlaylist(req, res);
+  }
+
+  return SubErr.GENERIC(req, res, `Unknown jukebox action: ${action}`);
+}
+
+async function sendJukeboxStatus(req, res) {
+  const s = await proxyOrFail(req, res, 'GET', '/status');
+  if (!s) { return; }
+  sendOk(req, res, { jukeboxStatus: jukeboxStatusFromRust(s.data) });
+}
+
+async function sendJukeboxPlaylist(req, res) {
+  const [s, q] = await Promise.all([
+    proxyOrFail(req, res, 'GET', '/status'),
+    proxyOrFail(req, res, 'GET', '/queue'),
+  ]);
+  if (!s || !q) { return; }
+  // rust-server-audio returns queue entries as absolute paths; the
+  // server-playback proxy layer rewrites them to vpath form before
+  // returning. queueToSongEntries resolves those back to track rows.
+  const queue = Array.isArray(q.data?.queue) ? q.data.queue : [];
+  const entry = queueToSongEntries(req, queue);
+  sendOk(req, res, {
+    jukeboxPlaylist: {
+      ...jukeboxStatusFromRust(s.data),
+      entry,
+    },
+  });
 }

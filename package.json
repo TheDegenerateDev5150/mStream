@@ -20,9 +20,9 @@
     "build-rust": "cd rust-parser && cargo build --release",
     "docs:api": "redocly build-docs docs/openapi.yaml -o docs/api.html",
     "docs:api:validate": "redocly lint docs/openapi.yaml",
-    "test": "node --test --test-reporter=spec test/dlna.test.mjs test/subsonic.test.mjs test/subsonic-modes.test.mjs test/subsonic-phase3.test.mjs test/hash-migration.test.mjs test/audio-hash-parity.test.mjs",
+    "test": "node --test --test-reporter=spec test/dlna.test.mjs test/subsonic.test.mjs test/subsonic-modes.test.mjs test/subsonic-phase3.test.mjs test/subsonic-jukebox.test.mjs test/hash-migration.test.mjs test/audio-hash-parity.test.mjs",
     "test:dlna": "node --test --test-reporter=spec test/dlna.test.mjs",
-    "test:subsonic": "node --test --test-reporter=spec test/subsonic.test.mjs test/subsonic-modes.test.mjs test/subsonic-phase3.test.mjs"
+    "test:subsonic": "node --test --test-reporter=spec test/subsonic.test.mjs test/subsonic-modes.test.mjs test/subsonic-phase3.test.mjs test/subsonic-jukebox.test.mjs"
   },
   "repository": {
     "type": "git",

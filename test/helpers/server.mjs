@@ -69,6 +69,9 @@ async function waitForScanComplete(baseUrl, timeoutMs = 30_000) {
  * @param {number} [opts.subsonicPort]             Port for Subsonic separate-port mode
  * @param {boolean} [opts.waitForScan=true]        Block until the initial scan finishes
  * @param {boolean} [opts.captureLogs=false]       Pipe stdout/stderr to the test process
+ * @param {number}  [opts.rustPlayerPort]          Override config.rustPlayerPort so tests
+ *                                                 can point the server-playback proxy
+ *                                                 (and Subsonic jukeboxControl) at a stub.
  * @param {Object[]} [opts.users]                  Users to create after boot (PUT
  *   /api/v1/admin/users while the server is still in public-access mode).
  *   Each entry: { username, password, admin?, vpaths? }.
@@ -79,6 +82,7 @@ export async function startServer(opts = {}) {
     browseMode    = 'dirs',
     subsonicMode  = 'same-port',
     subsonicPort,
+    rustPlayerPort,
     waitForScan   = true,
     captureLogs   = false,
     users         = [],
@@ -105,6 +109,7 @@ export async function startServer(opts = {}) {
       mode: subsonicMode,
       port: sPort,
     },
+    ...(rustPlayerPort != null ? { rustPlayerPort } : {}),
     folders: { testlib: { root: musicDir } },
     storage: {
       albumArtDirectory:   path.join(tmpDir, 'image-cache'),

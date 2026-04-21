@@ -83,8 +83,10 @@ export function killRustPlayer() {
   }
 }
 
-// Proxy a request to the Rust binary and pipe the response back
-function proxyToRust(method, rustPath, body) {
+// Proxy a request to the Rust binary and pipe the response back.
+// Exported so the Subsonic jukeboxControl handler can reuse it — it
+// shares every primitive with /api/v1/server-playback/*.
+export function proxyToRust(method, rustPath, body) {
   return new Promise((resolve, reject) => {
     const postData = body ? JSON.stringify(body) : '';
     const options = {
@@ -123,13 +125,13 @@ function proxyToRust(method, rustPath, body) {
 }
 
 // Resolve a virtual path (e.g. "55/song.mp3") to an absolute filesystem path
-function resolveFilePath(filePath, user) {
+export function resolveFilePath(filePath, user) {
   const info = vpath.getVPathInfo(filePath, user);
   return info.fullPath;
 }
 
 // Reverse: convert an absolute path back to a virtual path (e.g. "55/song.mp3")
-function absoluteToVpath(absolutePath) {
+export function absoluteToVpath(absolutePath) {
   const normalized = path.normalize(absolutePath);
   const libraries = db.getAllLibraries();
   for (const lib of libraries) {
