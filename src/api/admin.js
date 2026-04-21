@@ -135,13 +135,13 @@ export function setup(mstream) {
     res.json({});
   });
 
-  mstream.post("/api/v1/admin/db/params/scan-batch-size", async (req, res) => {
+  mstream.post("/api/v1/admin/db/params/scan-commit-interval", async (req, res) => {
     const schema = Joi.object({
-      scanBatchSize: Joi.number().integer().min(1).required()
+      scanCommitInterval: Joi.number().integer().min(1).required()
     });
     joiValidate(schema, req.body);
 
-    await admin.editScanBatchSize(req.body.scanBatchSize);
+    await admin.editScanCommitInterval(req.body.scanCommitInterval);
     res.json({});
   });
 

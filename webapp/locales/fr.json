@@ -323,7 +323,7 @@
   "admin.db.compressImages": "Compresser les images :",
   "admin.db.recompress": "recompresser",
   "admin.db.maxConcurrentScans": "Analyses simultanées maximum :",
-  "admin.db.scanBatchSize": "Taille du lot d'analyse :",
+  "admin.db.scanCommitInterval": "Taille du lot d'analyse :",
   "admin.db.albumArtLookup": "Recherche de pochette d'album",
   "admin.db.autoLookup": "Recherche automatique :",
   "admin.db.writeToFolder": "Écrire dans le dossier :",

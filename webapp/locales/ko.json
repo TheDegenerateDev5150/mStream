@@ -323,7 +323,7 @@
   "admin.db.compressImages": "이미지 압축:",
   "admin.db.recompress": "재압축",
   "admin.db.maxConcurrentScans": "최대 동시 스캔 수:",
-  "admin.db.scanBatchSize": "스캔 배치 크기:",
+  "admin.db.scanCommitInterval": "스캔 배치 크기:",
   "admin.db.albumArtLookup": "앨범 아트 검색",
   "admin.db.autoLookup": "자동 검색:",
   "admin.db.writeToFolder": "폴더에 저장:",

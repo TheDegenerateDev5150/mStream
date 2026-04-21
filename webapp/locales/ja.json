@@ -323,7 +323,7 @@
   "admin.db.compressImages": "画像を圧縮：",
   "admin.db.recompress": "再圧縮",
   "admin.db.maxConcurrentScans": "最大同時スキャン数：",
-  "admin.db.scanBatchSize": "スキャンバッチサイズ：",
+  "admin.db.scanCommitInterval": "スキャンバッチサイズ：",
   "admin.db.albumArtLookup": "アルバムアート検索",
   "admin.db.autoLookup": "自動検索：",
   "admin.db.writeToFolder": "フォルダーに書き込み：",

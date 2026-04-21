@@ -21,7 +21,7 @@ const scanOptions = Joi.object({
   bootScanDelay: Joi.number().default(3),
   maxConcurrentTasks: Joi.number().integer().min(1).default(1),
   compressImage: Joi.boolean().default(true),
-  scanBatchSize: Joi.number().integer().min(1).default(100),
+  scanCommitInterval: Joi.number().integer().min(1).default(25),
   autoAlbumArt: Joi.boolean().default(true),
   albumArtWriteToFolder: Joi.boolean().default(false),
   albumArtWriteToFile: Joi.boolean().default(false),

@@ -323,7 +323,7 @@
   "admin.db.compressImages": "Afbeeldingen Comprimeren:",
   "admin.db.recompress": "opnieuw comprimeren",
   "admin.db.maxConcurrentScans": "Max Gelijktijdige Scans:",
-  "admin.db.scanBatchSize": "Scanbatchgrootte:",
+  "admin.db.scanCommitInterval": "Scanbatchgrootte:",
   "admin.db.albumArtLookup": "Albumhoes Opzoeken",
   "admin.db.autoLookup": "Automatisch Opzoeken:",
   "admin.db.writeToFolder": "Opslaan in Map:",

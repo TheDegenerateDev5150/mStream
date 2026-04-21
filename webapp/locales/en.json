@@ -323,7 +323,7 @@
   "admin.db.compressImages": "Compress Images:",
   "admin.db.recompress": "re-compress",
   "admin.db.maxConcurrentScans": "Max Concurrent Scans:",
-  "admin.db.scanBatchSize": "Scan Batch Size:",
+  "admin.db.scanCommitInterval": "Scan Commit Interval:",
   "admin.db.albumArtLookup": "Album Art Lookup",
   "admin.db.autoLookup": "Auto Lookup:",
   "admin.db.writeToFolder": "Write to Folder:",

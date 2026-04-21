@@ -323,7 +323,7 @@
   "admin.db.compressImages": "Compactar Imagens:",
   "admin.db.recompress": "recompactar",
   "admin.db.maxConcurrentScans": "Máximo de Varreduras Simultâneas:",
-  "admin.db.scanBatchSize": "Tamanho do Lote de Varredura:",
+  "admin.db.scanCommitInterval": "Tamanho do Lote de Varredura:",
   "admin.db.albumArtLookup": "Busca de Capa de Álbum",
   "admin.db.autoLookup": "Busca Automática:",
   "admin.db.writeToFolder": "Gravar na Pasta:",

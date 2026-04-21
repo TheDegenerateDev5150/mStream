@@ -33,7 +33,7 @@ const schema = Joi.object({
   supportedFiles: Joi.object().pattern(
     Joi.string(), Joi.boolean()
   ).required(),
-  scanBatchSize: Joi.number().integer().min(1).default(100),
+  scanCommitInterval: Joi.number().integer().min(1).default(25),
   forceRescan: Joi.boolean().default(false)
 });
 
@@ -312,9 +312,10 @@ function insertTrack(song) {
 
 let fileCount = 0;      // new/modified files parsed
 let totalProcessed = 0; // all files touched (including unchanged — for progress)
-let batchCount = 0;
-const BATCH_SIZE = loadJson.scanBatchSize || 100;
-const PROGRESS_INTERVAL = 25;
+// Commit cadence: doubles as progress-update cadence and write-lock release.
+// Lower = more responsive API writes during scans but more COMMIT/BEGIN overhead.
+// Admin-configurable via scanCommitInterval; default (25) is a balanced starting point.
+const COMMIT_INTERVAL = loadJson.scanCommitInterval || 25;
 
 // ── Fast file counter (no metadata parsing) ────────────────────────────────
 
@@ -382,7 +383,6 @@ async function recursiveScan(dir) {
           const songInfo = await parseMyFile(filepath, stat.mtime.getTime());
           insertTrack(songInfo);
           fileCount++;
-          batchCount++;
         }
 
         // Track all files (including unchanged) for progress
@@ -391,11 +391,10 @@ async function recursiveScan(dir) {
         // Periodically commit and report progress so the API can
         // see updates between batches. This also serves as the batch
         // commit for insert performance.
-        if (batchCount >= BATCH_SIZE || totalProcessed % PROGRESS_INTERVAL === 0) {
+        if (totalProcessed % COMMIT_INTERVAL === 0) {
           db.exec('COMMIT');
           try { progressStmts.update.run(totalProcessed, relativePath, loadJson.scanId); } catch (_) {}
           db.exec('BEGIN');
-          batchCount = 0;
         }
       } catch (err) {
         console.error(`Warning: failed to process ${filepath}: ${err.message}`);

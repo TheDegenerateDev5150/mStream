@@ -323,7 +323,7 @@
   "admin.db.compressImages": "Kompresuj Obrazy:",
   "admin.db.recompress": "ponowna kompresja",
   "admin.db.maxConcurrentScans": "Maks. Równoczesne Skany:",
-  "admin.db.scanBatchSize": "Rozmiar Partii Skanowania:",
+  "admin.db.scanCommitInterval": "Rozmiar Partii Skanowania:",
   "admin.db.albumArtLookup": "Wyszukiwanie Okładek Albumów",
   "admin.db.autoLookup": "Automatyczne Wyszukiwanie:",
   "admin.db.writeToFolder": "Zapisz do Folderu:",

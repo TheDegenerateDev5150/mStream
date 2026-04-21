@@ -33,13 +33,13 @@ struct ScanConfig {
     compress_image: bool,
     #[serde(rename = "supportedFiles")]
     supported_files: HashMap<String, bool>,
-    #[serde(rename = "scanBatchSize", default = "default_batch_size")]
-    scan_batch_size: u64,
+    #[serde(rename = "scanCommitInterval", default = "default_commit_interval")]
+    scan_commit_interval: u64,
     #[serde(rename = "forceRescan", default)]
     force_rescan: bool,
 }
 
-fn default_batch_size() -> u64 { 100 }
+fn default_commit_interval() -> u64 { 25 }
 
 // ── Entry point ─────────────────────────────────────────────────────────────
 
@@ -103,9 +103,10 @@ fn run_scan(config: &ScanConfig) -> Result<(), Box<dyn std::error::Error>> {
 
     let mut file_count = 0u64;      // new/modified files parsed
     let mut total_processed = 0u64; // all files touched (including unchanged — for progress)
-    let mut batch_count = 0u64;
-    let batch_size = config.scan_batch_size;
-    let progress_interval = 25u64;
+    // Commit cadence: doubles as progress-update cadence and write-lock release.
+    // Lower = more responsive API writes during scans but more COMMIT/BEGIN overhead.
+    // Admin-configurable via scanCommitInterval; default (25) is a balanced starting point.
+    let commit_interval = config.scan_commit_interval;
 
     // Use explicit transactions for batch performance.
     // Without this, SQLite does a disk fsync per INSERT (~50 files/sec).
@@ -121,7 +122,6 @@ fn run_scan(config: &ScanConfig) -> Result<(), Box<dyn std::error::Error>> {
         match process_one(entry, &ext, config, &conn, &dir_art_cache) {
             Ok(true) => {
                 file_count += 1;
-                batch_count += 1;
             }
             Ok(false) => {} // skipped (unchanged)
             Err(e) => {
@@ -134,7 +134,7 @@ fn run_scan(config: &ScanConfig) -> Result<(), Box<dyn std::error::Error>> {
 
         // Periodically commit and report progress so the API can see
         // updates between batches. Also serves as the batch commit.
-        if batch_count >= batch_size || total_processed % progress_interval == 0 {
+        if total_processed % commit_interval == 0 {
             let rel = entry.path().strip_prefix(&config.directory)
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_default();
@@ -144,7 +144,6 @@ fn run_scan(config: &ScanConfig) -> Result<(), Box<dyn std::error::Error>> {
                 rusqlite::params![total_processed, rel, config.scan_id],
             );
             conn.execute_batch("BEGIN")?;
-            batch_count = 0;
         }
     }
 

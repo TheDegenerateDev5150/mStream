@@ -219,7 +219,7 @@ function runScan(scanObj) {
     scanId: scanObj.id,
     compressImage: config.program.scanOptions.compressImage,
     supportedFiles: config.program.supportedAudioFiles,
-    scanBatchSize: config.program.scanOptions.scanBatchSize || 100,
+    scanCommitInterval: config.program.scanOptions.scanCommitInterval || 25,
     forceRescan: scanObj.forceRescan || false
   };
 

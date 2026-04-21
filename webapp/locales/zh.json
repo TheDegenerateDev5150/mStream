@@ -323,7 +323,7 @@
   "admin.db.compressImages": "压缩图片：",
   "admin.db.recompress": "重新压缩",
   "admin.db.maxConcurrentScans": "最大并发扫描数：",
-  "admin.db.scanBatchSize": "扫描批次大小：",
+  "admin.db.scanCommitInterval": "扫描批次大小：",
   "admin.db.albumArtLookup": "专辑封面查找",
   "admin.db.autoLookup": "自动查找：",
   "admin.db.writeToFolder": "写入文件夹：",

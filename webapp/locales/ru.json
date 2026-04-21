@@ -323,7 +323,7 @@
   "admin.db.compressImages": "Сжимать изображения:",
   "admin.db.recompress": "пересжать",
   "admin.db.maxConcurrentScans": "Макс. одновременных сканирований:",
-  "admin.db.scanBatchSize": "Размер пакета сканирования:",
+  "admin.db.scanCommitInterval": "Размер пакета сканирования:",
   "admin.db.albumArtLookup": "Поиск обложек альбомов",
   "admin.db.autoLookup": "Автопоиск:",
   "admin.db.writeToFolder": "Записать в папку:",

@@ -323,7 +323,7 @@
   "admin.db.compressImages": "Comprimir imágenes:",
   "admin.db.recompress": "recomprimir",
   "admin.db.maxConcurrentScans": "Escaneos simultáneos máximos:",
-  "admin.db.scanBatchSize": "Tamaño del lote de escaneo:",
+  "admin.db.scanCommitInterval": "Tamaño del lote de escaneo:",
   "admin.db.albumArtLookup": "Búsqueda de carátula del álbum",
   "admin.db.autoLookup": "Búsqueda automática:",
   "admin.db.writeToFolder": "Escribir en carpeta:",

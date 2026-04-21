@@ -253,12 +253,12 @@ export async function editCompressImages(val) {
   config.program.scanOptions.compressImage = val;
 }
 
-export async function editScanBatchSize(val) {
+export async function editScanCommitInterval(val) {
   const loadConfig = await loadFile(config.configFile);
   if (!loadConfig.scanOptions) { loadConfig.scanOptions = {}; }
-  loadConfig.scanOptions.scanBatchSize = val;
+  loadConfig.scanOptions.scanCommitInterval = val;
   await saveFile(loadConfig, config.configFile);
-  config.program.scanOptions.scanBatchSize = val;
+  config.program.scanOptions.scanCommitInterval = val;
 }
 
 export async function editAutoAlbumArt(val) {
