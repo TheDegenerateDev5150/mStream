@@ -258,9 +258,9 @@ function getFfmpegVersion(binPath) {
     p.stdout.on('data', d => { o += d; });
     p.on('close', () => {
       const line = o.split('\n')[0] || '';
-      const stable = line.match(/ffmpeg version (\d+)/);
+      const stable = line.match(/(?:ffmpeg|ffprobe) version (\d+)/);
       if (stable) return resolve({ major: parseInt(stable[1], 10), versionLine: line });
-      if (/ffmpeg version N-\d+/.test(line)) return resolve({ major: 99, versionLine: line });
+      if (/(?:ffmpeg|ffprobe) version N-\d+/.test(line)) return resolve({ major: 99, versionLine: line });
       resolve({ major: 0, versionLine: line });
     });
     p.on('error', () => resolve({ major: 0, versionLine: '' }));
