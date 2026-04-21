@@ -118,8 +118,11 @@ async function run() {
     fs.mkdirSync(loadJson.waveformCacheDir, { recursive: true });
   }
 
-  // Open database (read-only — we never write to it)
+  // Open database (read-only — we never write to it). Even readers can be
+  // briefly blocked during WAL checkpoints, so set a busy_timeout to avoid
+  // spurious "database is locked" failures.
   const db = new DatabaseSync(loadJson.dbPath, { readOnly: true });
+  db.exec('PRAGMA busy_timeout = 5000');
 
   // Get tracks with their library root paths and content hashes. When
   // invoked after a scan, task-queue passes a sinceTimestamp so we only

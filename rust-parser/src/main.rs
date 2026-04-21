@@ -71,7 +71,10 @@ fn main() {
 
 fn run_scan(config: &ScanConfig) -> Result<(), Box<dyn std::error::Error>> {
     let conn = Connection::open(&config.db_path)?;
-    conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
+    // Wait up to 5s when another connection holds the write lock (e.g. the
+    // main server's shared-playlist cleanup or any API-triggered write).
+    // Without this, the scanner fails immediately with "database is locked".
+    conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;")?;
 
     let dir_art_cache: Mutex<HashMap<String, Option<String>>> = Mutex::new(HashMap::new());
 

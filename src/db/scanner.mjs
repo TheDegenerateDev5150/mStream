@@ -49,6 +49,10 @@ if (validationError) {
 const db = new DatabaseSync(loadJson.dbPath);
 db.exec('PRAGMA journal_mode = WAL');
 db.exec('PRAGMA foreign_keys = ON');
+// Wait up to 5s when another connection holds the write lock (e.g. the
+// main server's shared-playlist cleanup or any API-triggered write).
+// Without this, the scanner fails immediately with "database is locked".
+db.exec('PRAGMA busy_timeout = 5000');
 
 // ── Prepared statements ─────────────────────────────────────────────────────
 
