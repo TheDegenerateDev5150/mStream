@@ -150,6 +150,7 @@ export async function saveImageToCache(imgBuf, albumArtDir) {
 export function embedArtInFile(audioFilePath, imgBuf) {
   return new Promise(async (resolve, reject) => {
     const ffmpeg = ffmpegBin();
+    if (!ffmpeg) { return resolve(); }
     // Only verify existence for absolute paths. When ffmpegBin() returns a
     // bare command name (system-PATH fallback), leave the check to spawn().
     if (path.isAbsolute(ffmpeg)) {

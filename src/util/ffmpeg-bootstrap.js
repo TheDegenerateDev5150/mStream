@@ -44,14 +44,16 @@ export function getFfmpegDir() {
   return config.program.transcode?.ffmpegDirectory || BUNDLED_FFMPEG_DIR;
 }
 
+// Returns the resolved binary path, or null if ensureFfmpeg() hasn't run
+// successfully. Callers MUST check for null and degrade — spawning a
+// synthesized default path here used to mask "ffmpeg never resolved" failures
+// behind a cryptic ENOENT at call time.
 export function ffmpegBin() {
-  if (_resolvedFfmpegPath) { return _resolvedFfmpegPath; }
-  return path.join(getFfmpegDir(), `ffmpeg${binaryExt}`);
+  return _resolvedFfmpegPath;
 }
 
 export function ffprobeBin() {
-  if (_resolvedFfprobePath) { return _resolvedFfprobePath; }
-  return path.join(getFfmpegDir(), `ffprobe${binaryExt}`);
+  return _resolvedFfprobePath;
 }
 
 // ── Runtime detection helpers ───────────────────────────────────────────────
@@ -79,7 +81,7 @@ async function findSystemBinaries() {
     getFfmpegVersion('ffmpeg'),
     getFfmpegVersion('ffprobe'),
   ]);
-  if (ff.major > 0 && fp.major > 0) {
+  if (ff.major >= MIN_FFMPEG_MAJOR && fp.major >= MIN_FFMPEG_MAJOR) {
     return { ffmpeg: 'ffmpeg', ffprobe: 'ffprobe', ffmpegVersion: ff.versionLine };
   }
   return null;
@@ -301,17 +303,22 @@ async function downloadAndInstall() {
       const archivePath = path.join(dir, info.asset);
       await downloadToFile(info.url, archivePath);
 
-      // Verify checksum
+      // Verify checksum — hard-fail if we can't obtain the expected hash, so a
+      // transient network blip or compromised CDN can't slip an unverified
+      // binary through. Retry will happen on the next ensureFfmpeg() cycle.
       const expected = await fetchExpectedChecksum(info.asset);
-      if (expected) {
-        const actual = await computeFileChecksum(archivePath);
-        if (actual !== expected) {
-          await fsp.unlink(archivePath).catch(() => {});
-          winston.error(`[ffmpeg-bootstrap] Checksum mismatch! Expected ${expected}, got ${actual}`);
-          return false;
-        }
-        winston.info(`[ffmpeg-bootstrap] Checksum verified`);
+      if (!expected) {
+        await fsp.unlink(archivePath).catch(() => {});
+        winston.error(`[ffmpeg-bootstrap] Could not fetch checksum for ${info.asset} — refusing to install unverified binary`);
+        return false;
       }
+      const actual = await computeFileChecksum(archivePath);
+      if (actual !== expected) {
+        await fsp.unlink(archivePath).catch(() => {});
+        winston.error(`[ffmpeg-bootstrap] Checksum mismatch! Expected ${expected}, got ${actual}`);
+        return false;
+      }
+      winston.info(`[ffmpeg-bootstrap] Checksum verified`);
 
       // Extract
       if (info.asset.endsWith('.tar.xz')) {
@@ -330,6 +337,13 @@ async function downloadAndInstall() {
     await fsp.access(destFfprobe);
 
     const { versionLine } = await getFfmpegVersion(destFfmpeg);
+    // Also verify ffprobe executes — otherwise a corrupt or truncated extract
+    // passes silently and fails later in waveform/DLNA time-seek paths.
+    const probeCheck = await getFfmpegVersion(destFfprobe);
+    if (probeCheck.major < MIN_FFMPEG_MAJOR) {
+      winston.error(`[ffmpeg-bootstrap] ffprobe verification failed: ${probeCheck.versionLine || '(no output)'}`);
+      return false;
+    }
     winston.info(`[ffmpeg-bootstrap] ffmpeg ready: ${versionLine || destFfmpeg}`);
     return true;
   } catch (e) {
@@ -480,10 +494,12 @@ export async function checkForUpdate() {
 
     if (stored === expected) return; // already up to date
 
-    const probe = path.join(getFfmpegDir(), `ffprobe${binaryExt}`);
     winston.info(`[ffmpeg-bootstrap] New ffmpeg build available, updating...`);
-    await fsp.unlink(bin).catch(() => {});
-    await fsp.unlink(probe).catch(() => {});
+    // Leave existing binaries in place; downloadAndInstall overwrites them on
+    // success (tar/zip overwrite existing files; direct download uses .tmp +
+    // rename). If we unlinked first, _resolvedFfmpegPath would point at a
+    // deleted file during the multi-minute download window, making every
+    // concurrent transcode / DLNA seek / yt-dlp call fail with ENOENT.
     _initPromise = null;
 
     const success = await downloadAndInstall();
@@ -494,10 +510,8 @@ export async function checkForUpdate() {
     // macOS (martin-riedl): no checksum file — check version instead
     const { major } = await getFfmpegVersion(bin);
     if (major < MIN_FFMPEG_MAJOR) {
-      const probe = path.join(getFfmpegDir(), `ffprobe${binaryExt}`);
       winston.info(`[ffmpeg-bootstrap] ffmpeg outdated, updating...`);
-      await fsp.unlink(bin).catch(() => {});
-      await fsp.unlink(probe).catch(() => {});
+      // See BtbN branch above — don't unlink before download.
       _initPromise = null;
       await downloadAndInstall();
     }

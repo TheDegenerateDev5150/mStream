@@ -64,6 +64,7 @@ export function reset() {
   lockInit = false;
   ffmpegPath = null;
   stopAutoUpdate();
+  resetBootstrap();
 }
 
 export function isDownloaded() {

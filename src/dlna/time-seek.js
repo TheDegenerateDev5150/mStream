@@ -16,7 +16,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import winston from 'winston';
 import * as db from '../db/manager.js';
-import { ffmpegBin } from '../util/ffmpeg-bootstrap.js';
+import { ffmpegBin, getResolvedSource } from '../util/ffmpeg-bootstrap.js';
 
 // Parse an NPT time spec per UPnP AV: either decimal seconds (`123.456`) or
 // `H:MM:SS.sss` / `MM:SS.sss`. Returns null on malformed input.
@@ -118,6 +118,11 @@ export function timeSeekMiddleware(req, res, next) {
     '-loglevel', 'error',
     '-',
   ];
+
+  if (!getResolvedSource()) {
+    winston.warn('[dlna time-seek] ffmpeg unavailable, refusing seek request');
+    return res.status(503).end();
+  }
 
   let ff;
   try {
