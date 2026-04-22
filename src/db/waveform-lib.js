@@ -1,10 +1,16 @@
-// Shared waveform generation helpers.
+// Waveform generation helpers for the on-demand fallback path.
 //
-// Used by both the on-demand endpoint (src/api/waveform.js — single track,
-// requested by the player) and the bulk post-scan generator
-// (src/db/waveform-generator-script.js — batches entire library).
+// The primary waveform generator now lives in rust-parser (symphonia-based,
+// runs inline during the scan, writes .bin files keyed by audio_hash). This
+// module is the fallback used by the on-demand endpoint (src/api/waveform.js)
+// when the Rust scanner didn't produce a cache entry — typically because the
+// user is on the JS fallback scanner, the file is Opus (symphonia 0.5 has no
+// decoder), or the file was added/played before a scan completed.
 //
-// Both call generateWaveformBars() which:
+// generateWaveformBars() here spawns ffmpeg; the cache helpers read/write
+// the same .bin format the Rust scanner uses so both paths interoperate.
+//
+// generateWaveformBars():
 //   1. spawns ffmpeg to decode the audio to mono 8-bit unsigned PCM at 8 kHz
 //      (plenty of resolution for 800 visual bars; 4× smaller than float32)
 //   2. buffers up to MAX_PCM_BYTES of PCM output

@@ -342,14 +342,23 @@ fn process_one(
     // (symphonia 0.5 doesn't decode Opus yet; on-demand endpoint handles it
     // via ffmpeg lazily) and for tracks whose .bin file already exists.
     if !config.waveform_cache_dir.is_empty() {
-        let wf_key = audio_hash.clone().unwrap_or_else(|| hash.clone());
+        let wf_key = audio_hash.as_deref().unwrap_or(&hash);
         let wf_path = PathBuf::from(&config.waveform_cache_dir).join(format!("{}.bin", wf_key));
         if !wf_path.exists() {
             if let Some(bars) = waveform_from_symphonia(filepath, ext) {
                 if let Some(dir) = wf_path.parent() {
                     let _ = fs::create_dir_all(dir);
                 }
-                let _ = fs::write(&wf_path, &bars);
+                // Write atomically — partial writes (process killed mid-I/O)
+                // would otherwise leave a truncated .bin that looks valid to
+                // the existence check and serves garbage to players. Rename
+                // on the same filesystem is atomic on POSIX and on Windows
+                // when the target doesn't exist.
+                let tmp_path = PathBuf::from(&config.waveform_cache_dir)
+                    .join(format!("{}.bin.tmp", wf_key));
+                if fs::write(&tmp_path, &bars).is_ok() {
+                    let _ = fs::rename(&tmp_path, &wf_path);
+                }
             }
         }
     }
