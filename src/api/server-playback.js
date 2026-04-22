@@ -9,6 +9,7 @@ import * as vpath from '../util/vpath.js';
 import * as db from '../db/manager.js';
 import { getDirname } from '../util/esm-helpers.js';
 import * as killQueue from '../state/kill-list.js';
+import * as cliAudio from './cli-audio/index.js';
 
 const __dirname = getDirname(import.meta.url);
 
@@ -19,7 +20,24 @@ killQueue.addToKillQueue(() => {
     rustPlayerProcess.kill();
     rustPlayerProcess = null;
   }
+  cliAudio.killCliPlayer().catch(() => {});
 });
+
+// Snapshot of CLI detection (populated on first bootRustPlayer call) so the
+// admin endpoint can report what's installed without re-probing on every hit.
+let _detectedCliPlayers = null;
+export function getDetectedCliPlayers() {
+  if (_detectedCliPlayers === null) {
+    _detectedCliPlayers = cliAudio.detectAvailablePlayers();
+  }
+  return _detectedCliPlayers;
+}
+
+export function getActiveBackend() {
+  if (rustPlayerProcess) { return { backend: 'rust', player: 'rust-server-audio' }; }
+  if (cliAudio.isCliActive()) { return { backend: 'cli', player: cliAudio.getActivePlayerName() }; }
+  return { backend: null, player: null };
+}
 
 function getRustPort() {
   return config.program.rustPlayerPort || 3333;
@@ -46,7 +64,21 @@ export function bootRustPlayer() {
 
   const bin = findRustBinary();
   if (!bin) {
-    winston.warn('autoBootServerAudio is enabled but rust-server-audio binary not found');
+    winston.warn('autoBootServerAudio is enabled but rust-server-audio binary not found; probing for CLI fallback');
+    _detectedCliPlayers = cliAudio.detectAvailablePlayers();
+    if (_detectedCliPlayers.length === 0) {
+      winston.warn('No CLI audio players detected — server audio will be unavailable');
+      return;
+    }
+    cliAudio.bootCliPlayer().then((name) => {
+      if (name) {
+        winston.info(`Server audio fallback active: ${name}`);
+      } else {
+        winston.warn('Detected CLI players failed to start — server audio will be unavailable');
+      }
+    }).catch((err) => {
+      winston.error(`Failed to boot CLI audio player: ${err.message}`);
+    });
     return;
   }
 
@@ -81,6 +113,7 @@ export function killRustPlayer() {
     rustPlayerProcess.kill();
     rustPlayerProcess = null;
   }
+  cliAudio.killCliPlayer().catch(() => {});
 }
 
 // Proxy a request to the Rust binary and pipe the response back.
@@ -124,6 +157,18 @@ export function proxyToRust(method, rustPath, body) {
   });
 }
 
+// Dispatch to whichever backend is active. Rust is preferred; CLI is used
+// when the Rust binary is missing but a CLI fallback has been booted.
+function proxyPlayback(method, rustPath, body) {
+  if (rustPlayerProcess) {
+    return proxyToRust(method, rustPath, body);
+  }
+  if (cliAudio.isCliActive()) {
+    return cliAudio.proxyToCli(method, rustPath, body);
+  }
+  return Promise.reject(new Error('Server audio player is not running'));
+}
+
 // Resolve a virtual path (e.g. "55/song.mp3") to an absolute filesystem path
 export function resolveFilePath(filePath, user) {
   const info = vpath.getVPathInfo(filePath, user);
@@ -161,7 +206,7 @@ export function setup(mstream) {
   for (const [mstreamPath, rustPath] of Object.entries(simplePostRoutes)) {
     mstream.post(mstreamPath, async (req, res) => {
       try {
-        const result = await proxyToRust('POST', rustPath, req.body || {});
+        const result = await proxyPlayback('POST', rustPath, req.body || {});
         res.status(result.status).json(result.data);
       } catch (e) {
         res.status(503).json({ error: e.message });
@@ -173,7 +218,7 @@ export function setup(mstream) {
 
   mstream.post('/api/v1/server-playback/seek', async (req, res) => {
     try {
-      const result = await proxyToRust('POST', '/seek', req.body);
+      const result = await proxyPlayback('POST', '/seek', req.body);
       res.status(result.status).json(result.data);
     } catch (e) {
       res.status(503).json({ error: e.message });
@@ -182,7 +227,7 @@ export function setup(mstream) {
 
   mstream.post('/api/v1/server-playback/volume', async (req, res) => {
     try {
-      const result = await proxyToRust('POST', '/volume', req.body);
+      const result = await proxyPlayback('POST', '/volume', req.body);
       res.status(result.status).json(result.data);
     } catch (e) {
       res.status(503).json({ error: e.message });
@@ -191,7 +236,7 @@ export function setup(mstream) {
 
   mstream.post('/api/v1/server-playback/shuffle', async (req, res) => {
     try {
-      const result = await proxyToRust('POST', '/shuffle', req.body);
+      const result = await proxyPlayback('POST', '/shuffle', req.body);
       res.status(result.status).json(result.data);
     } catch (e) {
       res.status(503).json({ error: e.message });
@@ -202,7 +247,12 @@ export function setup(mstream) {
 
   mstream.get('/api/v1/server-playback/status', async (req, res) => {
     try {
-      const result = await proxyToRust('GET', '/status');
+      const result = await proxyPlayback('GET', '/status');
+      if (result.data && typeof result.data === 'object' && !Array.isArray(result.data)) {
+        const active = getActiveBackend();
+        result.data.backend = active.backend;
+        result.data.player = active.player;
+      }
       res.status(result.status).json(result.data);
     } catch (e) {
       res.status(503).json({ error: e.message });
@@ -211,7 +261,7 @@ export function setup(mstream) {
 
   mstream.get('/api/v1/server-playback/queue', async (req, res) => {
     try {
-      const result = await proxyToRust('GET', '/queue');
+      const result = await proxyPlayback('GET', '/queue');
       // Convert absolute paths back to virtual paths for the frontend
       if (result.data && result.data.queue) {
         result.data.queue = result.data.queue.map(absoluteToVpath);
@@ -228,7 +278,7 @@ export function setup(mstream) {
   mstream.post('/api/v1/server-playback/play', async (req, res) => {
     try {
       const absolutePath = resolveFilePath(req.body.file, req.user);
-      const result = await proxyToRust('POST', '/play', { file: absolutePath });
+      const result = await proxyPlayback('POST', '/play', { file: absolutePath });
       res.status(result.status).json(result.data);
     } catch (e) {
       res.status(e.message.includes('not running') ? 503 : 400).json({ error: e.message });
@@ -239,7 +289,7 @@ export function setup(mstream) {
   mstream.post('/api/v1/server-playback/queue/add', async (req, res) => {
     try {
       const absolutePath = resolveFilePath(req.body.file, req.user);
-      const result = await proxyToRust('POST', '/queue/add', { file: absolutePath });
+      const result = await proxyPlayback('POST', '/queue/add', { file: absolutePath });
       res.status(result.status).json(result.data);
     } catch (e) {
       res.status(e.message.includes('not running') ? 503 : 400).json({ error: e.message });
@@ -250,7 +300,7 @@ export function setup(mstream) {
   mstream.post('/api/v1/server-playback/queue/add-many', async (req, res) => {
     try {
       const files = req.body.files.map((f) => resolveFilePath(f, req.user));
-      const result = await proxyToRust('POST', '/queue/add-many', { files });
+      const result = await proxyPlayback('POST', '/queue/add-many', { files });
       res.status(result.status).json(result.data);
     } catch (e) {
       res.status(e.message.includes('not running') ? 503 : 400).json({ error: e.message });
@@ -260,7 +310,7 @@ export function setup(mstream) {
   // POST /queue/play-index — jump to index
   mstream.post('/api/v1/server-playback/queue/play-index', async (req, res) => {
     try {
-      const result = await proxyToRust('POST', '/queue/play-index', req.body);
+      const result = await proxyPlayback('POST', '/queue/play-index', req.body);
       res.status(result.status).json(result.data);
     } catch (e) {
       res.status(503).json({ error: e.message });
@@ -270,7 +320,7 @@ export function setup(mstream) {
   // POST /queue/remove — remove by index
   mstream.post('/api/v1/server-playback/queue/remove', async (req, res) => {
     try {
-      const result = await proxyToRust('POST', '/queue/remove', req.body);
+      const result = await proxyPlayback('POST', '/queue/remove', req.body);
       res.status(result.status).json(result.data);
     } catch (e) {
       res.status(503).json({ error: e.message });
@@ -280,7 +330,7 @@ export function setup(mstream) {
   // POST /queue/clear — stop and empty queue
   mstream.post('/api/v1/server-playback/queue/clear', async (req, res) => {
     try {
-      const result = await proxyToRust('POST', '/queue/clear', {});
+      const result = await proxyPlayback('POST', '/queue/clear', {});
       res.status(result.status).json(result.data);
     } catch (e) {
       res.status(503).json({ error: e.message });
@@ -292,9 +342,9 @@ export function setup(mstream) {
 
 export function setupBeforeAuth(mstream) {
   mstream.get('/server-remote', async (req, res) => {
-    // Check if the Rust audio service is reachable before serving the page
+    // Check if any audio backend (rust or CLI fallback) is reachable
     try {
-      await proxyToRust('GET', '/status');
+      await proxyPlayback('GET', '/status');
     } catch (_e) {
       res.status(503).send(
         '<!doctype html><html><head><meta charset="utf-8"><title>Server Audio Unavailable</title>' +
@@ -348,7 +398,7 @@ export function setupBeforeAuth(mstream) {
       );
 
       res.send(page);
-    } catch (e) {
+    } catch (_e) {
       res.status(500).json({ error: 'Failed to serve server-remote page' });
     }
   });

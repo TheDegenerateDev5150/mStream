@@ -12,7 +12,7 @@ import * as imageCompress from '../db/image-compress-manager.js';
 import * as transcode from './transcode.js';
 import * as db from '../db/manager.js';
 import { joiValidate } from '../util/validation.js';
-import { bootRustPlayer, killRustPlayer, proxyToRust } from './server-playback.js';
+import { bootRustPlayer, killRustPlayer, proxyToRust, getActiveBackend, getDetectedCliPlayers } from './server-playback.js';
 import { listImplementedMethods } from './subsonic/index.js';
 import { listTokenAuthAttempts, clearTokenAuthAttempts, generateApiKey } from './subsonic/auth.js';
 import * as nowPlaying from './subsonic/now-playing.js';
@@ -454,6 +454,15 @@ export function setup(mstream) {
 
     await admin.editRustPlayerPort(req.body.rustPlayerPort);
     res.json({});
+  });
+
+  mstream.get("/api/v1/admin/server-audio/info", (req, res) => {
+    const active = getActiveBackend();
+    res.json({
+      backend: active.backend,
+      player: active.player,
+      detectedCliPlayers: getDetectedCliPlayers(),
+    });
   });
 
   mstream.post("/api/v1/admin/config/secret", async (req, res) => {

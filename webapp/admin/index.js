@@ -25,6 +25,9 @@ const ADMINDATA = (() => {
   // server settings
   module.serverParams = {};
   module.serverParamsUpdated = { ts: 0 };
+  // server audio backend (rust vs CLI fallback)
+  module.serverAudioInfo = { backend: null, player: null, detectedCliPlayers: [] };
+  module.serverAudioInfoUpdated = { ts: 0 };
   // transcoding
   module.transcodeParams = {};
   module.transcodeParamsUpdated = { ts: 0 };
@@ -152,6 +155,19 @@ const ADMINDATA = (() => {
     });
 
     module.serverParamsUpdated.ts = Date.now();
+  }
+
+  module.getServerAudioInfo = async () => {
+    try {
+      const res = await API.axios({
+        method: 'GET',
+        url: `${API.url()}/api/v1/admin/server-audio/info`
+      });
+      module.serverAudioInfo.backend = res.data.backend;
+      module.serverAudioInfo.player = res.data.player;
+      module.serverAudioInfo.detectedCliPlayers = res.data.detectedCliPlayers || [];
+      module.serverAudioInfoUpdated.ts = Date.now();
+    } catch (_err) {}
   }
 
   module.getTranscodeParams = async () => {
@@ -350,6 +366,7 @@ ADMINDATA.getFolders();
 ADMINDATA.getUsers();
 ADMINDATA.getDbParams();
 ADMINDATA.getServerParams();
+ADMINDATA.getServerAudioInfo();
 ADMINDATA.getFederationParams();
 ADMINDATA.getDlnaParams();
 ADMINDATA.getSubsonicParams();
@@ -938,8 +955,22 @@ const advancedView = Vue.component('advanced-view', {
   data() {
     return {
       params: ADMINDATA.serverParams,
-      paramsTS: ADMINDATA.serverParamsUpdated
+      paramsTS: ADMINDATA.serverParamsUpdated,
+      audioInfo: ADMINDATA.serverAudioInfo,
+      audioInfoTS: ADMINDATA.serverAudioInfoUpdated
     };
+  },
+  computed: {
+    activePlayerLabel: function() {
+      if (!this.audioInfo.backend) { return 'None'; }
+      if (this.audioInfo.backend === 'rust') { return 'rust-server-audio (native)'; }
+      if (this.audioInfo.backend === 'cli') { return (this.audioInfo.player || 'cli') + ' (CLI fallback)'; }
+      return this.audioInfo.player || 'Unknown';
+    },
+    detectedCliPlayersLabel: function() {
+      const d = this.audioInfo.detectedCliPlayers || [];
+      return d.length ? d.join(', ') : 'None';
+    }
   },
   template: `
     <div v-if="paramsTS.ts === 0" class="row">
@@ -1035,6 +1066,16 @@ const advancedView = Vue.component('advanced-view', {
                       <td>
                         [<a v-on:click="openModal('edit-rust-player-port-modal')">{{ t('admin.settings.edit') }}</a>]
                       </td>
+                    </tr>
+                    <tr>
+                      <td><b>Active player:</b> {{ activePlayerLabel }}</td>
+                      <td>
+                        [<a v-on:click="refreshServerAudioInfo()">refresh</a>]
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><b>Detected CLI players:</b> {{ detectedCliPlayersLabel }}</td>
+                      <td></td>
                     </tr>
                   </tbody>
                 </table>
@@ -1321,6 +1362,9 @@ const advancedView = Vue.component('advanced-view', {
         ]
       });
     },
+    refreshServerAudioInfo: function() {
+      ADMINDATA.getServerAudioInfo();
+    },
     toggleAutoBootServerAudio: function() {
       iziToast.question({
         timeout: 20000,
@@ -1344,6 +1388,7 @@ const advancedView = Vue.component('advanced-view', {
               data: { autoBootServerAudio: !this.params.autoBootServerAudio }
             }).then(() => {
               Vue.set(ADMINDATA.serverParams, 'autoBootServerAudio', !this.params.autoBootServerAudio);
+              setTimeout(() => ADMINDATA.getServerAudioInfo(), 500);
               iziToast.success({
                 title: t('admin.settings.updated'),
                 position: 'topCenter',
