@@ -371,7 +371,8 @@ export function setup(mstream) {
 
   mstream.post("/api/v1/admin/config/ui", async (req, res) => {
     const schema = Joi.object({
-      ui: Joi.string().valid('default', 'velvet').required()
+      // Keep this list in sync with state/config.js `ui` validator.
+      ui: Joi.string().valid('default', 'velvet', 'subsonic').required()
     });
     joiValidate(schema, req.body);
 

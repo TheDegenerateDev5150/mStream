@@ -140,9 +140,12 @@ export async function serveIt(configFile) {
       return next();
     }
 
-    // VELVET ONLY: skip login redirect — Velvet has a built-in login screen
-    // TODO: standardize login flow so both UIs handle auth the same way
-    if (config.program.ui === 'velvet') {
+    // Velvet and the bundled Subsonic client both handle auth inside
+    // the SPA (Velvet shows an inline form; Refix submits creds via
+    // ping/getArtists on first nav). Skip the server-side /login
+    // redirect for those — let the SPA decide what to render.
+    // TODO: standardize login flow so all UIs handle auth the same way
+    if (config.program.ui === 'velvet' || config.program.ui === 'subsonic') {
       return next();
     }
 
@@ -155,8 +158,9 @@ export async function serveIt(configFile) {
   });
 
   mstream.get('/login', (req, res, next) => {
-    // VELVET ONLY: redirect /login to / since Velvet handles login inline
-    if (config.program.ui === 'velvet') {
+    // Velvet / Subsonic both own their login UI — a server-side hit on
+    // /login is meaningless for them, so redirect back to the SPA root.
+    if (config.program.ui === 'velvet' || config.program.ui === 'subsonic') {
       return res.redirect(302, '/');
     }
 
@@ -175,12 +179,44 @@ export async function serveIt(configFile) {
   // Server-remote route (must be before static middleware to intercept /server-remote)
   serverPlaybackApi.setupBeforeAuth(mstream);
 
-  // Give access to public folder
-  // VELVET ONLY: serve webapp/velvet/ instead of webapp/ when ui='velvet'
+  // Give access to public folder. Three supported UIs — default, velvet,
+  // and the bundled Subsonic web client (Airsonic Refix). Subsonic UI
+  // talks to our own /rest/* endpoints so nothing else needs wiring
+  // differently.
   const webappDir = config.program.ui === 'velvet'
     ? path.join(config.program.webAppDirectory, 'velvet')
-    : config.program.webAppDirectory;
+    : config.program.ui === 'subsonic'
+      ? path.join(config.program.webAppDirectory, 'subsonic')
+      : config.program.webAppDirectory;
   mstream.use('/', express.static(webappDir));
+
+  // Subsonic-UI SPA fallback: the bundled client is a Vue SPA with
+  // history-mode routing (/servers, /albums, /artists, /playlists/...),
+  // so a reload of any route other than `/` must serve index.html and
+  // let the client-side router take over. Inserted right after the
+  // static middleware so it catches unmatched GETs BEFORE the mStream
+  // auth wall 401s them — the SPA handles its own auth by calling
+  // /rest/ping. Scoped to `ui === 'subsonic'` so the default and
+  // velvet UIs keep their 404 behaviour.
+  //
+  // Explicitly skip API namespaces so those fall through to their
+  // real handlers (and 404 properly when the method doesn't exist).
+  if (config.program.ui === 'subsonic') {
+    const SPA_SKIP = /^\/(rest|api|media|album-art|server-remote|shared|dlna)(\/|$)/;
+    const indexPath = path.join(webappDir, 'index.html');
+    // Read the shell once at boot — it's ~800B and never changes while
+    // the process is up.
+    const indexHtml = fs.readFileSync(indexPath, 'utf8');
+    mstream.get(/.*/, (req, res, next) => {
+      if (SPA_SKIP.test(req.path)) { return next(); }
+      // Request explicitly asks for a non-HTML resource — let it 404.
+      const accept = String(req.get('accept') || '');
+      if (accept && !accept.includes('text/html') && !accept.includes('*/*')) {
+        return next();
+      }
+      res.type('html').send(indexHtml);
+    });
+  }
 
   // Public APIs
   remoteApi.setupBeforeAuth(mstream, server);

@@ -93,6 +93,11 @@ export async function startServer(opts = {}) {
     // fixtures (e.g. the V17 multi-artist suite builds compilation
     // and collab tracks on the fly).
     extraFolders  = {},
+    // Which UI to serve: 'default' (webapp/alpha), 'velvet', or
+    // 'subsonic' (webapp/subsonic → bundled Airsonic Refix). Only
+    // affects the `/` HTML + SPA-fallback routing — all API tests
+    // ignore this knob.
+    ui            = 'default',
   } = opts;
 
   const musicDir = await ensureFixtures();
@@ -107,6 +112,7 @@ export async function startServer(opts = {}) {
   const config = {
     port,
     address: '127.0.0.1',
+    ui,
     dlna: {
       mode: dlnaMode,
       name: 'mStream Test',

@@ -102,7 +102,13 @@ const schema = Joi.object({
   writeLogs: Joi.boolean().default(false),
   lockAdmin: Joi.boolean().default(false),
   storage: storageJoi.default(storageJoi.validate({}).value),
-  ui: Joi.string().valid('default', 'velvet').default('default'),
+  // 'default'  — mStream's classic UI (webapp/alpha/)
+  // 'velvet'   — mStream's alternative UI (webapp/velvet/)
+  // 'subsonic' — bundled Airsonic Refix (webapp/subsonic/), a third-party
+  //              Subsonic web client pointed at our own /rest/* endpoints.
+  //              Users log in with their mStream username + password;
+  //              every HTTP call from the UI speaks Subsonic.
+  ui: Joi.string().valid('default', 'velvet', 'subsonic').default('default'),
   webAppDirectory: Joi.string().default(path.join(__dirname, '../../webapp')),
   rpn: rpnOptions.default(rpnOptions.validate({}).value),
   transcode: transcodeOptions.default(transcodeOptions.validate({}).value),
