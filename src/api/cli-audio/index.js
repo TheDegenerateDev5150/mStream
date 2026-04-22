@@ -5,7 +5,9 @@
  * a known CLI music player and boots an adapter that mimics the Rust binary's
  * HTTP API. `proxyToCli` is a drop-in replacement for `proxyToRust`.
  *
- * Priority order is defined in PLAYERS below — first installed wins.
+ * Priority order is defined in PLAYERS below — first installed wins. MPD is a
+ * special case: there's no binary to spawn, we just TCP-probe localhost:6600
+ * (overridable via MSTREAM_MPD_HOST).
  */
 
 import child_process from 'child_process';
@@ -13,45 +15,66 @@ import winston from 'winston';
 import { MpvAdapter } from './mpv.js';
 import { VlcAdapter } from './vlc.js';
 import { MplayerAdapter } from './mplayer.js';
+import { MpdAdapter, probeMpd } from './mpd.js';
 
 /**
- * Priority list. First entry whose binary is found on PATH is used.
- * `probeArgs` should be a lightweight flag that returns quickly and exits 0
- * (or at least produces version text without blocking on stdin).
+ * Priority list. First available entry is used.
+ *
+ * Each entry defines how to detect and instantiate a player:
+ *   kind: 'spawn' — requires a binary on PATH; detected by running `probeArgs`
+ *   kind: 'daemon' — connects to a long-running daemon; detected by `probe()`
  */
 export const PLAYERS = [
-  { name: 'mpv',     binary: 'mpv',     probeArgs: ['--version'], AdapterClass: MpvAdapter,     label: 'mpv' },
-  { name: 'vlc',     binary: 'vlc',     probeArgs: ['--version'], AdapterClass: VlcAdapter,     label: 'VLC' },
-  { name: 'mplayer', binary: 'mplayer', probeArgs: ['-v'],        AdapterClass: MplayerAdapter, label: 'MPlayer' },
+  { name: 'mpv',     kind: 'spawn',  binary: 'mpv',     probeArgs: ['--version'], AdapterClass: MpvAdapter,     label: 'mpv' },
+  { name: 'mpd',     kind: 'daemon', probe: () => probeMpd(),                     AdapterClass: MpdAdapter,     label: 'MPD' },
+  { name: 'vlc',     kind: 'spawn',  binary: 'vlc',     probeArgs: ['--version'], AdapterClass: VlcAdapter,     label: 'VLC' },
+  { name: 'mplayer', kind: 'spawn',  binary: 'mplayer', probeArgs: ['-v'],        AdapterClass: MplayerAdapter, label: 'MPlayer' },
 ];
 
-function probe(binary, args) {
+function probeBinary(binary, args) {
+  // Async probe: we used to call spawnSync here, but that blocks the Node
+  // event loop, which starves the MPD TCP probe's 'data' callback and makes
+  // its short timeout misfire. Using spawn lets every probe run concurrently.
+  return new Promise((resolve) => {
+    let proc;
+    try {
+      proc = child_process.spawn(binary, args, { windowsHide: true });
+    } catch (_e) {
+      return resolve(false);
+    }
+    let gotOutput = false;
+    const mark = () => { gotOutput = true; };
+    const timer = setTimeout(() => {
+      try { proc.kill(); } catch (_) { /* ignore */ }
+      resolve(gotOutput);
+    }, 3000);
+    // Most players print a version banner on stdout or stderr. As long as
+    // the binary resolved and produced output, count it as available —
+    // exit codes vary (mplayer -v returns non-zero because it wants a file).
+    if (proc.stdout) { proc.stdout.on('data', mark); }
+    if (proc.stderr) { proc.stderr.on('data', mark); }
+    proc.on('exit', () => { clearTimeout(timer); resolve(gotOutput); });
+    proc.on('error', () => { clearTimeout(timer); resolve(false); });
+  });
+}
+
+async function isAvailable(player) {
   try {
-    const res = child_process.spawnSync(binary, args, {
-      encoding: 'utf8',
-      timeout: 3000,
-      windowsHide: true,
-    });
-    if (res.error) { return false; }
-    const out = (res.stdout || '') + (res.stderr || '');
-    // Most players print a version banner; as long as the binary resolved and
-    // produced output, count it as available. Exit code varies (mplayer -v can
-    // return non-zero because it expects a file argument).
-    return out.length > 0;
+    if (player.kind === 'daemon') { return await player.probe(); }
+    return await probeBinary(player.binary, player.probeArgs);
   } catch (_e) {
     return false;
   }
 }
 
 /**
- * Returns the subset of PLAYERS that are actually installed, in priority order.
+ * Returns the subset of PLAYERS that are actually installed / reachable, in
+ * priority order. Probes TCP daemons concurrently so we don't serialize
+ * connection timeouts.
  */
-export function detectAvailablePlayers() {
-  const found = [];
-  for (const p of PLAYERS) {
-    if (probe(p.binary, p.probeArgs)) { found.push(p.name); }
-  }
-  return found;
+export async function detectAvailablePlayers() {
+  const flags = await Promise.all(PLAYERS.map((p) => isAvailable(p)));
+  return PLAYERS.filter((_, i) => flags[i]).map((p) => p.name);
 }
 
 // ── Active adapter state ───────────────────────────────────────────────────
@@ -71,8 +94,9 @@ export async function bootCliPlayer() {
   if (activeAdapter) { return activePlayerName; }
 
   for (const p of PLAYERS) {
-    if (!probe(p.binary, p.probeArgs)) { continue; }
-    const adapter = new p.AdapterClass(p.binary);
+    const available = await isAvailable(p);
+    if (!available) { continue; }
+    const adapter = p.kind === 'spawn' ? new p.AdapterClass(p.binary) : new p.AdapterClass();
     try {
       await adapter.start();
       activeAdapter = adapter;

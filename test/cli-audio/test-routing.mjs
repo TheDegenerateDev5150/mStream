@@ -17,6 +17,7 @@
 import { MpvAdapter } from '../../src/api/cli-audio/mpv.js';
 import { VlcAdapter } from '../../src/api/cli-audio/vlc.js';
 import { MplayerAdapter } from '../../src/api/cli-audio/mplayer.js';
+import { MpdAdapter } from '../../src/api/cli-audio/mpd.js';
 import { detectAvailablePlayers } from '../../src/api/cli-audio/index.js';
 
 const TEST_FILE = process.env.TEST_FILE || '/tmp/test-tone.mp3';
@@ -168,13 +169,14 @@ function formatResult(r) {
 }
 
 (async () => {
-  console.log('Detected players:', detectAvailablePlayers().join(', ') || '(none)');
+  console.log('Detected players:', (await detectAvailablePlayers()).join(', ') || '(none)');
   console.log('Test file:', TEST_FILE);
 
   const results = [];
   results.push(await runAdapterTests('mpv',     new MpvAdapter()));
   results.push(await runAdapterTests('vlc',     new VlcAdapter()));
   results.push(await runAdapterTests('mplayer', new MplayerAdapter()));
+  results.push(await runAdapterTests('mpd',     new MpdAdapter()));
 
   console.log('');
   for (const r of results) { console.log(formatResult(r)); console.log(''); }

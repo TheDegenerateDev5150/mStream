@@ -1,7 +1,7 @@
 // SQLite schema definitions and migration system for mStream.
 // Uses PRAGMA user_version for tracking which migrations have been applied.
 
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 export const SCHEMA_V1 = `
   -- Users
@@ -358,6 +358,13 @@ export const SCHEMA_V16 = `
   ALTER TABLE tracks ADD COLUMN bit_depth    INTEGER;
 `;
 
+export const SCHEMA_V17 = `
+  -- Per-user server-audio access flag. Gates /api/v1/server-playback/* and
+  -- the /server-remote page; admins always pass. Defaults to 1 so existing
+  -- users keep their access on upgrade.
+  ALTER TABLE users ADD COLUMN allow_server_audio INTEGER NOT NULL DEFAULT 1;
+`;
+
 // rescanRequired: true — marks migrations that change the tracks table schema
 // and need a force rescan to populate new fields. When applied, a marker file
 // is written so the next boot triggers rescanAll() instead of scanAll().
@@ -378,4 +385,5 @@ export const MIGRATIONS = [
   { version: 14, sql: SCHEMA_V14, rescanRequired: true },
   { version: 15, sql: SCHEMA_V15 },
   { version: 16, sql: SCHEMA_V16, rescanRequired: true },
+  { version: 17, sql: SCHEMA_V17 },
 ];

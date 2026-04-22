@@ -63,7 +63,8 @@ export function setup(mstream) {
         id: null,
         allow_upload: adminLocked ? 0 : 1,
         allow_mkdir: adminLocked ? 0 : 1,
-        allow_file_modify: adminLocked ? 0 : 1
+        allow_file_modify: adminLocked ? 0 : 1,
+        allow_server_audio: 1
       };
       return next();
     }
@@ -97,7 +98,8 @@ export function setup(mstream) {
         admin: false,
         allow_upload: 0,
         allow_mkdir: 0,
-        allow_file_modify: 0
+        allow_file_modify: 0,
+        allow_server_audio: 0
       };
       return next();
     }

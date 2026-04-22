@@ -23,13 +23,17 @@ killQueue.addToKillQueue(() => {
   cliAudio.killCliPlayer().catch(() => {});
 });
 
-// Snapshot of CLI detection (populated on first bootRustPlayer call) so the
+// Snapshot of CLI detection (refreshed on each boot-server-audio call) so the
 // admin endpoint can report what's installed without re-probing on every hit.
-let _detectedCliPlayers = null;
+// Detection is now async (MPD requires a TCP probe), so callers that want a
+// fresh value should await refreshDetectedCliPlayers(); the admin route uses
+// the cached value.
+let _detectedCliPlayers = [];
+async function refreshDetectedCliPlayers() {
+  _detectedCliPlayers = await cliAudio.detectAvailablePlayers();
+  return _detectedCliPlayers;
+}
 export function getDetectedCliPlayers() {
-  if (_detectedCliPlayers === null) {
-    _detectedCliPlayers = cliAudio.detectAvailablePlayers();
-  }
   return _detectedCliPlayers;
 }
 
@@ -58,36 +62,68 @@ function findRustBinary() {
   return null;
 }
 
+// Has the currently-spawned rust process stayed up long enough that we
+// consider startup successful? Used by the rust-fallback path: if rust dies
+// before this goes true, we treat the spawn as failed and roll over to CLI.
+let _rustStartupSettled = false;
+const RUST_SETTLE_MS = 2000;
+
+async function bootCliFallback(reason) {
+  if (cliAudio.isCliActive()) { return; }
+  await refreshDetectedCliPlayers();
+  if (_detectedCliPlayers.length === 0) {
+    winston.warn(`[server-audio] ${reason}; no CLI audio players detected — server audio unavailable`);
+    return;
+  }
+  try {
+    const name = await cliAudio.bootCliPlayer();
+    if (name) {
+      winston.info(`[server-audio] ${reason}; using CLI fallback: ${name}`);
+    } else {
+      winston.warn(`[server-audio] ${reason}; CLI players detected but none would start`);
+    }
+  } catch (err) {
+    winston.error(`[server-audio] CLI fallback failed: ${err.message}`);
+  }
+}
+
+/**
+ * Boot whichever server-audio backend is appropriate.
+ *
+ *   autoBootServerAudio: true  → prefer the Rust binary; fall back to a CLI
+ *                                player if the binary is missing or the spawn
+ *                                dies during startup.
+ *   autoBootServerAudio: false → skip Rust entirely and use the first
+ *                                available CLI player.
+ *
+ * Name is kept for backwards-compatibility with existing callers in
+ * src/server.js and src/api/admin.js.
+ */
 export function bootRustPlayer() {
-  if (!config.program.autoBootServerAudio) { return; }
   if (rustPlayerProcess) { return; }
+
+  if (!config.program.autoBootServerAudio) {
+    bootCliFallback('autoBootServerAudio=false').catch(() => {});
+    return;
+  }
 
   const bin = findRustBinary();
   if (!bin) {
-    winston.warn('autoBootServerAudio is enabled but rust-server-audio binary not found; probing for CLI fallback');
-    _detectedCliPlayers = cliAudio.detectAvailablePlayers();
-    if (_detectedCliPlayers.length === 0) {
-      winston.warn('No CLI audio players detected — server audio will be unavailable');
-      return;
-    }
-    cliAudio.bootCliPlayer().then((name) => {
-      if (name) {
-        winston.info(`Server audio fallback active: ${name}`);
-      } else {
-        winston.warn('Detected CLI players failed to start — server audio will be unavailable');
-      }
-    }).catch((err) => {
-      winston.error(`Failed to boot CLI audio player: ${err.message}`);
-    });
+    bootCliFallback('rust-server-audio binary not found').catch(() => {});
     return;
   }
 
   const port = getRustPort();
   winston.info(`Starting rust-server-audio on port ${port}`);
 
+  _rustStartupSettled = false;
   rustPlayerProcess = child_process.spawn(bin, ['--port', String(port)], {
     stdio: ['ignore', 'pipe', 'pipe']
   });
+
+  const settleTimer = setTimeout(() => {
+    _rustStartupSettled = true;
+  }, RUST_SETTLE_MS);
 
   rustPlayerProcess.stdout.on('data', (data) => {
     winston.info(`[rust-audio] ${data.toString().trim()}`);
@@ -98,13 +134,24 @@ export function bootRustPlayer() {
   });
 
   rustPlayerProcess.on('close', (code) => {
+    clearTimeout(settleTimer);
     winston.info(`rust-server-audio exited with code ${code}`);
+    const settled = _rustStartupSettled;
     rustPlayerProcess = null;
+    if (!settled) {
+      // Died during startup → roll over to CLI.
+      bootCliFallback(`rust-server-audio exited early (code ${code})`).catch(() => {});
+    }
   });
 
   rustPlayerProcess.on('error', (err) => {
+    clearTimeout(settleTimer);
     winston.error(`Failed to start rust-server-audio: ${err.message}`);
+    const settled = _rustStartupSettled;
     rustPlayerProcess = null;
+    if (!settled) {
+      bootCliFallback(`rust-server-audio spawn failed: ${err.message}`).catch(() => {});
+    }
   });
 }
 
@@ -191,6 +238,15 @@ export function absoluteToVpath(absolutePath) {
 }
 
 export function setup(mstream) {
+
+  // ── Per-user permission gate ────────────────────────────────────────────
+  // Any route under /api/v1/server-playback requires allow_server_audio.
+  // Admins always pass; everyone else must have the flag set.
+  mstream.all('/api/v1/server-playback/{*path}', (req, res, next) => {
+    if (req.user && req.user.admin === true) { return next(); }
+    if (req.user && (req.user.allow_server_audio === 1 || req.user.allow_server_audio === true)) { return next(); }
+    return res.status(403).json({ error: 'Server audio access disabled for this user' });
+  });
 
   // ── Simple proxy routes (no path translation needed) ────────────────────
 

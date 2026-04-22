@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       vlc-bin \
       vlc-plugin-base \
       mplayer \
+      mpd \
       ffmpeg \
       ca-certificates \
  && rm -rf /var/lib/apt/lists/*
@@ -34,13 +35,16 @@ RUN npm init -y >/dev/null && npm install --omit=dev --no-audit --no-fund winsto
 
 COPY src/api/cli-audio ./src/api/cli-audio
 COPY test/cli-audio/test-routing.mjs ./test/cli-audio/test-routing.mjs
+COPY test/cli-audio/mpd.conf        ./test/cli-audio/mpd.conf
+COPY test/cli-audio/entrypoint.sh   ./test/cli-audio/entrypoint.sh
 
-# Pre-generate a short sine-wave MP3 that all three players can decode.
+# Pre-generate a short sine-wave MP3 that all four players can decode.
 RUN ffmpeg -y -f lavfi -i "sine=frequency=440:duration=10" -ac 2 -ar 44100 \
       -c:a libmp3lame -q:a 5 /tmp/test-tone.mp3 \
+ && chmod +x /app/test/cli-audio/entrypoint.sh \
  && chown -R tester:tester /app /tmp/test-tone.mp3
 
 USER tester
 ENV HOME=/home/tester
 
-CMD ["node", "test/cli-audio/test-routing.mjs"]
+CMD ["/app/test/cli-audio/entrypoint.sh"]
