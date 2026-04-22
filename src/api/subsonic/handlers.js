@@ -824,7 +824,14 @@ function normalizeQueryFragment(q) {
   return String(q || '').trim().replace(/[*"%_]/g, '').toLowerCase();
 }
 
-export function search3(req, res) {
+// Core search — shared by search2 and search3. Returns the assembled
+// {artist, album, song} payload; callers wrap it in the envelope name
+// their spec variant wants (searchResult2 vs searchResult3). Clients
+// dispatch on that wrapper name, so emitting the wrong one makes
+// results invisible to the caller — search2 used to forward to
+// search3 and returned a searchResult3 envelope that older clients
+// (DSub, Subsonic 6.x desktop, Airsonic classic) silently ignored.
+function buildSearchPayload(req) {
   const q = normalizeQueryFragment(req.query.query);
   const artistCount = Math.max(0, parseInt(req.query.artistCount, 10) || 20);
   const albumCount  = Math.max(0, parseInt(req.query.albumCount,  10) || 20);
@@ -833,9 +840,7 @@ export function search3(req, res) {
   const albumOffset  = Math.max(0, parseInt(req.query.albumOffset,  10) || 0);
   const songOffset   = Math.max(0, parseInt(req.query.songOffset,   10) || 0);
 
-  if (!q) {
-    return sendOk(req, res, { searchResult3: {} });
-  }
+  if (!q) { return { empty: true }; }
 
   const { clause, params } = libraryScope(req);
   // Optional `musicFolderId` narrows the search to a single library the
@@ -846,7 +851,7 @@ export function search3(req, res) {
   const scopeParams = [...params];
   if (folder) {
     if (!req.user.vpaths.some(name => db.getAllLibraries().some(l => l.id === folder.id && l.name === name))) {
-      return sendOk(req, res, { searchResult3: {} });
+      return { empty: true };
     }
     scope = `${clause} AND t.library_id = ?`;
     scopeParams.push(folder.id);
@@ -901,28 +906,44 @@ export function search3(req, res) {
     LIMIT ? OFFSET ?
   `).all(...scopeParams, like, songCount, songOffset);
 
-  sendOk(req, res, {
-    searchResult3: {
-      artist: artists.map(a => ({
-        id: encArtist(a.id), name: a.name, coverArt: encArtist(a.id),
-      })),
-      album: albums.map(al => ({
-        id:       encAlbum(al.id),
-        name:     al.name,
-        title:    al.name,
-        artist:   al.artist_name || undefined,
-        artistId: al.artist_id != null ? encArtist(al.artist_id) : undefined,
-        year:     al.year || undefined,
-        coverArt: al.album_art_file ? encAlbum(al.id) : undefined,
-      })),
-      song: enrichSongsWithUserMeta(req, songs.map(songFromRow)),
-    },
-  });
+  return {
+    artist: artists.map(a => ({
+      id: encArtist(a.id), name: a.name, coverArt: encArtist(a.id),
+    })),
+    album: albums.map(al => ({
+      id:       encAlbum(al.id),
+      name:     al.name,
+      title:    al.name,
+      artist:   al.artist_name || undefined,
+      artistId: al.artist_id != null ? encArtist(al.artist_id) : undefined,
+      year:     al.year || undefined,
+      coverArt: al.album_art_file ? encAlbum(al.id) : undefined,
+    })),
+    song: enrichSongsWithUserMeta(req, songs.map(songFromRow)),
+  };
 }
 
-// Legacy search + search2 are thin wrappers around search3 for old clients.
+export function search3(req, res) {
+  const p = buildSearchPayload(req);
+  sendOk(req, res, { searchResult3: p.empty ? {} : p });
+}
+
+// search2 shares the payload shape with search3 but clients dispatch on
+// the wrapper name — returning `searchResult3` here makes search2
+// responses invisible to the caller. Every remaining search2 user
+// (DSub, older Airsonic/Subsonic desktop, Jamstash) will accept the
+// search3 artist shape (id/name/coverArt) inside a searchResult2 wrapper.
+export function search2(req, res) {
+  const p = buildSearchPayload(req);
+  sendOk(req, res, { searchResult2: p.empty ? {} : p });
+}
+
+// search (v1, Subsonic 1.0): different query shape entirely — `any`
+// instead of `query`, plus a completely different response envelope
+// with a flat `match` array of song-like entries. Modern clients never
+// call this; we forward to search3 so at least the OPEN-SUBSONIC auth
+// path keeps working if some ancient client probes it.
 export function search(req, res)  { search3(req, res); }
-export function search2(req, res) { search3(req, res); }
 
 // ════════════════════════════════════════════════════════════════════════════
 // Phase 2 — scrobble, favourites, playlists, album lists
