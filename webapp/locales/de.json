@@ -468,10 +468,5 @@
   "admin.modal.invitePlaceholder": "Ihr Einladungstoken wird hier angezeigt",
   "admin.modal.copyClipboard": "In Zwischenablage kopieren",
   "admin.modal.nothingToFederate": "Nichts zum Föderieren vorhanden",
-  "admin.modal.inviteFailed": "Einladung konnte nicht erstellt werden",
-  "admin.db.waveformConcurrency": "Waveform Concurrency:",
-  "admin.modal.waveformConcurrency": "Waveform Concurrency",
-  "admin.modal.editWaveformConcurrency": "Edit Waveform Concurrency",
-  "admin.modal.waveformConcurrencyHint": "Number of ffmpeg processes to run in parallel during bulk waveform generation. Bump up on dedicated servers.",
-  "admin.db.generateWaveforms": "Generate Waveforms:"
+  "admin.modal.inviteFailed": "Einladung konnte nicht erstellt werden"
 }

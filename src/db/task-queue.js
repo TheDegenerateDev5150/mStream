@@ -7,7 +7,6 @@ import * as config from '../state/config.js';
 import * as db from './manager.js';
 import { addToKillQueue, removeFromKillQueue } from '../state/kill-list.js';
 import { getDirname } from '../util/esm-helpers.js';
-import * as waveformGenerator from './waveform-generator.js';
 import * as dlnaApi from '../api/dlna.js';
 
 const __dirname = getDirname(import.meta.url);
@@ -17,12 +16,10 @@ const runningTasks = new Set();
 const vpathLimiter = new Set();
 let scanIntervalTimer = null;
 // True when any scan in the current batch added, changed, or removed tracks.
-// Reset to false after the waveform post-processor runs.
+// Used to decide whether to bump DLNA's SystemUpdateID after the final scan
+// in a batch — skipped on fully-unchanged rescans so control points aren't
+// poked for nothing.
 let anyScansChanged = false;
-// SQLite-format timestamp ("YYYY-MM-DD HH:MM:SS" UTC) captured when a new
-// batch starts. Passed to the waveform generator so it can query only
-// tracks created during this batch instead of the whole library.
-let batchStartTime = null;
 
 // ── Rust parser binary detection ────────────────────────────────────────────
 
@@ -192,18 +189,11 @@ function onScanClose(forkedScan, scanObj, code) {
 
   nextTask();
 
-  // When all scans are done, run the waveform post-processor — but only if
-  // some scan actually changed the DB. A scheduled rescan over an unchanged
-  // library shouldn't fork a child just to SELECT and return "up to date".
+  // When all scans are done, bump DLNA's SystemUpdateID so control points
+  // refresh their caches — but only if some scan actually changed the DB.
+  // Safe to call whether or not DLNA is enabled.
   if (runningTasks.size === 0 && taskQueue.length === 0 && anyScansChanged) {
-    const since = batchStartTime;
     anyScansChanged = false;
-    batchStartTime = null;
-    if (config.program.scanOptions.generateWaveforms !== false) {
-      waveformGenerator.run(since);
-    }
-    // Bump SystemUpdateID so DLNA control points refresh their caches.
-    // Safe to call whether or not DLNA is enabled.
     dlnaApi.bumpSystemUpdateID();
   }
 }
@@ -221,15 +211,6 @@ function runScan(scanObj) {
   if (!library) {
     winston.warn(`Library '${scanObj.vpath}' not found in database, skipping scan`);
     return;
-  }
-
-  // Stamp the start of the batch using SQLite's own clock so the string
-  // format ("YYYY-MM-DD HH:MM:SS") lines up with rows' created_at defaults
-  // and lexical comparison is valid.
-  if (batchStartTime === null) {
-    try {
-      batchStartTime = db.getDB()?.prepare("SELECT datetime('now') AS ts").get()?.ts || null;
-    } catch (_) { batchStartTime = null; }
   }
 
   const dbPath = path.join(config.program.storage.dbDirectory, 'mstream.db');

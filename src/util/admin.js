@@ -262,22 +262,6 @@ export async function editScanCommitInterval(val) {
   config.program.scanOptions.scanCommitInterval = val;
 }
 
-export async function editGenerateWaveforms(val) {
-  const loadConfig = await loadFile(config.configFile);
-  if (!loadConfig.scanOptions) { loadConfig.scanOptions = {}; }
-  loadConfig.scanOptions.generateWaveforms = val;
-  await saveFile(loadConfig, config.configFile);
-  config.program.scanOptions.generateWaveforms = val;
-}
-
-export async function editWaveformConcurrency(val) {
-  const loadConfig = await loadFile(config.configFile);
-  if (!loadConfig.scanOptions) { loadConfig.scanOptions = {}; }
-  loadConfig.scanOptions.waveformConcurrency = val;
-  await saveFile(loadConfig, config.configFile);
-  config.program.scanOptions.waveformConcurrency = val;
-}
-
 export async function editAutoAlbumArt(val) {
   const loadConfig = await loadFile(config.configFile);
   if (!loadConfig.scanOptions) { loadConfig.scanOptions = {}; }

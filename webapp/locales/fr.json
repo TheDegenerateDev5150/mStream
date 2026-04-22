@@ -468,10 +468,5 @@
   "admin.modal.invitePlaceholder": "Votre jeton d'invitation sera affiché ici",
   "admin.modal.copyClipboard": "Copier dans le presse-papiers",
   "admin.modal.nothingToFederate": "Rien à fédérer",
-  "admin.modal.inviteFailed": "Échec de la création de l'invitation",
-  "admin.db.waveformConcurrency": "Waveform Concurrency:",
-  "admin.modal.waveformConcurrency": "Waveform Concurrency",
-  "admin.modal.editWaveformConcurrency": "Edit Waveform Concurrency",
-  "admin.modal.waveformConcurrencyHint": "Number of ffmpeg processes to run in parallel during bulk waveform generation. Bump up on dedicated servers.",
-  "admin.db.generateWaveforms": "Generate Waveforms:"
+  "admin.modal.inviteFailed": "Échec de la création de l'invitation"
 }

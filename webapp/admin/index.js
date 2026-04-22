@@ -1419,18 +1419,6 @@ const dbView = Vue.component('db-view', {
                         [<a v-on:click="openModal('edit-max-scan-modal')">{{ t('admin.settings.edit') }}</a>]
                       </td>
                     </tr>
-                    <tr>
-                      <td><b>{{ t('admin.db.generateWaveforms') }}</b> {{ dbParams.generateWaveforms ? t('admin.settings.enabled') : t('admin.settings.disabled') }}</td>
-                      <td>
-                        [<a v-on:click="toggleGenerateWaveforms()">{{ t('admin.settings.edit') }}</a>]
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><b>{{ t('admin.db.waveformConcurrency') }}</b> {{dbParams.waveformConcurrency}}</td>
-                      <td>
-                        [<a v-on:click="openModal('edit-waveform-concurrency-modal')">{{ t('admin.settings.edit') }}</a>]
-                      </td>
-                    </tr>
                   </tbody>
                 </table>
               </div>
@@ -1756,47 +1744,6 @@ const dbView = Vue.component('db-view', {
                 timeout: 3500
               });
             }
-          }, true],
-          [`<button>${t('admin.folders.goBack')}</button>`, (instance, toast) => {
-            instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
-          }],
-        ]
-      });
-    },
-    toggleGenerateWaveforms: function() {
-      iziToast.question({
-        timeout: 20000,
-        close: false,
-        overlayClose: true,
-        overlay: true,
-        displayMode: 'once',
-        id: 'question',
-        zindex: 99999,
-        layout: 2,
-        maxWidth: 600,
-        title: `<b>${this.dbParams.generateWaveforms === true ? t('admin.settings.disableButton') : t('admin.settings.enableButton')} ${t('admin.db.generateWaveforms').replace(':', '')}?</b>`,
-        position: 'center',
-        buttons: [
-          [`<button><b>${this.dbParams.generateWaveforms === true ? t('admin.settings.disableButton') : t('admin.settings.enableButton')}</b></button>`, (instance, toast) => {
-            instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
-            API.axios({
-              method: 'POST',
-              url: `${API.url()}/api/v1/admin/db/params/generate-waveforms`,
-              data: { generateWaveforms: !this.dbParams.generateWaveforms }
-            }).then(() => {
-              Vue.set(ADMINDATA.dbParams, 'generateWaveforms', !this.dbParams.generateWaveforms);
-              iziToast.success({
-                title: t('admin.settings.updated'),
-                position: 'topCenter',
-                timeout: 3500
-              });
-            }).catch(() => {
-              iziToast.error({
-                title: t('admin.settings.failed'),
-                position: 'topCenter',
-                timeout: 3500
-              });
-            });
           }, true],
           [`<button>${t('admin.folders.goBack')}</button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
@@ -3981,69 +3928,6 @@ const editMaxScanModal = Vue.component('edit-max-scans-modal', {
   }
 });
 
-const editWaveformConcurrencyModal = Vue.component('edit-waveform-concurrency-modal', {
-  data() {
-    return {
-      params: ADMINDATA.dbParams,
-      submitPending: false,
-      editValue: ADMINDATA.dbParams.waveformConcurrency
-    };
-  },
-  template: `
-    <form @submit.prevent="updateParam">
-      <div class="modal-content">
-        <h4>{{ t('admin.modal.waveformConcurrency') }}</h4>
-        <div class="input-field">
-          <input v-model="editValue" id="edit-waveform-concurrency" required type="number" min="1">
-          <label for="edit-waveform-concurrency">{{ t('admin.modal.editWaveformConcurrency') }}</label>
-          <span class="helper-text">{{ t('admin.modal.waveformConcurrencyHint') }}</span>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <a href="#!" class="modal-close waves-effect waves-green btn-flat">{{ t('admin.modal.goBack') }}</a>
-        <button class="btn green waves-effect waves-light" type="submit" :disabled="submitPending === true">
-          {{ submitPending === false ? t('admin.modal.update') : t('admin.modal.updating') }}
-        </button>
-      </div>
-    </form>`,
-  mounted: function () {
-    M.updateTextFields();
-  },
-  methods: {
-    updateParam: async function() {
-      try {
-        this.submitPending = true;
-
-        await API.axios({
-          method: 'POST',
-          url: `${API.url()}/api/v1/admin/db/params/waveform-concurrency`,
-          data: { waveformConcurrency: Number(this.editValue) }
-        });
-
-        // update frontend data
-        Vue.set(ADMINDATA.dbParams, 'waveformConcurrency', Number(this.editValue));
-
-        // close & reset the modal
-        M.Modal.getInstance(document.getElementById('admin-modal')).close();
-
-        iziToast.success({
-          title: t('admin.settings.updated'),
-          position: 'topCenter',
-          timeout: 3500
-        });
-      } catch(err) {
-        iziToast.error({
-          title: t('admin.modal.updateFailed'),
-          position: 'topCenter',
-          timeout: 3500
-        });
-      } finally {
-        this.submitPending = false;
-      }
-    }
-  }
-});
-
 const editBootScanView = Vue.component('edit-boot-scan-delay-modal', {
   data() {
     return {
@@ -4612,7 +4496,6 @@ const modVM = new Vue({
     'edit-select-codec-modal': editTranscodeCodecModal,
     'edit-transcode-bitrate-modal': editTranscodeDefaultBitrate,
     'edit-max-scan-modal': editMaxScanModal,
-    'edit-waveform-concurrency-modal': editWaveformConcurrencyModal,
     'edit-ssl-modal': editSslModal,
     'lastfm-modal': lastFMModal,
     'federation-generate-invite-modal': federationGenerateInvite,

@@ -9,7 +9,6 @@ import * as admin from '../util/admin.js';
 import * as config from '../state/config.js';
 import * as dbQueue from '../db/task-queue.js';
 import * as imageCompress from '../db/image-compress-manager.js';
-import * as waveformGenerator from '../db/waveform-generator.js';
 import * as transcode from './transcode.js';
 import * as db from '../db/manager.js';
 import { joiValidate } from '../util/validation.js';
@@ -148,26 +147,6 @@ export function setup(mstream) {
     res.json({});
   });
 
-  mstream.post("/api/v1/admin/db/params/generate-waveforms", async (req, res) => {
-    const schema = Joi.object({
-      generateWaveforms: Joi.boolean().required()
-    });
-    joiValidate(schema, req.body);
-
-    await admin.editGenerateWaveforms(req.body.generateWaveforms);
-    res.json({});
-  });
-
-  mstream.post("/api/v1/admin/db/params/waveform-concurrency", async (req, res) => {
-    const schema = Joi.object({
-      waveformConcurrency: Joi.number().integer().min(1).required()
-    });
-    joiValidate(schema, req.body);
-
-    await admin.editWaveformConcurrency(req.body.waveformConcurrency);
-    res.json({});
-  });
-
   mstream.post("/api/v1/admin/db/params/auto-album-art", async (req, res) => {
     const schema = Joi.object({ autoAlbumArt: Joi.boolean().required() });
     joiValidate(schema, req.body);
@@ -275,10 +254,6 @@ export function setup(mstream) {
 
   mstream.post("/api/v1/admin/db/force-compress-images", (req, res) => {
     res.json({ started: imageCompress.run() });
-  });
-
-  mstream.post("/api/v1/admin/db/generate-waveforms", (req, res) => {
-    res.json({ started: waveformGenerator.run() });
   });
 
   mstream.post("/api/v1/admin/db/scan/all", (req, res) => {

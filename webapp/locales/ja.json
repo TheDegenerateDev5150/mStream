@@ -468,10 +468,5 @@
   "admin.modal.invitePlaceholder": "招待トークンがここに表示されます",
   "admin.modal.copyClipboard": "クリップボードにコピー",
   "admin.modal.nothingToFederate": "フェデレーション対象がありません",
-  "admin.modal.inviteFailed": "招待の作成に失敗しました",
-  "admin.db.waveformConcurrency": "Waveform Concurrency:",
-  "admin.modal.waveformConcurrency": "Waveform Concurrency",
-  "admin.modal.editWaveformConcurrency": "Edit Waveform Concurrency",
-  "admin.modal.waveformConcurrencyHint": "Number of ffmpeg processes to run in parallel during bulk waveform generation. Bump up on dedicated servers.",
-  "admin.db.generateWaveforms": "Generate Waveforms:"
+  "admin.modal.inviteFailed": "招待の作成に失敗しました"
 }

@@ -289,11 +289,6 @@ components:
           type: boolean
         scanCommitInterval:
           type: integer
-        generateWaveforms:
-          type: boolean
-        waveformConcurrency:
-          type: integer
-          minimum: 1
         autoAlbumArt:
           type: boolean
         albumArtWriteToFolder:
@@ -3251,51 +3246,6 @@ paths:
         "200": { $ref: "#/components/responses/EmptySuccess" }
         "405": { $ref: "#/components/responses/AdminLocked" }
 
-  /api/v1/admin/db/params/generate-waveforms:
-    post:
-      tags: [Admin - Scanner]
-      summary: Toggle post-scan waveform generation
-      description: |
-        When `false`, the bulk waveform generator is skipped after scans finish.
-        Waveforms can still be produced on-demand by `GET /api/v1/db/waveform`
-        (which reads the cache and only calls ffmpeg on a miss). Useful on
-        CPU-constrained Docker hosts where the periodic generator spike is
-        visible in `top`.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [generateWaveforms]
-              properties:
-                generateWaveforms: { type: boolean }
-      responses:
-        "200": { $ref: "#/components/responses/EmptySuccess" }
-        "405": { $ref: "#/components/responses/AdminLocked" }
-
-  /api/v1/admin/db/params/waveform-concurrency:
-    post:
-      tags: [Admin - Scanner]
-      summary: Set waveform generator concurrency
-      description: |
-        Number of ffmpeg processes the bulk waveform generator runs in
-        parallel. Higher = faster cold-cache catch-up, but more CPU
-        contention. Default is 2 — bump to your physical core count on
-        a dedicated server.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [waveformConcurrency]
-              properties:
-                waveformConcurrency: { type: integer, minimum: 1 }
-      responses:
-        "200": { $ref: "#/components/responses/EmptySuccess" }
-        "405": { $ref: "#/components/responses/AdminLocked" }
-
   /api/v1/admin/db/params/auto-album-art:
     post:
       tags: [Admin - Scanner]
@@ -3383,20 +3333,6 @@ paths:
                   started: { type: boolean }
         "405": { $ref: "#/components/responses/AdminLocked" }
 
-  /api/v1/admin/db/generate-waveforms:
-    post:
-      tags: [Admin - Scanner]
-      summary: Generate waveform data for every track
-      responses:
-        "200":
-          description: Job status.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  started: { type: boolean }
-        "405": { $ref: "#/components/responses/AdminLocked" }
 
   /api/v1/admin/db/scan/all:
     post:

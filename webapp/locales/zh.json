@@ -468,10 +468,5 @@
   "admin.modal.invitePlaceholder": "您的邀请令牌将显示在这里",
   "admin.modal.copyClipboard": "复制到剪贴板",
   "admin.modal.nothingToFederate": "没有可联合的内容",
-  "admin.modal.inviteFailed": "创建邀请失败",
-  "admin.db.waveformConcurrency": "Waveform Concurrency:",
-  "admin.modal.waveformConcurrency": "Waveform Concurrency",
-  "admin.modal.editWaveformConcurrency": "Edit Waveform Concurrency",
-  "admin.modal.waveformConcurrencyHint": "Number of ffmpeg processes to run in parallel during bulk waveform generation. Bump up on dedicated servers.",
-  "admin.db.generateWaveforms": "Generate Waveforms:"
+  "admin.modal.inviteFailed": "创建邀请失败"
 }
