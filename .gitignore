@@ -47,6 +47,9 @@ webapp/dist/*
 rust-parser/target/
 rust-server-audio/target/
 
+save/waveforms/*
+!save/waveforms/README.md
+
 waveform-cache/*
 !waveform-cache/README.md
 
