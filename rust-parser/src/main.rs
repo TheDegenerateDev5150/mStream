@@ -13,6 +13,17 @@ use rusqlite::Connection;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
+use symphonia::core::audio::SampleBuffer;
+use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::formats::FormatOptions;
+use symphonia::core::io::MediaSourceStream;
+use symphonia::core::meta::MetadataOptions;
+use symphonia::core::probe::Hint;
+
+// Number of bars in a waveform — matches NUM_BARS in src/db/waveform-lib.js.
+// Cache files are exactly this many bytes (one u8 per bar).
+const NUM_BARS: usize = 800;
+
 // ── Config (matches what task-queue.js passes) ──────────────────────────────
 
 #[derive(Deserialize)]
@@ -38,6 +49,8 @@ struct ScanConfig {
     scan_commit_interval: u64,
     #[serde(rename = "forceRescan", default)]
     force_rescan: bool,
+    #[serde(rename = "waveformCacheDir", default)]
+    waveform_cache_dir: String,
 }
 
 fn default_commit_interval() -> u64 { 25 }
@@ -322,6 +335,24 @@ fn process_one(
     }
 
     let (hash, audio_hash) = compute_hashes(filepath, ext)?;
+
+    // Best-effort waveform generation — uses audio_hash as the cache key so
+    // waveforms survive tag edits (same pattern as user_* rows). Falls back
+    // to file_hash when the format has no audio_hash. Skipped for .opus
+    // (symphonia 0.5 doesn't decode Opus yet; on-demand endpoint handles it
+    // via ffmpeg lazily) and for tracks whose .bin file already exists.
+    if !config.waveform_cache_dir.is_empty() {
+        let wf_key = audio_hash.clone().unwrap_or_else(|| hash.clone());
+        let wf_path = PathBuf::from(&config.waveform_cache_dir).join(format!("{}.bin", wf_key));
+        if !wf_path.exists() {
+            if let Some(bars) = waveform_from_symphonia(filepath, ext) {
+                if let Some(dir) = wf_path.parent() {
+                    let _ = fs::create_dir_all(dir);
+                }
+                let _ = fs::write(&wf_path, &bars);
+            }
+        }
+    }
 
     // Find or create artist
     let artist_id = match &artist {
@@ -719,6 +750,89 @@ fn audio_ranges_for_ext(
         "m4a" | "m4b" | "mp4"    => mp4_audio_range(file, file_size),
         _ => None,
     }
+}
+
+// ── Waveform generation (symphonia-powered) ───────────────────────────────
+//
+// Decodes the audio stream, downmixes to mono magnitudes, and emits NUM_BARS
+// peak values (u8, 0-255). Bar i covers the frame range
+// [i * n_frames / NUM_BARS, (i+1) * n_frames / NUM_BARS). Missing or zero-frame
+// tracks return None; .opus is skipped because symphonia 0.5 lacks an Opus
+// decoder. On any decoder/IO error we fall back to None so the scanner
+// continues and the on-demand endpoint can try ffmpeg later.
+fn waveform_from_symphonia(path: &Path, ext: &str) -> Option<[u8; NUM_BARS]> {
+    // Symphonia doesn't ship an Opus decoder in 0.5. We want to keep the
+    // binary pure-Rust (no libopus), so skip .opus here and let the
+    // on-demand endpoint handle it via ffmpeg on first playback.
+    if ext == "opus" { return None; }
+
+    let file = fs::File::open(path).ok()?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+
+    let mut hint = Hint::new();
+    hint.with_extension(ext);
+
+    let probed = symphonia::default::get_probe()
+        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .ok()?;
+    let mut format = probed.format;
+
+    let track = format.tracks().iter().find(|t| t.codec_params.codec != CODEC_TYPE_NULL)?;
+    let track_id = track.id;
+    let n_frames = track.codec_params.n_frames?;
+    if n_frames == 0 { return None; }
+    let channels = track.codec_params.channels.map(|c| c.count()).unwrap_or(2);
+
+    let mut decoder = symphonia::default::get_codecs()
+        .make(&track.codec_params, &DecoderOptions::default())
+        .ok()?;
+
+    let mut peaks = [0f32; NUM_BARS];
+    let mut frame_idx: u64 = 0;
+    let mut sample_buf: Option<SampleBuffer<f32>> = None;
+
+    loop {
+        let packet = match format.next_packet() {
+            Ok(p) => p,
+            Err(_) => break,   // EOF or unrecoverable — whatever we have is what we get
+        };
+        if packet.track_id() != track_id { continue; }
+
+        let decoded = match decoder.decode(&packet) {
+            Ok(d) => d,
+            Err(_) => continue,   // skip corrupt packet, keep going
+        };
+
+        if sample_buf.is_none() {
+            let spec = *decoded.spec();
+            let capacity = decoded.capacity() as u64;
+            sample_buf = Some(SampleBuffer::<f32>::new(capacity, spec));
+        }
+        let buf = sample_buf.as_mut().unwrap();
+        buf.copy_interleaved_ref(decoded);
+
+        // Downmix interleaved samples to mono magnitudes and update the
+        // running peak for whichever bar the current frame falls into.
+        for chunk in buf.samples().chunks(channels) {
+            let mut sum = 0f32;
+            for &s in chunk { sum += s.abs(); }
+            let mag = sum / (channels as f32);
+
+            let bar = (frame_idx.saturating_mul(NUM_BARS as u64) / n_frames) as usize;
+            if bar < NUM_BARS && mag > peaks[bar] {
+                peaks[bar] = mag;
+            }
+            frame_idx += 1;
+        }
+    }
+
+    if frame_idx == 0 { return None; }
+
+    let mut bars = [0u8; NUM_BARS];
+    for i in 0..NUM_BARS {
+        bars[i] = (peaks[i].clamp(0.0, 1.0) * 255.0).round() as u8;
+    }
+    Some(bars)
 }
 
 fn compute_hashes(

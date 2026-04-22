@@ -226,7 +226,13 @@ function runScan(scanObj) {
     compressImage: config.program.scanOptions.compressImage,
     supportedFiles: config.program.supportedAudioFiles,
     scanCommitInterval: config.program.scanOptions.scanCommitInterval || 25,
-    forceRescan: scanObj.forceRescan || false
+    forceRescan: scanObj.forceRescan || false,
+    // The Rust scanner generates waveform .bin files inline via symphonia
+    // and writes them here (keyed by audio_hash, falling back to file_hash).
+    // The JS fallback scanner doesn't generate waveforms — for those users,
+    // the on-demand GET /api/v1/db/waveform endpoint produces them lazily
+    // via ffmpeg on first playback.
+    waveformCacheDir: config.program.storage.waveformCacheDirectory,
   };
 
   if (!findRustParser()) {

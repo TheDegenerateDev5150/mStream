@@ -55,17 +55,20 @@ export function setup(mstream) {
       return res.status(404).json({ error: 'file not found' });
     }
 
-    // Look up the track's content hash from the database
+    // Look up the track's content hashes from the database. Prefer audio_hash
+    // (tag-stable) so waveforms survive tag edits — the rust-parser writes
+    // .bin files keyed on it. Fall back to file_hash for formats where no
+    // audio_hash is available.
     const lib = db.getLibraryByName(pathInfo.vpath);
     const track = lib && db.getDB()?.prepare(
-      'SELECT file_hash FROM tracks WHERE filepath = ? AND library_id = ?'
+      'SELECT file_hash, audio_hash FROM tracks WHERE filepath = ? AND library_id = ?'
     ).get(pathInfo.relativePath, lib.id);
 
-    if (!track?.file_hash) {
+    if (!track || (!track.audio_hash && !track.file_hash)) {
       return res.status(404).json({ error: 'track not in database' });
     }
 
-    const key = track.file_hash;
+    const key = track.audio_hash || track.file_hash;
 
     // Check memory cache
     if (memCache.has(key)) {

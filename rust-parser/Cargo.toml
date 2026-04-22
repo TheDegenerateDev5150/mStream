@@ -15,6 +15,23 @@ lofty = "0.22"
 walkdir = "2"
 md5 = "0.7"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+# Pure-Rust audio decoder used to build the 800-bar waveform cache during a
+# scan. Codec features cover every extension in supportedAudioFiles
+# (src/state/config.js) EXCEPT .opus — symphonia 0.5 has no pure-Rust Opus
+# decoder yet and we deliberately avoid linking libopus / a C library. Opus
+# files are detected at scan time and skipped here; their waveforms are
+# generated on first play by the on-demand GET /api/v1/db/waveform endpoint
+# (which falls back to ffmpeg).
+symphonia = { version = "0.5", default-features = false, features = [
+    "mp3",
+    "flac",
+    "vorbis",
+    "aac",
+    "alac",
+    "isomp4",
+    "ogg",
+    "wav",
+] }
 
 [profile.release]
 strip = true
