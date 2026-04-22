@@ -84,6 +84,32 @@ fn main() {
         }
     }
 
+    // Hidden developer/test subcommand: `rust-parser --waveform <path>`
+    // prints `{"bars":"<hex of 800 bytes>"}` on success or `{"bars":null}`
+    // when no waveform can be produced (e.g. .opus, where symphonia 0.5
+    // has no decoder). Used by test/waveform.test.mjs to exercise the
+    // decoder across every supported format without standing up a full
+    // scan's worth of DB scaffolding.
+    if args.len() == 3 && args[1] == "--waveform" {
+        let p = Path::new(&args[2]);
+        let ext = file_ext(p).to_lowercase();
+        match waveform_from_symphonia(p, &ext) {
+            Some(bars) => {
+                // Hex instead of base64: trivial to produce without extra
+                // crates, trivial for the JS test to decode, fixed-length
+                // 1600 chars so a bug that truncates or pads shows up
+                // immediately.
+                let mut hex = String::with_capacity(NUM_BARS * 2);
+                for b in bars.iter() { hex.push_str(&format!("{:02x}", b)); }
+                println!("{{\"bars\":\"{}\"}}", hex);
+            }
+            None => {
+                println!("{{\"bars\":null}}");
+            }
+        }
+        return;
+    }
+
     let json_str = match args.last() {
         Some(s) if args.len() > 1 => s.clone(),
         _ => {
@@ -764,11 +790,20 @@ fn audio_ranges_for_ext(
 // ── Waveform generation (symphonia-powered) ───────────────────────────────
 //
 // Decodes the audio stream, downmixes to mono magnitudes, and emits NUM_BARS
-// peak values (u8, 0-255). Bar i covers the frame range
-// [i * n_frames / NUM_BARS, (i+1) * n_frames / NUM_BARS). Missing or zero-frame
-// tracks return None; .opus is skipped because symphonia 0.5 lacks an Opus
-// decoder. On any decoder/IO error we fall back to None so the scanner
+// peak values (u8, 0-255). .opus is skipped because symphonia 0.5 lacks an
+// Opus decoder. On any decoder/IO error we fall back to None so the scanner
 // continues and the on-demand endpoint can try ffmpeg later.
+//
+// Two decode strategies:
+//   (a) Streaming — when track.codec_params.n_frames is populated, map each
+//       decoded frame directly to its bar by index (bar = frame_idx * N / total).
+//       Memory: O(1). Used for most formats (MP3, FLAC, Ogg Vorbis, AAC/M4A).
+//   (b) Buffered — when n_frames is None (notably WAV, where symphonia's
+//       format reader doesn't populate it), collect mono magnitudes into a
+//       Vec and bin by the actual count at the end. Memory: O(n_frames).
+//       Capped at MAX_BUFFERED_FRAMES to keep worst-case memory bounded on
+//       very long WAV files; past that we truncate.
+const MAX_BUFFERED_FRAMES: usize = 30 * 1024 * 1024;  // ~10 min at 48 kHz
 fn waveform_from_symphonia(path: &Path, ext: &str) -> Option<[u8; NUM_BARS]> {
     // Symphonia doesn't ship an Opus decoder in 0.5. We want to keep the
     // binary pure-Rust (no libopus), so skip .opus here and let the
@@ -788,8 +823,7 @@ fn waveform_from_symphonia(path: &Path, ext: &str) -> Option<[u8; NUM_BARS]> {
 
     let track = format.tracks().iter().find(|t| t.codec_params.codec != CODEC_TYPE_NULL)?;
     let track_id = track.id;
-    let n_frames = track.codec_params.n_frames?;
-    if n_frames == 0 { return None; }
+    let n_frames = track.codec_params.n_frames;   // None → buffered path
     let channels = track.codec_params.channels.map(|c| c.count()).unwrap_or(2);
 
     let mut decoder = symphonia::default::get_codecs()
@@ -797,10 +831,12 @@ fn waveform_from_symphonia(path: &Path, ext: &str) -> Option<[u8; NUM_BARS]> {
         .ok()?;
 
     let mut peaks = [0f32; NUM_BARS];
+    let mut buffered: Vec<f32> = Vec::new();
     let mut frame_idx: u64 = 0;
     let mut sample_buf: Option<SampleBuffer<f32>> = None;
+    let mut truncated = false;
 
-    loop {
+    'outer: loop {
         let packet = match format.next_packet() {
             Ok(p) => p,
             Err(_) => break,   // EOF or unrecoverable — whatever we have is what we get
@@ -820,22 +856,53 @@ fn waveform_from_symphonia(path: &Path, ext: &str) -> Option<[u8; NUM_BARS]> {
         let buf = sample_buf.as_mut().unwrap();
         buf.copy_interleaved_ref(decoded);
 
-        // Downmix interleaved samples to mono magnitudes and update the
-        // running peak for whichever bar the current frame falls into.
+        // Downmix interleaved samples to mono magnitudes. In the streaming
+        // case (n_frames known) update the running peak for each bar
+        // directly; in the buffered case collect into a Vec for later
+        // binning.
         for chunk in buf.samples().chunks(channels) {
             let mut sum = 0f32;
             for &s in chunk { sum += s.abs(); }
             let mag = sum / (channels as f32);
 
-            let bar = (frame_idx.saturating_mul(NUM_BARS as u64) / n_frames) as usize;
-            if bar < NUM_BARS && mag > peaks[bar] {
-                peaks[bar] = mag;
+            match n_frames {
+                Some(total) if total > 0 => {
+                    let bar = (frame_idx.saturating_mul(NUM_BARS as u64) / total) as usize;
+                    if bar < NUM_BARS && mag > peaks[bar] {
+                        peaks[bar] = mag;
+                    }
+                }
+                _ => {
+                    if buffered.len() >= MAX_BUFFERED_FRAMES {
+                        truncated = true;
+                        break 'outer;
+                    }
+                    buffered.push(mag);
+                }
             }
             frame_idx += 1;
         }
     }
 
-    if frame_idx == 0 { return None; }
+    // Guard against symphonia emitting zero frames (unsupported codec that
+    // probed OK but decoded empty). Distinguish from the buffered-truncated
+    // path, which does have data.
+    if frame_idx == 0 && !truncated { return None; }
+
+    // If we went the buffered route, bin now that we know the true length.
+    if n_frames.is_none() || n_frames == Some(0) {
+        let total = buffered.len();
+        if total == 0 { return None; }
+        for i in 0..NUM_BARS {
+            let start = i * total / NUM_BARS;
+            let end = ((i + 1) * total / NUM_BARS).max(start + 1).min(total);
+            let mut peak = 0f32;
+            for &m in &buffered[start..end] {
+                if m > peak { peak = m; }
+            }
+            peaks[i] = peak;
+        }
+    }
 
     let mut bars = [0u8; NUM_BARS];
     for i in 0..NUM_BARS {

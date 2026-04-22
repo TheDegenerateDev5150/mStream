@@ -25,6 +25,8 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 symphonia = { version = "0.5", default-features = false, features = [
     "mp3",
     "flac",
+    "pcm",     # required for WAV — the `wav` feature is the container
+               # reader; `pcm` is the actual sample decoder.
     "vorbis",
     "aac",
     "alac",
