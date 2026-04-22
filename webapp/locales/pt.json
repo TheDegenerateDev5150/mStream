@@ -468,5 +468,9 @@
   "admin.modal.invitePlaceholder": "Seu token de convite será exibido aqui",
   "admin.modal.copyClipboard": "Copiar para a Área de Transferência",
   "admin.modal.nothingToFederate": "Nada para Federar",
-  "admin.modal.inviteFailed": "Falha ao criar convite"
+  "admin.modal.inviteFailed": "Falha ao criar convite",
+  "admin.db.waveformConcurrency": "Waveform Concurrency:",
+  "admin.modal.waveformConcurrency": "Waveform Concurrency",
+  "admin.modal.editWaveformConcurrency": "Edit Waveform Concurrency",
+  "admin.modal.waveformConcurrencyHint": "Number of ffmpeg processes to run in parallel during bulk waveform generation. Bump up on dedicated servers."
 }

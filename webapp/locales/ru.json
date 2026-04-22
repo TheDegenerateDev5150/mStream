@@ -468,5 +468,9 @@
   "admin.modal.invitePlaceholder": "Ваш токен приглашения будет размещён здесь",
   "admin.modal.copyClipboard": "Скопировать в буфер обмена",
   "admin.modal.nothingToFederate": "Нечего объединять в федерацию",
-  "admin.modal.inviteFailed": "Не удалось создать приглашение"
+  "admin.modal.inviteFailed": "Не удалось создать приглашение",
+  "admin.db.waveformConcurrency": "Waveform Concurrency:",
+  "admin.modal.waveformConcurrency": "Waveform Concurrency",
+  "admin.modal.editWaveformConcurrency": "Edit Waveform Concurrency",
+  "admin.modal.waveformConcurrencyHint": "Number of ffmpeg processes to run in parallel during bulk waveform generation. Bump up on dedicated servers."
 }

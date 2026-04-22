@@ -468,5 +468,9 @@
   "admin.modal.invitePlaceholder": "Je uitnodigingstoken wordt hier geplaatst",
   "admin.modal.copyClipboard": "Kopiëren naar Klembord",
   "admin.modal.nothingToFederate": "Niets om te Federeren",
-  "admin.modal.inviteFailed": "Uitnodiging aanmaken mislukt"
+  "admin.modal.inviteFailed": "Uitnodiging aanmaken mislukt",
+  "admin.db.waveformConcurrency": "Waveform Concurrency:",
+  "admin.modal.waveformConcurrency": "Waveform Concurrency",
+  "admin.modal.editWaveformConcurrency": "Edit Waveform Concurrency",
+  "admin.modal.waveformConcurrencyHint": "Number of ffmpeg processes to run in parallel during bulk waveform generation. Bump up on dedicated servers."
 }

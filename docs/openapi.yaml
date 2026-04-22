@@ -3274,6 +3274,28 @@ paths:
         "200": { $ref: "#/components/responses/EmptySuccess" }
         "405": { $ref: "#/components/responses/AdminLocked" }
 
+  /api/v1/admin/db/params/waveform-concurrency:
+    post:
+      tags: [Admin - Scanner]
+      summary: Set waveform generator concurrency
+      description: |
+        Number of ffmpeg processes the bulk waveform generator runs in
+        parallel. Higher = faster cold-cache catch-up, but more CPU
+        contention. Default is 2 — bump to your physical core count on
+        a dedicated server.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [waveformConcurrency]
+              properties:
+                waveformConcurrency: { type: integer, minimum: 1 }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
   /api/v1/admin/db/params/auto-album-art:
     post:
       tags: [Admin - Scanner]

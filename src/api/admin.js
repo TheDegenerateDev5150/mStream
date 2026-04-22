@@ -155,6 +155,16 @@ export function setup(mstream) {
     res.json({});
   });
 
+  mstream.post("/api/v1/admin/db/params/waveform-concurrency", async (req, res) => {
+    const schema = Joi.object({
+      waveformConcurrency: Joi.number().integer().min(1).required()
+    });
+    joiValidate(schema, req.body);
+
+    await admin.editWaveformConcurrency(req.body.waveformConcurrency);
+    res.json({});
+  });
+
   mstream.post("/api/v1/admin/db/params/auto-album-art", async (req, res) => {
     const schema = Joi.object({ autoAlbumArt: Joi.boolean().required() });
     joiValidate(schema, req.body);

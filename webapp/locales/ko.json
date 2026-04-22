@@ -468,5 +468,9 @@
   "admin.modal.invitePlaceholder": "초대 토큰이 여기에 표시됩니다",
   "admin.modal.copyClipboard": "클립보드에 복사",
   "admin.modal.nothingToFederate": "페더레이션할 항목이 없습니다",
-  "admin.modal.inviteFailed": "초대 생성에 실패했습니다"
+  "admin.modal.inviteFailed": "초대 생성에 실패했습니다",
+  "admin.db.waveformConcurrency": "Waveform Concurrency:",
+  "admin.modal.waveformConcurrency": "Waveform Concurrency",
+  "admin.modal.editWaveformConcurrency": "Edit Waveform Concurrency",
+  "admin.modal.waveformConcurrencyHint": "Number of ffmpeg processes to run in parallel during bulk waveform generation. Bump up on dedicated servers."
 }
