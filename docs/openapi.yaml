@@ -289,6 +289,8 @@ components:
           type: boolean
         scanCommitInterval:
           type: integer
+        generateWaveforms:
+          type: boolean
         autoAlbumArt:
           type: boolean
         albumArtWriteToFolder:
@@ -3242,6 +3244,29 @@ paths:
               required: [scanCommitInterval]
               properties:
                 scanCommitInterval: { type: integer, minimum: 1 }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/db/params/generate-waveforms:
+    post:
+      tags: [Admin - Scanner]
+      summary: Toggle post-scan waveform generation
+      description: |
+        When `false`, the bulk waveform generator is skipped after scans finish.
+        Waveforms can still be produced on-demand by `GET /api/v1/db/waveform`
+        (which reads the cache and only calls ffmpeg on a miss). Useful on
+        CPU-constrained Docker hosts where the periodic generator spike is
+        visible in `top`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [generateWaveforms]
+              properties:
+                generateWaveforms: { type: boolean }
       responses:
         "200": { $ref: "#/components/responses/EmptySuccess" }
         "405": { $ref: "#/components/responses/AdminLocked" }

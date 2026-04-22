@@ -30,7 +30,7 @@ export function run(sinceTimestamp = null) {
   const jsonLoad = {
     dbPath: path.join(config.program.storage.dbDirectory, 'mstream.db'),
     ffmpegBin: ffmpegBin(),
-    waveformCacheDir: path.join(__dirname, '../../waveform-cache'),
+    waveformCacheDir: config.program.storage.waveformCacheDirectory,
     sinceTimestamp: sinceTimestamp,
   };
 

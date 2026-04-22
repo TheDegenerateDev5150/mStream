@@ -199,7 +199,9 @@ function onScanClose(forkedScan, scanObj, code) {
     const since = batchStartTime;
     anyScansChanged = false;
     batchStartTime = null;
-    waveformGenerator.run(since);
+    if (config.program.scanOptions.generateWaveforms !== false) {
+      waveformGenerator.run(since);
+    }
     // Bump SystemUpdateID so DLNA control points refresh their caches.
     // Safe to call whether or not DLNA is enabled.
     dlnaApi.bumpSystemUpdateID();

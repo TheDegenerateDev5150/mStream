@@ -13,6 +13,9 @@ const storageJoi = Joi.object({
   dbDirectory: Joi.string().default(path.join(__dirname, '../../save/db')),
   logsDirectory: Joi.string().default(path.join(__dirname, '../../save/logs')),
   syncConfigDirectory:  Joi.string().default(path.join(__dirname, '../../save/sync')),
+  // Persistent by default — lives under save/ so Docker users who only mount
+  // save/ keep their cache across restarts instead of regenerating every scan.
+  waveformCacheDirectory: Joi.string().default(path.join(__dirname, '../../save/waveforms')),
 });
 
 const scanOptions = Joi.object({
@@ -22,6 +25,10 @@ const scanOptions = Joi.object({
   maxConcurrentTasks: Joi.number().integer().min(1).default(1),
   compressImage: Joi.boolean().default(true),
   scanCommitInterval: Joi.number().integer().min(1).default(25),
+  // When false, the post-scan waveform generator is skipped. Waveform data
+  // can still be produced on-demand by GET /api/v1/db/waveform if ffmpeg is
+  // available; this just disables the bulk pre-generation pass.
+  generateWaveforms: Joi.boolean().default(true),
   autoAlbumArt: Joi.boolean().default(true),
   albumArtWriteToFolder: Joi.boolean().default(false),
   albumArtWriteToFile: Joi.boolean().default(false),

@@ -6,27 +6,48 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import winston from 'winston';
+import * as config from '../state/config.js';
 import * as db from '../db/manager.js';
 import { ffmpegBin, getResolvedSource } from '../util/ffmpeg-bootstrap.js';
 import { getDirname } from '../util/esm-helpers.js';
 import { getVPathInfo } from '../util/vpath.js';
 
 const __dirname = getDirname(import.meta.url);
-const CACHE_DIR = path.join(__dirname, '../../waveform-cache');
+const LEGACY_CACHE_DIR = path.join(__dirname, '../../waveform-cache');
 const NUM_BARS = 800;
 
 // In-memory LRU to avoid repeated disk reads
 const memCache = new Map();
 const MEM_MAX = 200;
 
+function cacheDir() {
+  return config.program.storage.waveformCacheDirectory;
+}
+
 function ensureCacheDir() {
-  if (!fs.existsSync(CACHE_DIR)) {
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
+  const dir = cacheDir();
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
   }
 }
 
 function cachePath(fileHash) {
-  return path.join(CACHE_DIR, fileHash + '.json');
+  return path.join(cacheDir(), fileHash + '.json');
+}
+
+// Legacy location (pre-6.4.4) was <install>/waveform-cache. If that dir has
+// files and the configured location is untouched, log a note once at startup
+// so users can copy/move the cache into the persistent path if they want to
+// avoid a one-time regeneration pass.
+function logLegacyCacheNoteIfNeeded() {
+  try {
+    if (LEGACY_CACHE_DIR === cacheDir()) { return; }
+    if (!fs.existsSync(LEGACY_CACHE_DIR)) { return; }
+    const hasLegacyFiles = fs.readdirSync(LEGACY_CACHE_DIR).some(f => f.endsWith('.json'));
+    if (!hasLegacyFiles) { return; }
+    winston.info(`[waveform] Old cache dir "${LEGACY_CACHE_DIR}" still has files. New default is "${cacheDir()}" — copy/move the *.json files there to avoid regenerating waveforms on the next scan.`);
+  } catch (_) { /* non-fatal */ }
 }
 
 // Downsample raw PCM float32 peaks into NUM_BARS 0-255 values
@@ -108,6 +129,7 @@ function generateWaveform(audioPath) {
 
 export function setup(mstream) {
   ensureCacheDir();
+  logLegacyCacheNoteIfNeeded();
 
   mstream.get('/api/v1/db/waveform', async (req, res) => {
     const filepath = req.query.filepath;

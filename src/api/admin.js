@@ -145,6 +145,16 @@ export function setup(mstream) {
     res.json({});
   });
 
+  mstream.post("/api/v1/admin/db/params/generate-waveforms", async (req, res) => {
+    const schema = Joi.object({
+      generateWaveforms: Joi.boolean().required()
+    });
+    joiValidate(schema, req.body);
+
+    await admin.editGenerateWaveforms(req.body.generateWaveforms);
+    res.json({});
+  });
+
   mstream.post("/api/v1/admin/db/params/auto-album-art", async (req, res) => {
     const schema = Joi.object({ autoAlbumArt: Joi.boolean().required() });
     joiValidate(schema, req.body);
