@@ -1240,6 +1240,21 @@ function renamePlaylist(el) {
         if (e.key === 'Escape') { instance.hide({ transitionOut: 'fadeOut' }, toast, 'button'); }
       }, true]
     ],
+    onOpened: (instance, toast) => {
+      // iziToast attaches mousedown/touchstart handlers to the toast for
+      // drag-to-dismiss and calls preventDefault on them, which blocks the
+      // input from receiving focus, positioning the cursor, or supporting
+      // click-drag selection. Stop propagation before those handlers fire.
+      const input = toast.querySelector('.rename-playlist-input');
+      if (!input) { return; }
+      const stop = (e) => e.stopPropagation();
+      input.addEventListener('mousedown', stop);
+      input.addEventListener('touchstart', stop, { passive: true });
+      input.addEventListener('click', stop);
+      // Pre-select the full name so the user can type to replace it.
+      input.focus();
+      input.select();
+    },
     buttons: [
       ['<button class="rename-ok"><b>Rename</b></button>', async (instance, toast) => {
         const input = toast.querySelector('.rename-playlist-input');
