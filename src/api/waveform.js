@@ -3,18 +3,16 @@
 // disk (keyed by content hash) and keeps a hot set in memory.
 
 import fs from 'node:fs';
-import fsp from 'node:fs/promises';
 import path from 'node:path';
-import winston from 'winston';
 import * as config from '../state/config.js';
 import * as db from '../db/manager.js';
 import { ffmpegBin, getResolvedSource } from '../util/ffmpeg-bootstrap.js';
-import { getDirname } from '../util/esm-helpers.js';
 import { getVPathInfo } from '../util/vpath.js';
-import { generateWaveformBars } from '../db/waveform-lib.js';
-
-const __dirname = getDirname(import.meta.url);
-const LEGACY_CACHE_DIR = path.join(__dirname, '../../waveform-cache');
+import {
+  generateWaveformBars,
+  readCachedWaveform,
+  writeCachedWaveform,
+} from '../db/waveform-lib.js';
 
 // In-memory LRU to avoid repeated disk reads
 const memCache = new Map();
@@ -31,27 +29,8 @@ function ensureCacheDir() {
   }
 }
 
-function cachePath(fileHash) {
-  return path.join(cacheDir(), fileHash + '.json');
-}
-
-// Legacy location (pre-6.4.4) was <install>/waveform-cache. If that dir has
-// files and the configured location is untouched, log a note once at startup
-// so users can copy/move the cache into the persistent path if they want to
-// avoid a one-time regeneration pass.
-function logLegacyCacheNoteIfNeeded() {
-  try {
-    if (LEGACY_CACHE_DIR === cacheDir()) { return; }
-    if (!fs.existsSync(LEGACY_CACHE_DIR)) { return; }
-    const hasLegacyFiles = fs.readdirSync(LEGACY_CACHE_DIR).some(f => f.endsWith('.json'));
-    if (!hasLegacyFiles) { return; }
-    winston.info(`[waveform] Old cache dir "${LEGACY_CACHE_DIR}" still has files. New default is "${cacheDir()}" — copy/move the *.json files there to avoid regenerating waveforms on the next scan.`);
-  } catch (_) { /* non-fatal */ }
-}
-
 export function setup(mstream) {
   ensureCacheDir();
-  logLegacyCacheNoteIfNeeded();
 
   mstream.get('/api/v1/db/waveform', async (req, res) => {
     const filepath = req.query.filepath;
@@ -87,20 +66,19 @@ export function setup(mstream) {
       return res.json({ waveform: memCache.get(key) });
     }
 
-    // Check disk cache
-    const diskPath = cachePath(key);
-    try {
-      const cached = await fsp.readFile(diskPath, 'utf8');
-      const waveform = JSON.parse(cached);
-      // Store in memory cache
+    function rememberInMem(waveform) {
       if (memCache.size >= MEM_MAX) {
         const oldest = memCache.keys().next().value;
         memCache.delete(oldest);
       }
       memCache.set(key, waveform);
-      return res.json({ waveform });
-    } catch (_) {
-      // Not cached — generate
+    }
+
+    // Check disk cache (tries new .bin, falls back to legacy .json)
+    const cached = await readCachedWaveform(cacheDir(), key);
+    if (cached) {
+      rememberInMem(cached);
+      return res.json({ waveform: cached });
     }
 
     if (!getResolvedSource()) {
@@ -116,15 +94,9 @@ export function setup(mstream) {
       const waveform = await generateWaveformBars(absolutePath, bin);
 
       // Save to disk cache (fire and forget)
-      fsp.writeFile(diskPath, JSON.stringify(waveform)).catch(() => {});
+      writeCachedWaveform(cacheDir(), key, waveform).catch(() => {});
 
-      // Save to memory cache
-      if (memCache.size >= MEM_MAX) {
-        const oldest = memCache.keys().next().value;
-        memCache.delete(oldest);
-      }
-      memCache.set(key, waveform);
-
+      rememberInMem(waveform);
       res.json({ waveform });
     } catch (err) {
       res.status(500).json({ error: 'waveform generation failed' });

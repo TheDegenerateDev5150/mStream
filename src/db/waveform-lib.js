@@ -14,8 +14,45 @@
 // |sample - 128| (0..127) and rescale to 0..255 by doubling.
 
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
+import path from 'node:path';
 
 export const NUM_BARS = 800;
+
+// On-disk cache format: raw byte array, exactly NUM_BARS bytes, one per bar.
+// Files are keyed by track content hash.
+const CACHE_EXT = '.bin';
+
+function cacheFilePath(dir, fileHash) {
+  return path.join(dir, fileHash + CACHE_EXT);
+}
+
+/** Synchronous existence check — used by the bulk generator's pre-scan. */
+export function hasCachedWaveform(dir, fileHash) {
+  return fs.existsSync(cacheFilePath(dir, fileHash));
+}
+
+/** Read a cached waveform. Returns null if nothing is cached. */
+export async function readCachedWaveform(dir, fileHash) {
+  try {
+    const buf = await fsp.readFile(cacheFilePath(dir, fileHash));
+    return Array.from(buf);
+  } catch (err) {
+    if (err.code === 'ENOENT') { return null; }
+    throw err;
+  }
+}
+
+/**
+ * Write a cached waveform. Values outside [0, 255] are masked to 8 bits by
+ * Buffer.from — shouldn't happen given generateWaveformBars() clamps on
+ * output, but the clamp is implicit rather than asserted.
+ */
+export async function writeCachedWaveform(dir, fileHash, bars) {
+  await fsp.writeFile(cacheFilePath(dir, fileHash), Buffer.from(bars));
+}
+
 const FFMPEG_TIMEOUT = 30000;            // 30 seconds per track
 const MAX_PCM_BYTES = 2 * 1024 * 1024;   // 2 MB — plenty for 8-bit/8kHz/mono
                                           // (≈4 min at 8000 B/s)

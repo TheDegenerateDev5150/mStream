@@ -16,7 +16,11 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { generateWaveformBars } from './waveform-lib.js';
+import {
+  generateWaveformBars,
+  hasCachedWaveform,
+  writeCachedWaveform,
+} from './waveform-lib.js';
 
 // ── Parse input ────────────────────────────────────────────────────────────
 
@@ -34,12 +38,6 @@ if (!loadJson.dbPath || !loadJson.ffmpegBin || !loadJson.waveformCacheDir) {
 }
 
 const CONCURRENCY = Math.max(1, loadJson.concurrency || 2);
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-function cachePath(fileHash) {
-  return path.join(loadJson.waveformCacheDir, fileHash + '.json');
-}
 
 // ── Main ───────────────────────────────────────────────────────────────────
 
@@ -78,15 +76,14 @@ async function run() {
 
   db.close();
 
-  // Filter to tracks that don't have a waveform cache file yet
+  // Filter to tracks that don't have a waveform cache file yet.
   const missing = [];
   for (const track of tracks) {
-    const dest = cachePath(track.file_hash);
-    if (!fs.existsSync(dest)) {
+    if (!hasCachedWaveform(loadJson.waveformCacheDir, track.file_hash)) {
       missing.push({
         filepath: track.filepath,
+        fileHash: track.file_hash,
         absolutePath: path.join(track.root_path, track.filepath),
-        cacheFile: dest
       });
     }
   }
@@ -116,7 +113,7 @@ async function run() {
 
     try {
       const waveform = await generateWaveformBars(track.absolutePath, loadJson.ffmpegBin);
-      await fsp.writeFile(track.cacheFile, JSON.stringify(waveform));
+      await writeCachedWaveform(loadJson.waveformCacheDir, track.fileHash, waveform);
       generated++;
     } catch (_err) {
       failed++;
