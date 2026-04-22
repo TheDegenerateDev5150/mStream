@@ -244,15 +244,25 @@ export function absoluteToVpath(absolutePath) {
   return path.basename(absolutePath);
 }
 
+// Single source of truth for "may this user touch server audio?" — shared
+// between the /api/v1/server-playback/* middleware and the /server-remote
+// page handler so the two can't drift apart.
+function userCanUseServerAudio(user) {
+  if (!user) { return false; }
+  if (user.admin === true) { return true; }
+  return user.allow_server_audio === 1 || user.allow_server_audio === true;
+}
+
 export function setup(mstream) {
 
   // ── Per-user permission gate ────────────────────────────────────────────
   // Any route under /api/v1/server-playback requires allow_server_audio.
   // Admins always pass; everyone else must have the flag set.
   mstream.all('/api/v1/server-playback/{*path}', (req, res, next) => {
-    if (req.user && req.user.admin === true) { return next(); }
-    if (req.user && (req.user.allow_server_audio === 1 || req.user.allow_server_audio === true)) { return next(); }
-    return res.status(403).json({ error: 'Server audio access disabled for this user' });
+    if (!userCanUseServerAudio(req.user)) {
+      return res.status(403).json({ error: 'Server audio access disabled for this user' });
+    }
+    next();
   });
 
   // ── Simple proxy routes (no path translation needed) ────────────────────
@@ -399,12 +409,18 @@ export function setup(mstream) {
       res.status(503).json({ error: e.message });
     }
   });
-}
 
-// ── Server-Remote route (serves the webapp with serverAudioMode flag) ─────
-
-export function setupBeforeAuth(mstream) {
+  // ── /server-remote page (serves the webapp with serverAudioMode flag) ──
+  //
+  // Previously lived in setupBeforeAuth() so anyone could hit the page, but
+  // that let unauthenticated users probe whether server audio was running.
+  // The page only makes sense for users who can actually control playback,
+  // so it now sits behind the same auth + permission checks as the APIs.
   mstream.get('/server-remote', async (req, res) => {
+    if (!userCanUseServerAudio(req.user)) {
+      return res.status(403).json({ error: 'Server audio access disabled for this user' });
+    }
+
     // Check if any audio backend (rust or CLI fallback) is reachable
     try {
       await proxyPlayback('GET', '/status');
@@ -466,3 +482,7 @@ export function setupBeforeAuth(mstream) {
     }
   });
 }
+
+// Retained so existing call sites in src/server.js keep compiling — /server-
+// remote was moved into setup() so it sits behind auth now.
+export function setupBeforeAuth() {}
