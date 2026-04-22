@@ -39,24 +39,40 @@ export function hasCachedWaveform(dir, fileHash) {
   return fs.existsSync(cacheFilePath(dir, fileHash));
 }
 
-/** Read a cached waveform. Returns null if nothing is cached. */
+/**
+ * Read a cached waveform. Returns null if nothing is cached OR the file
+ * exists but isn't exactly NUM_BARS bytes (partial write from a prior
+ * crash, wrong-format leftover, etc.) — in which case the caller
+ * regenerates, so the corrupt cache file self-heals next time.
+ */
 export async function readCachedWaveform(dir, fileHash) {
+  let buf;
   try {
-    const buf = await fsp.readFile(cacheFilePath(dir, fileHash));
-    return Array.from(buf);
+    buf = await fsp.readFile(cacheFilePath(dir, fileHash));
   } catch (err) {
     if (err.code === 'ENOENT') { return null; }
     throw err;
   }
+  if (buf.length !== NUM_BARS) { return null; }
+  return Array.from(buf);
 }
 
 /**
- * Write a cached waveform. Values outside [0, 255] are masked to 8 bits by
- * Buffer.from — shouldn't happen given generateWaveformBars() clamps on
- * output, but the clamp is implicit rather than asserted.
+ * Write a cached waveform atomically: write to a sibling `.bin.tmp`, then
+ * rename to `.bin`. Prevents partial writes from a process crash or
+ * power-loss leaving a truncated file that `readCachedWaveform` would see
+ * as valid. Mirrors the atomic-write pattern the Rust scanner uses on the
+ * scan path.
+ *
+ * Values outside [0, 255] are masked to 8 bits by Buffer.from — shouldn't
+ * happen given generateWaveformBars() clamps on output, but the clamp is
+ * implicit rather than asserted.
  */
 export async function writeCachedWaveform(dir, fileHash, bars) {
-  await fsp.writeFile(cacheFilePath(dir, fileHash), Buffer.from(bars));
+  const finalPath = cacheFilePath(dir, fileHash);
+  const tmpPath = path.join(dir, fileHash + CACHE_EXT + '.tmp');
+  await fsp.writeFile(tmpPath, Buffer.from(bars));
+  await fsp.rename(tmpPath, finalPath);
 }
 
 const FFMPEG_TIMEOUT = 30000;            // 30 seconds per track
