@@ -221,6 +221,7 @@ function renderPlaylist(playlistName) {
   return `<li class="collection-item" data-playlistname="${encodeURIComponent(playlistName)}" class="playlist_row_container">
     <span data-playlistname="${encodeURIComponent(playlistName)}" class="playlistz" onclick="onPlaylistClick(this);">${escapeHtml(playlistName)}</span>
     <div class="song-button-box">
+      <span data-playlistname="${encodeURIComponent(playlistName)}" class="renamePlaylist" onclick="renamePlaylist(this);">Rename</span>
       <span data-playlistname="${encodeURIComponent(playlistName)}" class="deletePlaylist" onclick="deletePlaylist(this);">Delete</span>
     </div>
   </li>`;
@@ -1215,6 +1216,57 @@ function deletePlaylist(el) {
         ['<button>Go Back</button>', (instance, toast) => {
           instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
         }],
+    ]
+  });
+}
+
+function renamePlaylist(el) {
+  const oldName = decodeURIComponent(el.getAttribute('data-playlistname'));
+
+  iziToast.question({
+    timeout: false,
+    close: false,
+    overlayClose: true,
+    overlay: true,
+    displayMode: 'once',
+    id: 'rename-playlist-question',
+    zindex: 99999,
+    title: `Rename '${oldName}'`,
+    position: 'center',
+    inputs: [
+      [`<input type="text" class="rename-playlist-input" value="${escapeHtml(oldName)}" maxlength="120">`, 'keyup', (instance, toast, input, e) => {
+        // Commit on Enter, cancel on Escape.
+        if (e.key === 'Enter') { toast.querySelector('.iziToast-buttons button.rename-ok').click(); }
+        if (e.key === 'Escape') { instance.hide({ transitionOut: 'fadeOut' }, toast, 'button'); }
+      }, true]
+    ],
+    buttons: [
+      ['<button class="rename-ok"><b>Rename</b></button>', async (instance, toast) => {
+        const input = toast.querySelector('.rename-playlist-input');
+        const newName = (input.value || '').trim();
+        if (!newName || newName === oldName) {
+          instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
+          return;
+        }
+        try {
+          await MSTREAMAPI.renamePlaylist(oldName, newName);
+          // Update the row in-place so the user doesn't have to reload.
+          const row = document.querySelector('li[data-playlistname="' + encodeURIComponent(oldName) + '"]');
+          if (row) {
+            const encoded = encodeURIComponent(newName);
+            row.setAttribute('data-playlistname', encoded);
+            row.querySelectorAll('[data-playlistname]').forEach(child => child.setAttribute('data-playlistname', encoded));
+            const label = row.querySelector('.playlistz');
+            if (label) { label.textContent = newName; }
+          }
+        } catch (err) {
+          boilerplateFailure(err);
+        }
+        instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
+      }, false],
+      ['<button>Cancel</button>', (instance, toast) => {
+        instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
+      }],
     ]
   });
 }

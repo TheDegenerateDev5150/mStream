@@ -55,6 +55,10 @@ const MSTREAMAPI = (() => {
     return req('POST', mstreamModule.currentServer.host + 'api/v1/playlist/delete', { playlistname: playlistname });
   }
 
+  mstreamModule.renamePlaylist =  (oldName, newName) => {
+    return req('POST', mstreamModule.currentServer.host + 'api/v1/playlist/rename', { oldName: oldName, newName: newName });
+  }
+
   mstreamModule.removePlaylistSong =  (lokiId) => {
     return req('POST', mstreamModule.currentServer.host + 'api/v1/playlist/remove-song', { lokiid: lokiId });
   }

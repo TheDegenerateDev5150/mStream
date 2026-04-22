@@ -85,6 +85,10 @@ var MSTREAMAPI = (function () {
     makePOSTRequest('api/v1/playlist/delete', { playlistname: playlistname }, callback);
   }
 
+  mstreamModule.renamePlaylist = function (oldName, newName, callback) {
+    makePOSTRequest('api/v1/playlist/rename', { oldName: oldName, newName: newName }, callback);
+  }
+
   mstreamModule.removePlaylistSong = function (lokiId, callback) {
     makePOSTRequest('api/v1/playlist/remove-song', { lokiid: lokiId }, callback);
   }
