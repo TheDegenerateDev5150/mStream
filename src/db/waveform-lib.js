@@ -87,7 +87,13 @@ export function generateWaveformBars(audioPath, ffmpegBin) {
     const args = [
       '-hide_banner',
       '-loglevel', 'error',
+      // Cap internal threads to 1 — the outer worker pool already provides
+      // concurrency; extra threads per process just fight for cores.
+      '-threads', '1',
       '-i', audioPath,
+      // Drop embedded cover art / data / subtitle streams so ffmpeg doesn't
+      // waste cycles decoding a JPEG we'd discard anyway.
+      '-vn', '-dn', '-sn',
       '-ac', '1',                // mono
       '-ar', '8000',             // 8 kHz — 800 bars × ~10 samples/bar for a 10s clip
       '-f', 'u8',

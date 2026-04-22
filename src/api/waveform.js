@@ -18,6 +18,12 @@ import {
 const memCache = new Map();
 const MEM_MAX = 200;
 
+// Dedup concurrent generation for the same track. If player A hits this
+// endpoint and kicks off ffmpeg, player B asking for the same hash a
+// moment later awaits the same promise instead of spawning a second
+// ffmpeg and double-writing the cache file.
+const inFlight = new Map();
+
 function cacheDir() {
   return config.program.storage.waveformCacheDirectory;
 }
@@ -74,7 +80,7 @@ export function setup(mstream) {
       memCache.set(key, waveform);
     }
 
-    // Check disk cache (tries new .bin, falls back to legacy .json)
+    // Check disk cache
     const cached = await readCachedWaveform(cacheDir(), key);
     if (cached) {
       rememberInMem(cached);
@@ -90,13 +96,27 @@ export function setup(mstream) {
       return res.status(503).json({ error: 'ffmpeg not available' });
     }
 
+    // Join an already-running generation for the same track if there is
+    // one; otherwise start a fresh one and register it in the map.
+    let pending = inFlight.get(key);
+    if (!pending) {
+      pending = (async () => {
+        try {
+          const waveform = await generateWaveformBars(absolutePath, bin);
+          // Persist + warm the memory cache as a side effect; subsequent
+          // callers who await this promise still get the value back.
+          writeCachedWaveform(cacheDir(), key, waveform).catch(() => {});
+          rememberInMem(waveform);
+          return waveform;
+        } finally {
+          inFlight.delete(key);
+        }
+      })();
+      inFlight.set(key, pending);
+    }
+
     try {
-      const waveform = await generateWaveformBars(absolutePath, bin);
-
-      // Save to disk cache (fire and forget)
-      writeCachedWaveform(cacheDir(), key, waveform).catch(() => {});
-
-      rememberInMem(waveform);
+      const waveform = await pending;
       res.json({ waveform });
     } catch (err) {
       res.status(500).json({ error: 'waveform generation failed' });
