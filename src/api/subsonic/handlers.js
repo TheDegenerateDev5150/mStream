@@ -475,7 +475,10 @@ export function getAlbum(req, res) {
       artistId:  album.artist_id != null ? encArtist(album.artist_id) : undefined,
       // OpenSubsonic extension — the full M2M list.
       artists:   albumArtists.length ? albumArtists : undefined,
-      isCompilation: album.compilation ? true : undefined,
+      // OpenSubsonic spec: always emit as boolean (not undefined) so
+      // clients that iterate album fields don't have to special-case the
+      // missing-key shape.
+      isCompilation: !!album.compilation,
       year:      album.year || undefined,
       coverArt:  album.album_art_file ? encAlbum(album.id) : undefined,
       songCount: songs.length,

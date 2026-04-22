@@ -124,7 +124,13 @@ export function setup(mstream) {
   const handle = async (req, res) => {
     const raw = String(req.params.method || '').replace(/\.view$/i, '');
     const fn = METHODS[raw];
-    if (!fn) { return SubErr.GENERIC(req, res, `Unknown Subsonic method: ${raw}`); }
+    if (!fn) {
+      // Subsonic spec has no dedicated "unknown method" code; code 70
+      // ("not found") is what Navidrome / Gonic use and lets clients
+      // distinguish a truly-broken endpoint from a generic backend
+      // failure (code 0).
+      return SubErr.NOT_FOUND(req, res, `Subsonic method "${raw}"`);
+    }
     try {
       await subsonicAuth(req, res, () => fn(req, res));
     } catch (err) {
