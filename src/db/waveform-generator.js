@@ -32,6 +32,7 @@ export function run(sinceTimestamp = null) {
     ffmpegBin: ffmpegBin(),
     waveformCacheDir: config.program.storage.waveformCacheDirectory,
     sinceTimestamp: sinceTimestamp,
+    concurrency: config.program.scanOptions.waveformConcurrency,
   };
 
   const forkedTask = child.fork(

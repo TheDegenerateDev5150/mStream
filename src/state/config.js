@@ -29,6 +29,11 @@ const scanOptions = Joi.object({
   // can still be produced on-demand by GET /api/v1/db/waveform if ffmpeg is
   // available; this just disables the bulk pre-generation pass.
   generateWaveforms: Joi.boolean().default(true),
+  // Number of ffmpeg processes the bulk waveform generator runs in parallel.
+  // Higher = faster catch-up on a cold cache, but more CPU contention while
+  // scans are running. 2 is a conservative default; bump to the core count
+  // if the server is dedicated.
+  waveformConcurrency: Joi.number().integer().min(1).default(2),
   autoAlbumArt: Joi.boolean().default(true),
   albumArtWriteToFolder: Joi.boolean().default(false),
   albumArtWriteToFile: Joi.boolean().default(false),

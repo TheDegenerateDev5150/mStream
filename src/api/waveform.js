@@ -1,8 +1,7 @@
-// Waveform generation for the Velvet UI progress bar.
-// Uses ffmpeg to extract PCM peaks, downsamples to ~800 bars,
-// and caches the result as JSON on disk.
+// On-demand waveform endpoint for the player's progress bar.
+// Used by both the default and Velvet UIs. Caches generated waveforms to
+// disk (keyed by content hash) and keeps a hot set in memory.
 
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -12,10 +11,10 @@ import * as db from '../db/manager.js';
 import { ffmpegBin, getResolvedSource } from '../util/ffmpeg-bootstrap.js';
 import { getDirname } from '../util/esm-helpers.js';
 import { getVPathInfo } from '../util/vpath.js';
+import { generateWaveformBars } from '../db/waveform-lib.js';
 
 const __dirname = getDirname(import.meta.url);
 const LEGACY_CACHE_DIR = path.join(__dirname, '../../waveform-cache');
-const NUM_BARS = 800;
 
 // In-memory LRU to avoid repeated disk reads
 const memCache = new Map();
@@ -48,83 +47,6 @@ function logLegacyCacheNoteIfNeeded() {
     if (!hasLegacyFiles) { return; }
     winston.info(`[waveform] Old cache dir "${LEGACY_CACHE_DIR}" still has files. New default is "${cacheDir()}" — copy/move the *.json files there to avoid regenerating waveforms on the next scan.`);
   } catch (_) { /* non-fatal */ }
-}
-
-// Downsample raw PCM float32 peaks into NUM_BARS 0-255 values
-function downsample(pcmBuffer, numBars) {
-  const floats = new Float32Array(pcmBuffer.buffer, pcmBuffer.byteOffset, pcmBuffer.byteLength / 4);
-  const total = floats.length;
-  if (total === 0) return new Array(numBars).fill(0);
-
-  const chunkSize = Math.max(1, Math.floor(total / numBars));
-  const bars = [];
-
-  for (let i = 0; i < numBars; i++) {
-    const start = Math.floor(i * total / numBars);
-    const end = Math.min(start + chunkSize, total);
-    let peak = 0;
-    for (let j = start; j < end; j++) {
-      const v = Math.abs(floats[j]);
-      if (v > peak) peak = v;
-    }
-    bars.push(Math.min(255, Math.round(peak * 255)));
-  }
-
-  return bars;
-}
-
-// Generate waveform data from audio file using ffmpeg
-function generateWaveform(audioPath) {
-  return new Promise((resolve, reject) => {
-    const bin = ffmpegBin();
-    // Only verify existence for absolute paths. When ffmpegBin() returns a
-    // bare command name (system-PATH fallback), leave the check to spawn().
-    if (path.isAbsolute(bin) && !fs.existsSync(bin)) {
-      return reject(new Error('ffmpeg not available'));
-    }
-
-    // ffmpeg: decode to mono float32 PCM at 8kHz (enough for visualization)
-    const args = [
-      '-i', audioPath,
-      '-ac', '1',           // mono
-      '-ar', '8000',        // 8kHz sample rate
-      '-f', 'f32le',        // raw float32 little-endian
-      '-acodec', 'pcm_f32le',
-      'pipe:1'
-    ];
-
-    const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'ignore'] });
-    const chunks = [];
-    let totalBytes = 0;
-    const MAX_BYTES = 8 * 1024 * 1024; // 8MB safety limit
-
-    proc.stdout.on('data', (chunk) => {
-      totalBytes += chunk.length;
-      if (totalBytes <= MAX_BYTES) {
-        chunks.push(chunk);
-      }
-    });
-
-    const timer = setTimeout(() => {
-      proc.kill('SIGTERM');
-      reject(new Error('ffmpeg timeout'));
-    }, 30000);
-
-    proc.on('close', (code) => {
-      clearTimeout(timer);
-      if (code !== 0 || chunks.length === 0) {
-        return reject(new Error(`ffmpeg exited with code ${code}`));
-      }
-      const pcm = Buffer.concat(chunks);
-      const bars = downsample(pcm, NUM_BARS);
-      resolve(bars);
-    });
-
-    proc.on('error', (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-  });
 }
 
 export function setup(mstream) {
@@ -185,8 +107,13 @@ export function setup(mstream) {
       return res.status(503).json({ error: 'ffmpeg not ready' });
     }
 
+    const bin = ffmpegBin();
+    if (path.isAbsolute(bin) && !fs.existsSync(bin)) {
+      return res.status(503).json({ error: 'ffmpeg not available' });
+    }
+
     try {
-      const waveform = await generateWaveform(absolutePath);
+      const waveform = await generateWaveformBars(absolutePath, bin);
 
       // Save to disk cache (fire and forget)
       fsp.writeFile(diskPath, JSON.stringify(waveform)).catch(() => {});

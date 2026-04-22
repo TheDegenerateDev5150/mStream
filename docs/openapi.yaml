@@ -291,6 +291,9 @@ components:
           type: integer
         generateWaveforms:
           type: boolean
+        waveformConcurrency:
+          type: integer
+          minimum: 1
         autoAlbumArt:
           type: boolean
         albumArtWriteToFolder:
