@@ -472,5 +472,6 @@
   "admin.db.waveformConcurrency": "Waveform Concurrency:",
   "admin.modal.waveformConcurrency": "Waveform Concurrency",
   "admin.modal.editWaveformConcurrency": "Edit Waveform Concurrency",
-  "admin.modal.waveformConcurrencyHint": "Number of ffmpeg processes to run in parallel during bulk waveform generation. Bump up on dedicated servers."
+  "admin.modal.waveformConcurrencyHint": "Number of ffmpeg processes to run in parallel during bulk waveform generation. Bump up on dedicated servers.",
+  "admin.db.generateWaveforms": "Generate Waveforms:"
 }
