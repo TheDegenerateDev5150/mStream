@@ -12,7 +12,7 @@ import * as imageCompress from '../db/image-compress-manager.js';
 import * as transcode from './transcode.js';
 import * as db from '../db/manager.js';
 import { joiValidate } from '../util/validation.js';
-import { bootRustPlayer, killRustPlayer, proxyToRust, getActiveBackend, getDetectedCliPlayers } from './server-playback.js';
+import { bootRustPlayer, killRustPlayer, proxyToRust, getActiveBackend, getDetectedCliPlayers, refreshDetectedCliPlayers } from './server-playback.js';
 import { listImplementedMethods } from './subsonic/index.js';
 import { listTokenAuthAttempts, clearTokenAuthAttempts, generateApiKey } from './subsonic/auth.js';
 import * as nowPlaying from './subsonic/now-playing.js';
@@ -450,9 +450,9 @@ export function setup(mstream) {
     // Flag controls Rust preference now. Either way, re-boot server audio so
     // the active backend matches the new setting:
     //   true  → kill current backend, boot Rust (with CLI fallback)
-    //   false → kill current backend, boot CLI directly
+    //   false → kill current backend, boot CLI directly (MPD preferred)
     killRustPlayer();
-    bootRustPlayer();
+    await bootRustPlayer();
 
     res.json({});
   });
@@ -474,6 +474,14 @@ export function setup(mstream) {
       player: active.player,
       detectedCliPlayers: getDetectedCliPlayers(),
     });
+  });
+
+  // Re-run the CLI player detection probe. Use this after installing or
+  // removing a player (mpv, vlc, mplayer, or an MPD daemon) without having
+  // to restart the server.
+  mstream.post("/api/v1/admin/server-audio/detect", async (req, res) => {
+    const detected = await refreshDetectedCliPlayers();
+    res.json({ detectedCliPlayers: detected });
   });
 
   mstream.post("/api/v1/admin/config/secret", async (req, res) => {

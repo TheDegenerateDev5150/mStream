@@ -23,13 +23,11 @@ killQueue.addToKillQueue(() => {
   cliAudio.killCliPlayer().catch(() => {});
 });
 
-// Snapshot of CLI detection (refreshed on each boot-server-audio call) so the
-// admin endpoint can report what's installed without re-probing on every hit.
-// Detection is now async (MPD requires a TCP probe), so callers that want a
-// fresh value should await refreshDetectedCliPlayers(); the admin route uses
-// the cached value.
+// Snapshot of CLI detection. Refreshed eagerly at boot, on autoBoot toggle,
+// and whenever an admin hits /api/v1/admin/server-audio/detect. Exported so
+// the admin info endpoint can read it without re-probing on every hit.
 let _detectedCliPlayers = [];
-async function refreshDetectedCliPlayers() {
+export async function refreshDetectedCliPlayers() {
   _detectedCliPlayers = await cliAudio.detectAvailablePlayers();
   return _detectedCliPlayers;
 }
@@ -68,15 +66,14 @@ function findRustBinary() {
 let _rustStartupSettled = false;
 const RUST_SETTLE_MS = 2000;
 
-async function bootCliFallback(reason) {
+async function bootCliFallback(reason, preferredPlayer = null) {
   if (cliAudio.isCliActive()) { return; }
-  await refreshDetectedCliPlayers();
   if (_detectedCliPlayers.length === 0) {
     winston.warn(`[server-audio] ${reason}; no CLI audio players detected — server audio unavailable`);
     return;
   }
   try {
-    const name = await cliAudio.bootCliPlayer();
+    const name = await cliAudio.bootCliPlayer(preferredPlayer);
     if (name) {
       winston.info(`[server-audio] ${reason}; using CLI fallback: ${name}`);
     } else {
@@ -91,25 +88,35 @@ async function bootCliFallback(reason) {
  * Boot whichever server-audio backend is appropriate.
  *
  *   autoBootServerAudio: true  → prefer the Rust binary; fall back to a CLI
- *                                player if the binary is missing or the spawn
- *                                dies during startup.
- *   autoBootServerAudio: false → skip Rust entirely and use the first
- *                                available CLI player.
+ *                                player if the binary is missing, the spawn
+ *                                fails (permission denied, etc.), or the
+ *                                process exits during startup.
+ *   autoBootServerAudio: false → skip Rust entirely and prefer MPD, since
+ *                                that's the CLI option most often used on
+ *                                self-hosted / NAS setups where a dedicated
+ *                                audio daemon is already running. Falls back
+ *                                to other installed CLI players if MPD isn't
+ *                                available.
  *
  * Name is kept for backwards-compatibility with existing callers in
- * src/server.js and src/api/admin.js.
+ * src/server.js and src/api/admin.js. Returns a Promise; callers that don't
+ * need to await may fire-and-forget.
  */
-export function bootRustPlayer() {
+export async function bootRustPlayer() {
   if (rustPlayerProcess) { return; }
 
+  // Refresh the CLI detection snapshot so the fallback decision (and the
+  // admin /info endpoint) have current data.
+  await refreshDetectedCliPlayers();
+
   if (!config.program.autoBootServerAudio) {
-    bootCliFallback('autoBootServerAudio=false').catch(() => {});
+    await bootCliFallback('autoBootServerAudio=false', 'mpd');
     return;
   }
 
   const bin = findRustBinary();
   if (!bin) {
-    bootCliFallback('rust-server-audio binary not found').catch(() => {});
+    await bootCliFallback('rust-server-audio binary not found');
     return;
   }
 

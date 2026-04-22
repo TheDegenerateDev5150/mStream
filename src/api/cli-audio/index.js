@@ -89,11 +89,22 @@ export function isCliActive() { return activeAdapter !== null; }
 /**
  * Detect + start the first available CLI player. Returns the player name if
  * started, or null if none could be started.
+ *
+ * If `preferredName` is provided and that player is available, it's tried
+ * first regardless of registry position. Remaining players are attempted in
+ * the default priority order if the preferred choice isn't installed or
+ * fails to start.
  */
-export async function bootCliPlayer() {
+export async function bootCliPlayer(preferredName = null) {
   if (activeAdapter) { return activePlayerName; }
 
-  for (const p of PLAYERS) {
+  const ordered = PLAYERS.slice();
+  if (preferredName) {
+    const idx = ordered.findIndex((p) => p.name === preferredName);
+    if (idx > 0) { ordered.unshift(ordered.splice(idx, 1)[0]); }
+  }
+
+  for (const p of ordered) {
     const available = await isAvailable(p);
     if (!available) { continue; }
     const adapter = p.kind === 'spawn' ? new p.AdapterClass(p.binary) : new p.AdapterClass();

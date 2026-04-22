@@ -170,6 +170,17 @@ const ADMINDATA = (() => {
     } catch (_err) {}
   }
 
+  // Force a fresh detection probe server-side, then pull the updated info.
+  module.redetectCliPlayers = async () => {
+    try {
+      await API.axios({
+        method: 'POST',
+        url: `${API.url()}/api/v1/admin/server-audio/detect`
+      });
+      await module.getServerAudioInfo();
+    } catch (_err) {}
+  }
+
   module.getTranscodeParams = async () => {
     const res = await API.axios({
       method: 'GET',
@@ -1369,7 +1380,7 @@ const advancedView = Vue.component('advanced-view', {
       });
     },
     refreshServerAudioInfo: function() {
-      ADMINDATA.getServerAudioInfo();
+      ADMINDATA.redetectCliPlayers();
     },
     toggleAutoBootServerAudio: function() {
       iziToast.question({

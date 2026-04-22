@@ -18,7 +18,12 @@ import { MpvAdapter } from '../../src/api/cli-audio/mpv.js';
 import { VlcAdapter } from '../../src/api/cli-audio/vlc.js';
 import { MplayerAdapter } from '../../src/api/cli-audio/mplayer.js';
 import { MpdAdapter } from '../../src/api/cli-audio/mpd.js';
-import { detectAvailablePlayers } from '../../src/api/cli-audio/index.js';
+import {
+  detectAvailablePlayers,
+  bootCliPlayer,
+  killCliPlayer,
+  getActivePlayerName,
+} from '../../src/api/cli-audio/index.js';
 
 const TEST_FILE = process.env.TEST_FILE || '/tmp/test-tone.mp3';
 
@@ -181,11 +186,32 @@ function formatResult(r) {
   console.log('');
   for (const r of results) { console.log(formatResult(r)); console.log(''); }
 
+  // Preference test: with all four players installed, bootCliPlayer() (no
+  // preference) should pick mpv (top of the default priority list), while
+  // bootCliPlayer('mpd') should pick mpd.
+  console.log('=== preference selection ===');
+  let prefDefaultOk = false;
+  let prefMpdOk = false;
+  try {
+    await killCliPlayer();
+    const def = await bootCliPlayer();
+    prefDefaultOk = def === 'mpv';
+    console.log(`  [${prefDefaultOk ? 'ok' : 'FAIL'}] no preference → ${def} (expected mpv)`);
+    await killCliPlayer();
+    const pref = await bootCliPlayer('mpd');
+    prefMpdOk = pref === 'mpd';
+    console.log(`  [${prefMpdOk ? 'ok' : 'FAIL'}] preferred=mpd → ${pref} (expected mpd)`);
+    await killCliPlayer();
+  } catch (e) {
+    console.log(`  [FAIL] preference test threw: ${e.message}`);
+  }
+  console.log('');
+
   const passed = results.every((r) => {
     if (!r.started || r.routesPassed < r.routesTotal) { return false; }
     const failedAssertions = r.assertions.filter((a) => !a.pass).length;
     return failedAssertions === 0;
-  });
+  }) && prefDefaultOk && prefMpdOk;
 
   console.log(passed ? 'ALL GREEN' : 'SOME FAILURES');
   process.exit(passed ? 0 : 1);
