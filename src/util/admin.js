@@ -64,9 +64,15 @@ export async function removeDirectory(vpath) {
   // CASCADE will delete tracks and user_libraries entries
   d.prepare('DELETE FROM libraries WHERE id = ?').run(library.id);
 
-  // Clean up orphaned artists/albums
+  // Clean up orphaned artists/albums. Keep artists referenced by either
+  // the single-valued FKs OR the V17 M2M tables — otherwise cascade would
+  // drop track_artists/album_artists rows for featured/co-credited artists.
   d.exec('DELETE FROM albums WHERE id NOT IN (SELECT DISTINCT album_id FROM tracks WHERE album_id IS NOT NULL)');
-  d.exec('DELETE FROM artists WHERE id NOT IN (SELECT DISTINCT artist_id FROM tracks WHERE artist_id IS NOT NULL) AND id NOT IN (SELECT DISTINCT artist_id FROM albums WHERE artist_id IS NOT NULL)');
+  d.exec(`DELETE FROM artists
+          WHERE id NOT IN (SELECT DISTINCT artist_id FROM tracks         WHERE artist_id IS NOT NULL)
+            AND id NOT IN (SELECT DISTINCT artist_id FROM albums         WHERE artist_id IS NOT NULL)
+            AND id NOT IN (SELECT DISTINCT artist_id FROM track_artists)
+            AND id NOT IN (SELECT DISTINCT artist_id FROM album_artists)`);
 
   db.invalidateCache();
 

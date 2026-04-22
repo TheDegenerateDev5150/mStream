@@ -12,6 +12,8 @@ import { Jimp } from 'jimp';
 import mime from 'mime-types';
 import { migrateHashReferences as migrateHashRefsShared } from './hash-migration.js';
 import { computeHashes } from './audio-hash.js';
+import { extractArtists, chooseAlbumArtistId } from './artist-extraction.js';
+import { migrateAlbumStars } from './album-migration.js';
 
 // ── Parse CLI input ─────────────────────────────────────────────────────────
 
@@ -59,8 +61,10 @@ db.exec('PRAGMA busy_timeout = 5000');
 // ── Prepared statements ─────────────────────────────────────────────────────
 
 const stmts = {
+  // Capture album_id alongside the hashes so we can migrate
+  // user_album_stars when a compilation collapses.
   getTrack: db.prepare(
-    'SELECT id, modified, file_hash, audio_hash FROM tracks WHERE filepath = ? AND library_id = ?'
+    'SELECT id, modified, file_hash, audio_hash, album_id FROM tracks WHERE filepath = ? AND library_id = ?'
   ),
   updateScanId: db.prepare(
     'UPDATE tracks SET scan_id = ? WHERE id = ?'
@@ -75,16 +79,46 @@ const stmts = {
     'SELECT id FROM albums WHERE name = ? AND artist_id IS ? AND year IS ?'
   ),
   insertAlbum: db.prepare(
-    'INSERT INTO albums (name, artist_id, year, album_art_file) VALUES (?, ?, ?, ?)'
+    `INSERT INTO albums (name, artist_id, year, album_art_file, album_artist, compilation)
+     VALUES (?, ?, ?, ?, ?, ?)`
   ),
   updateAlbumArt: db.prepare(
     'UPDATE albums SET album_art_file = ? WHERE id = ? AND album_art_file IS NULL'
+  ),
+  // Keep the album_artist display string + compilation flag fresh on
+  // re-scan so subsequent tracks sharing the album don't drop them.
+  updateAlbumTags: db.prepare(
+    `UPDATE albums
+        SET album_artist = COALESCE(?, album_artist),
+            compilation  = ?
+      WHERE id = ?`
   ),
   insertTrack: db.prepare(
     `INSERT OR REPLACE INTO tracks (filepath, library_id, title, artist_id, album_id, track_number,
      disc_number, year, duration, format, file_hash, audio_hash, album_art_file, genre,
      replaygain_track_db, sample_rate, channels, bit_depth, modified, scan_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ),
+  // V17: M2M artist-link maintenance. Album-artists use INSERT OR IGNORE
+  // so the same album getting re-walked by multiple tracks doesn't pile
+  // up duplicate rows. Track-artists are cleared first (track_id was
+  // just re-INSERTed so any stale CASCADE-dropped rows are already gone
+  // — this DELETE is a belt-and-braces for partial-run edge cases).
+  insertAlbumArtist: db.prepare(
+    `INSERT OR IGNORE INTO album_artists (album_id, artist_id, role, position)
+     VALUES (?, ?, ?, ?)`
+  ),
+  deleteTrackArtists: db.prepare(
+    'DELETE FROM track_artists WHERE track_id = ?'
+  ),
+  insertTrackArtist: db.prepare(
+    `INSERT OR IGNORE INTO track_artists (track_id, artist_id, role, position)
+     VALUES (?, ?, ?, ?)`
+  ),
+  // One-shot lookup of the seeded "Various Artists" row id. Used when
+  // the album-artist fallback chain hits the compilation branch.
+  findVariousArtists: db.prepare(
+    `SELECT id FROM artists WHERE name = 'Various Artists' LIMIT 1`
   ),
   deleteOldTracks: db.prepare(
     'DELETE FROM tracks WHERE library_id = ? AND scan_id != ?'
@@ -99,6 +133,9 @@ const stmts = {
     'INSERT OR IGNORE INTO track_genres (track_id, genre_id) VALUES (?, ?)'
   ),
 };
+
+// Cached VA-row id — looked up once per scan, seeded by migration V17.
+const variousArtistsId = stmts.findVariousArtists.get()?.id || null;
 
 // ── User-data hash migration ───────────────────────────────────────────────
 // Delegates to the shared helper in ./hash-migration.js so the same logic
@@ -118,17 +155,20 @@ function findOrCreateArtist(name) {
   return Number(result.lastInsertRowid);
 }
 
-function findOrCreateAlbum(name, artistId, year, albumArtFile) {
+function findOrCreateAlbum(name, artistId, year, albumArtFile, albumArtistDisplay, isCompilation) {
   if (!name) { return null; }
   const row = stmts.findAlbum.get(name, artistId, year);
   if (row) {
-    // Update album art if we have it and the album doesn't
-    if (albumArtFile) {
-      stmts.updateAlbumArt.run(albumArtFile, row.id);
-    }
+    // Re-asserting album metadata on every scan keeps the display string
+    // and compilation flag fresh if the user edits the tag and rescans.
+    if (albumArtFile) { stmts.updateAlbumArt.run(albumArtFile, row.id); }
+    stmts.updateAlbumTags.run(albumArtistDisplay || null, isCompilation ? 1 : 0, row.id);
     return row.id;
   }
-  const result = stmts.insertAlbum.run(name, artistId, year, albumArtFile || null);
+  const result = stmts.insertAlbum.run(
+    name, artistId, year, albumArtFile || null,
+    albumArtistDisplay || null, isCompilation ? 1 : 0,
+  );
   return Number(result.lastInsertRowid);
 }
 
@@ -261,10 +301,16 @@ async function parseMyFile(absolutePath, modified) {
     songInfo.sampleRate = Number.isFinite(parsed.format?.sampleRate) ? parsed.format.sampleRate : null;
     songInfo.channels   = Number.isFinite(parsed.format?.numberOfChannels) ? parsed.format.numberOfChannels : null;
     songInfo.bitDepth   = Number.isFinite(parsed.format?.bitsPerSample) ? parsed.format.bitsPerSample : null;
+    // Multi-artist / compilation extraction — see src/db/artist-extraction.js
+    // for the rules. Stored as a sub-object so `insertTrack` can pull it
+    // without re-parsing.
+    songInfo.artistInfo = extractArtists(parsed.common);
   } catch (err) {
     console.error(`Warning: metadata parse error on ${absolutePath}: ${err.message}`);
     songInfo = { track: { no: null, of: null }, disk: { no: null, of: null }, duration: null,
-                 sampleRate: null, channels: null, bitDepth: null };
+                 sampleRate: null, channels: null, bitDepth: null,
+                 artistInfo: { trackArtists: [], albumArtists: [], isCompilation: false,
+                               trackArtistDisplay: '', albumArtistDisplay: null } };
   }
 
   songInfo.modified = modified;
@@ -284,21 +330,51 @@ async function parseMyFile(absolutePath, modified) {
 }
 
 // ── Insert a track into the database ────────────────────────────────────────
+//
+// Resolves artist rows, picks the album-artist (with the ALBUMARTIST →
+// COMPILATION-Various-Artists → track-artist fallback), finds/creates
+// the album row keyed on album-artist, inserts the track, then
+// populates the M2M album_artists and track_artists tables. Returns
+// the newly-inserted tracks.id so the caller can run downstream
+// cleanups (hash migration, album-stars migration).
 
 function insertTrack(song) {
-  const artistId = findOrCreateArtist(song.artist ? String(song.artist) : null);
+  const ai = song.artistInfo || {
+    trackArtists: [], albumArtists: [], isCompilation: false,
+    trackArtistDisplay: song.artist || '', albumArtistDisplay: null,
+  };
+
+  // tracks.artist_id stays as the PRIMARY track artist (first in the
+  // list). For a collab "A feat. B", trackArtists is ["A", "B"]; we
+  // store A's id here and list B in track_artists with role='featured'.
+  const primaryTrackArtistName = ai.trackArtists[0] || (song.artist ? String(song.artist) : null);
+  const primaryTrackArtistId = findOrCreateArtist(primaryTrackArtistName);
+
+  // Resolve all album-artist names to ids (idempotent).
+  const albumArtistIds = ai.albumArtists.map(n => findOrCreateArtist(n)).filter(Number.isFinite);
+
+  // Pick the album.artist_id per the fallback chain.
+  const primaryAlbumArtistId = chooseAlbumArtistId({
+    albumArtistIds,
+    isCompilation: ai.isCompilation,
+    variousArtistsId,
+    primaryTrackArtistId,
+  });
+
   const albumId = findOrCreateAlbum(
     song.album ? String(song.album) : null,
-    artistId,
+    primaryAlbumArtistId,
     song.year || null,
-    song.aaFile || null
+    song.aaFile || null,
+    ai.albumArtistDisplay,
+    ai.isCompilation,
   );
 
   const result = stmts.insertTrack.run(
     song.filePath,
     loadJson.libraryId,
     song.title ? String(song.title) : null,
-    artistId,
+    primaryTrackArtistId,
     albumId,
     song.track?.no || null,
     song.disk?.no || null,
@@ -316,8 +392,34 @@ function insertTrack(song) {
     song.modified,
     loadJson.scanId
   );
+  const trackId = Number(result.lastInsertRowid);
 
-  setTrackGenres(Number(result.lastInsertRowid), song.genre);
+  setTrackGenres(trackId, song.genre);
+
+  // ── V17 M2M population ──────────────────────────────────────────────
+  // album_artists: idempotent across multiple tracks sharing one album.
+  // If ALBUMARTIST yielded nothing, fall back to whatever we stored in
+  // albums.artist_id so the M2M row isn't empty (keeps the "union via
+  // album_artists OR albums.artist_id" query shape from needing two
+  // branches for the legacy single-artist case).
+  const albumArtistsForM2M = albumArtistIds.length ? albumArtistIds : (primaryAlbumArtistId ? [primaryAlbumArtistId] : []);
+  for (let i = 0; i < albumArtistsForM2M.length; i++) {
+    stmts.insertAlbumArtist.run(albumId, albumArtistsForM2M[i], 'main', i);
+  }
+
+  // track_artists: the track row was just (INSERT OR REPLACE)'d so any
+  // prior rows CASCADE-dropped. But the REPLACE path keeps the same id
+  // when (filepath, library_id) collides — clear first to be safe.
+  stmts.deleteTrackArtists.run(trackId);
+  const trackArtistIds = ai.trackArtists.map(n => findOrCreateArtist(n)).filter(Number.isFinite);
+  // Fall back to the primary track artist if the extractor returned
+  // nothing (edge case: file with no ARTIST tag at all).
+  if (!trackArtistIds.length && primaryTrackArtistId) { trackArtistIds.push(primaryTrackArtistId); }
+  for (let i = 0; i < trackArtistIds.length; i++) {
+    stmts.insertTrackArtist.run(trackId, trackArtistIds[i], i === 0 ? 'main' : 'featured', i);
+  }
+
+  return { trackId, albumId };
 }
 
 // ── Recursive directory scan ────────────────────────────────────────────────
@@ -390,12 +492,13 @@ async function recursiveScan(dir) {
           // New or modified file — parse and insert
           const oldFileHash  = existing ? existing.file_hash  : null;
           const oldAudioHash = existing ? existing.audio_hash : null;
+          const oldAlbumId   = existing ? existing.album_id   : null;
           if (existing) {
             // Delete old record (will be re-inserted with fresh metadata)
             db.prepare('DELETE FROM tracks WHERE id = ?').run(existing.id);
           }
           const songInfo = await parseMyFile(filepath, stat.mtime.getTime());
-          insertTrack(songInfo);
+          const { albumId: newAlbumId } = insertTrack(songInfo);
           // User-facing tables key on canonical hash — audio_hash when we
           // have it, file_hash otherwise. A tag edit changes file_hash but
           // keeps audio_hash stable, so most rescans have nothing to do.
@@ -406,6 +509,13 @@ async function recursiveScan(dir) {
           const newCanon = songInfo.audioHash || songInfo.hash;
           if (oldCanon && newCanon && oldCanon !== newCanon) {
             migrateHashReferences(oldCanon, newCanon);
+          }
+          // V17: when a compilation collapses (or any album_id change
+          // caused by the album-artist semantic shift), migrate this
+          // user's album stars from the old fragment to the canonical
+          // row BEFORE the stale-fragment sweep runs.
+          if (oldAlbumId && newAlbumId && oldAlbumId !== newAlbumId) {
+            migrateAlbumStars(db, oldAlbumId, newAlbumId);
           }
           fileCount++;
         }
@@ -457,9 +567,18 @@ async function run() {
       staleEntriesRemoved: deleted.changes
     }));
 
-    // Clean up orphaned artists, albums, and genres (no tracks reference them)
+    // Clean up orphaned artists, albums, and genres. Keep artists referenced by
+    // tracks.artist_id, albums.artist_id, OR either M2M table (track_artists,
+    // album_artists). Without the M2M checks, featured/co-credited artists
+    // (V17) whose only reference is the M2M row would be deleted, and
+    // CASCADE on artist_id would drop the M2M row too — silently eating
+    // the second entry of a "A feat. B" split.
     db.exec('DELETE FROM albums WHERE id NOT IN (SELECT DISTINCT album_id FROM tracks WHERE album_id IS NOT NULL)');
-    db.exec('DELETE FROM artists WHERE id NOT IN (SELECT DISTINCT artist_id FROM tracks WHERE artist_id IS NOT NULL) AND id NOT IN (SELECT DISTINCT artist_id FROM albums WHERE artist_id IS NOT NULL)');
+    db.exec(`DELETE FROM artists
+             WHERE id NOT IN (SELECT DISTINCT artist_id FROM tracks         WHERE artist_id IS NOT NULL)
+               AND id NOT IN (SELECT DISTINCT artist_id FROM albums         WHERE artist_id IS NOT NULL)
+               AND id NOT IN (SELECT DISTINCT artist_id FROM track_artists)
+               AND id NOT IN (SELECT DISTINCT artist_id FROM album_artists)`);
     db.exec('DELETE FROM genres WHERE id NOT IN (SELECT DISTINCT genre_id FROM track_genres)');
   } catch (err) {
     console.error('Scan failed');

@@ -175,12 +175,32 @@ function enrichSongsWithUserMeta(req, songs) {
   `).all(req.user.id, ...trackIds);
 
   const meta = new Map(rows.map(r => [r.id, r]));
+
+  // OpenSubsonic: batch-fetch per-track artist arrays (V17). One query,
+  // fan into a Map<track_id, [{id, name}, ...]>.
+  const artistRows = db.getDB().prepare(`
+    SELECT ta.track_id, ta.position, a.id, a.name
+    FROM track_artists ta
+    JOIN artists a ON a.id = ta.artist_id
+    WHERE ta.track_id IN (${placeholders})
+    ORDER BY ta.track_id, ta.position
+  `).all(...trackIds);
+  const artistsByTrack = new Map();
+  for (const r of artistRows) {
+    if (!artistsByTrack.has(r.track_id)) { artistsByTrack.set(r.track_id, []); }
+    artistsByTrack.get(r.track_id).push({ id: encArtist(r.id), name: r.name });
+  }
+
   for (const song of songs) {
-    const m = meta.get(parseInt(song.id, 10));
-    if (!m) { continue; }
-    if (m.starred_at)               { song.starred    = isoUtc(m.starred_at); }
-    if (m.rating && m.rating > 0)   { song.userRating = m.rating; }
-    if (m.play_count && m.play_count > 0) { song.playCount = m.play_count; }
+    const trackId = parseInt(song.id, 10);
+    const m = meta.get(trackId);
+    if (m) {
+      if (m.starred_at)                     { song.starred    = isoUtc(m.starred_at); }
+      if (m.rating && m.rating > 0)         { song.userRating = m.rating; }
+      if (m.play_count && m.play_count > 0) { song.playCount  = m.play_count; }
+    }
+    const artists = artistsByTrack.get(trackId);
+    if (artists && artists.length) { song.artists = artists; }
   }
   return songs;
 }
@@ -272,6 +292,11 @@ function indexLetter(name) {
   return /[A-Z]/.test(first) ? first : '#';
 }
 
+// V17: list every artist reachable via either track_artists OR
+// album_artists, so "Various Artists" (compilation album-artist) shows
+// up even though no track has it as its primary track-artist. Album
+// count per artist = distinct albums where the artist appears on any
+// role.
 function getArtistsCore(req) {
   const { clause, params } = libraryScope(req);
   return db.getDB().prepare(`
@@ -279,12 +304,22 @@ function getArtistsCore(req) {
            COUNT(DISTINCT al.id) AS albumCount,
            MIN(al.album_art_file) AS coverArt
     FROM artists a
-    JOIN albums al ON al.artist_id = a.id
-    JOIN tracks t  ON t.album_id = al.id
-    WHERE ${clause}
+    JOIN (
+      SELECT aa.artist_id AS artist_id, aa.album_id AS album_id
+      FROM album_artists aa
+      JOIN albums al ON al.id = aa.album_id
+      JOIN tracks t  ON t.album_id = al.id
+      WHERE ${clause}
+      UNION
+      SELECT ta.artist_id AS artist_id, t.album_id AS album_id
+      FROM track_artists ta
+      JOIN tracks t ON t.id = ta.track_id
+      WHERE ${clause} AND t.album_id IS NOT NULL
+    ) link ON link.artist_id = a.id
+    JOIN albums al ON al.id = link.album_id
     GROUP BY a.id
     ORDER BY a.name COLLATE NOCASE
-  `).all(...params);
+  `).all(...params, ...params);
 }
 
 export function getArtists(req, res) {
@@ -336,16 +371,27 @@ export function getArtist(req, res) {
   const artist = db.getDB().prepare('SELECT id, name FROM artists WHERE id = ?').get(id);
   if (!artist) { return SubErr.NOT_FOUND(req, res, 'Artist'); }
 
+  // V17: include every album where this artist appears in any of:
+  //   - albums.artist_id (primary album-artist, covers 95% case)
+  //   - album_artists M2M (multi-artist ALBUMARTIST values)
+  //   - track_artists M2M (compilation contributors, collab features)
+  // A user clicking "Comp Artist A" expects to see the Various-Artists
+  // compilation they're on, even though A isn't in album_artists.
   const albums = db.getDB().prepare(`
     SELECT al.id, al.name, al.year, al.album_art_file AS coverArt,
            COUNT(t.id) AS songCount, SUM(t.duration) AS duration,
            MIN(t.genre) AS genre
     FROM albums al
     JOIN tracks t ON t.album_id = al.id
-    WHERE al.artist_id = ? AND ${clause}
+    WHERE (al.artist_id = ?
+        OR al.id IN (SELECT album_id FROM album_artists WHERE artist_id = ?)
+        OR al.id IN (SELECT t2.album_id FROM track_artists ta
+                     JOIN tracks t2 ON t2.id = ta.track_id
+                     WHERE ta.artist_id = ? AND t2.album_id IS NOT NULL))
+      AND ${clause}
     GROUP BY al.id
     ORDER BY al.year, al.name COLLATE NOCASE
-  `).all(id, ...params);
+  `).all(id, id, id, ...params);
 
   const albumStars = albumStarMap(req.user.id, albums.map(a => a.id));
   const artistStars = artistStarMap(req.user.id, [artist.id]);
@@ -385,12 +431,22 @@ export function getAlbum(req, res) {
 
   const album = db.getDB().prepare(`
     SELECT al.id, al.name, al.year, al.album_art_file, al.artist_id,
+           al.album_artist, al.compilation,
            a.name AS artist_name
     FROM albums al
     LEFT JOIN artists a ON a.id = al.artist_id
     WHERE al.id = ?
   `).get(id);
   if (!album) { return SubErr.NOT_FOUND(req, res, 'Album'); }
+
+  // V17: full M2M artist list for OpenSubsonic `artists[]` on the album.
+  const albumArtists = db.getDB().prepare(`
+    SELECT a.id, a.name
+    FROM album_artists aa
+    JOIN artists a ON a.id = aa.artist_id
+    WHERE aa.album_id = ?
+    ORDER BY aa.position, aa.role
+  `).all(id).map(r => ({ id: encArtist(r.id), name: r.name }));
 
   const songs = db.getDB().prepare(`
     SELECT t.id, t.filepath, t.title, t.track_number, t.disc_number, t.duration,
@@ -412,8 +468,14 @@ export function getAlbum(req, res) {
     album: {
       id:        encAlbum(album.id),
       name:      album.name,
-      artist:    album.artist_name || undefined,
+      // Prefer the raw display string from the ALBUMARTIST tag — falls
+      // back to the joined artist row name. So "Brian Eno & David Byrne"
+      // stays as written even though the M2M splits into two artist rows.
+      artist:    album.album_artist || album.artist_name || undefined,
       artistId:  album.artist_id != null ? encArtist(album.artist_id) : undefined,
+      // OpenSubsonic extension — the full M2M list.
+      artists:   albumArtists.length ? albumArtists : undefined,
+      isCompilation: album.compilation ? true : undefined,
       year:      album.year || undefined,
       coverArt:  album.album_art_file ? encAlbum(album.id) : undefined,
       songCount: songs.length,
@@ -789,16 +851,25 @@ export function search3(req, res) {
   const like = `%${q}%`;
 
   const d = db.getDB();
+  // V17: match artist name against every artist reachable via either
+  // track_artists or album_artists — compilation album-artists (VA)
+  // and featured-track collaborators are now in-scope.
   const artists = d.prepare(`
     SELECT DISTINCT a.id, a.name
     FROM artists a
-    JOIN albums al ON al.artist_id = a.id
-    JOIN tracks t  ON t.album_id = al.id
-    WHERE ${scope} AND LOWER(a.name) LIKE ?
-    GROUP BY a.id
+    WHERE LOWER(a.name) LIKE ?
+      AND (
+        a.id IN (SELECT aa.artist_id FROM album_artists aa
+                 JOIN albums al ON al.id = aa.album_id
+                 JOIN tracks t  ON t.album_id = al.id
+                 WHERE ${scope})
+        OR a.id IN (SELECT ta.artist_id FROM track_artists ta
+                    JOIN tracks t ON t.id = ta.track_id
+                    WHERE ${scope})
+      )
     ORDER BY a.name COLLATE NOCASE
     LIMIT ? OFFSET ?
-  `).all(...scopeParams, like, artistCount, artistOffset);
+  `).all(like, ...scopeParams, ...scopeParams, artistCount, artistOffset);
 
   const albums = d.prepare(`
     SELECT DISTINCT al.id, al.name, al.year, al.album_art_file, al.artist_id,
@@ -1468,6 +1539,10 @@ const OPENSUBSONIC_EXTENSIONS = [
   { name: 'transcodeOffset',      versions: [1] },  // `timeOffset` supported on stream
   { name: 'httpHeaders',          versions: [1] },  // HEAD + Content-Length estimate
   { name: 'tokenInfo',            versions: [1] },  // tokenInfo endpoint (validates API key)
+  // Songs and albums emit `artists[]` arrays + compilation flag (V17).
+  // Name chosen to match the OpenSubsonic "multiple artists" extension
+  // used by Navidrome / Gonic.
+  { name: 'songArtists',          versions: [1] },
 ];
 
 export function getOpenSubsonicExtensions(req, res) {

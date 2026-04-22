@@ -146,15 +146,25 @@ export function setup(mstream) {
   mstream.post('/api/v1/db/artists-albums', (req, res) => {
     const filter = libraryFilter(req.user, req.body?.ignoreVPaths);
 
-    // Get albums for this artist
+    // V17: also include albums where this artist appears in album_artists
+    // or track_artists (compilation / collab appearances) — "click Artist A
+    // → see every album Artist A is on" stays correct after the schema
+    // change.
     const albumRows = d().prepare(`
       SELECT DISTINCT al.name, al.year, al.album_art_file
       FROM albums al
-      JOIN artists a ON al.artist_id = a.id
       JOIN tracks t ON t.album_id = al.id
-      WHERE a.name = ? AND ${filter.clause}
+      WHERE (
+        al.artist_id IN (SELECT id FROM artists WHERE name = ?)
+        OR al.id IN (SELECT album_id FROM album_artists
+                     WHERE artist_id IN (SELECT id FROM artists WHERE name = ?))
+        OR al.id IN (SELECT t2.album_id FROM track_artists ta
+                     JOIN tracks t2 ON t2.id = ta.track_id
+                     WHERE ta.artist_id IN (SELECT id FROM artists WHERE name = ?)
+                       AND t2.album_id IS NOT NULL)
+      ) AND ${filter.clause}
       ORDER BY al.year DESC
-    `).all(String(req.body.artist), ...filter.params);
+    `).all(String(req.body.artist), String(req.body.artist), String(req.body.artist), ...filter.params);
 
     const albums = albumRows.map(r => ({
       name: r.name,

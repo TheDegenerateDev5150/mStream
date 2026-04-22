@@ -1,7 +1,7 @@
 // SQLite schema definitions and migration system for mStream.
 // Uses PRAGMA user_version for tracking which migrations have been applied.
 
-export const SCHEMA_VERSION = 17;
+export const SCHEMA_VERSION = 18;
 
 export const SCHEMA_V1 = `
   -- Users
@@ -365,6 +365,97 @@ export const SCHEMA_V17 = `
   ALTER TABLE users ADD COLUMN allow_server_audio INTEGER NOT NULL DEFAULT 1;
 `;
 
+export const SCHEMA_V18 = `
+  -- ── Multi-artist / compilation support ────────────────────────────
+  --
+  -- Prior to V17, albums.artist_id was set to the FIRST-SCANNED TRACK's
+  -- artist. Compilations where each track had a different ARTIST tag
+  -- fragmented into N separate album rows (one per track-artist), and
+  -- the ALBUMARTIST tag was ignored entirely. This migration:
+  --
+  --   1. Adds albums.album_artist (raw tag display string: e.g.
+  --      "Brian Eno & David Byrne") and albums.compilation flag.
+  --
+  --   2. Changes the uniqueness contract from (name, artist_id, year)
+  --      to (name, album_artist_id, year). SQLite can't DROP CONSTRAINT
+  --      so we rebuild the table. album_artist_id is the semantic
+  --      replacement for the old artist_id column — it stores the
+  --      ALBUMARTIST-tag's FK, falling back to track artist for
+  --      legacy single-artist rows.
+  --
+  --   3. Adds album_artists(album_id, artist_id, role, position) and
+  --      track_artists(track_id, artist_id, role, position) — the
+  --      M2M tables Subsonic getArtist/getArtists + OpenSubsonic
+  --      artists[] unroll. role is a TEXT enum we can grow later
+  --      (composer, conductor, remixer, …); 'main' for primary,
+  --      'featured' for collab-secondary.
+  --
+  --   4. Seeds the canonical "Various Artists" row with MusicBrainz's
+  --      well-known VA UUID so future MBID-aware features (AcoustID,
+  --      LastFM bio) hit the right entity.
+  --
+  -- rescanRequired: true — the scanner must rebuild album_artists and
+  -- track_artists from freshly-parsed tags, and the compilation-
+  -- collapse step relies on stale-row cleanup at scan end.
+  --
+  -- user_album_stars references the old fragmented album_ids; the
+  -- album-migration helper (src/db/album-migration.js, mirrored in
+  -- rust-parser) remaps those during the rescan so stars survive.
+
+  -- Step 1: albums column additions (cheap, no rebuild).
+  ALTER TABLE albums ADD COLUMN album_artist TEXT;
+  ALTER TABLE albums ADD COLUMN compilation  INTEGER NOT NULL DEFAULT 0;
+
+  -- Step 2: table rebuild for the new UNIQUE. The existing albums row
+  -- data is preserved verbatim — the scanner will fix up semantics on
+  -- the next rescan. Foreign keys from tracks/user_album_stars to
+  -- albums survive because we keep the same id values.
+  CREATE TABLE albums_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    artist_id INTEGER REFERENCES artists(id) ON DELETE SET NULL,
+    year INTEGER,
+    album_art_file TEXT,
+    mbz_album_id TEXT,
+    album_artist TEXT,
+    compilation INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(name, artist_id, year)
+  );
+  INSERT INTO albums_new (id, name, artist_id, year, album_art_file, mbz_album_id, album_artist, compilation)
+    SELECT id, name, artist_id, year, album_art_file, mbz_album_id, album_artist, compilation FROM albums;
+  DROP TABLE albums;
+  ALTER TABLE albums_new RENAME TO albums;
+  CREATE INDEX IF NOT EXISTS idx_albums_artist ON albums(artist_id);
+
+  -- Step 3: M2M join tables. position preserves author/tag order so
+  -- "Artist A feat. Artist B" stays in that order when emitted.
+  CREATE TABLE IF NOT EXISTS album_artists (
+    album_id   INTEGER NOT NULL REFERENCES albums(id)  ON DELETE CASCADE,
+    artist_id  INTEGER NOT NULL REFERENCES artists(id) ON DELETE CASCADE,
+    role       TEXT    NOT NULL DEFAULT 'main',
+    position   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (album_id, artist_id, role)
+  );
+  CREATE INDEX IF NOT EXISTS idx_album_artists_album  ON album_artists(album_id);
+  CREATE INDEX IF NOT EXISTS idx_album_artists_artist ON album_artists(artist_id);
+
+  CREATE TABLE IF NOT EXISTS track_artists (
+    track_id   INTEGER NOT NULL REFERENCES tracks(id)  ON DELETE CASCADE,
+    artist_id  INTEGER NOT NULL REFERENCES artists(id) ON DELETE CASCADE,
+    role       TEXT    NOT NULL DEFAULT 'main',
+    position   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (track_id, artist_id, role)
+  );
+  CREATE INDEX IF NOT EXISTS idx_track_artists_track  ON track_artists(track_id);
+  CREATE INDEX IF NOT EXISTS idx_track_artists_artist ON track_artists(artist_id);
+
+  -- Step 4: seed the canonical Various Artists row. MusicBrainz's
+  -- well-known VA UUID. INSERT OR IGNORE so re-running the migration
+  -- (or a V1 DB that already had a row named Various Artists) is safe.
+  INSERT OR IGNORE INTO artists (name, mbz_artist_id)
+    VALUES ('Various Artists', '89ad4ac3-39f7-470e-963a-56509c546377');
+`;
+
 // rescanRequired: true — marks migrations that change the tracks table schema
 // and need a force rescan to populate new fields. When applied, a marker file
 // is written so the next boot triggers rescanAll() instead of scanAll().
@@ -386,4 +477,5 @@ export const MIGRATIONS = [
   { version: 15, sql: SCHEMA_V15 },
   { version: 16, sql: SCHEMA_V16, rescanRequired: true },
   { version: 17, sql: SCHEMA_V17 },
+  { version: 18, sql: SCHEMA_V18, rescanRequired: true },
 ];

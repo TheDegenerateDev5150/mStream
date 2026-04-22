@@ -56,7 +56,7 @@ function runFfmpeg(args) {
 }
 
 async function encode(outPath, f, fixtureIndex) {
-  const meta = ['title', 'artist', 'album', 'date', 'track', 'disc', 'genre'];
+  const meta = ['title', 'artist', 'album', 'date', 'track', 'disc', 'genre', 'album_artist', 'compilation'];
   const metaArgs = [];
   const pairs = {
     title:  f.title,
@@ -66,6 +66,9 @@ async function encode(outPath, f, fixtureIndex) {
     track:  String(f.track),
     disc:   String(f.disc),
     genre:  f.genre,
+    // V17: album_artist → ID3v2 TPE2; compilation → TCMP.
+    album_artist: f.albumArtist || null,
+    compilation:  f.compilation ? '1' : null,
   };
   for (const key of meta) {
     if (pairs[key] != null) {

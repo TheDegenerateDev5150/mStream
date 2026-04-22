@@ -86,6 +86,13 @@ export async function startServer(opts = {}) {
     waitForScan   = true,
     captureLogs   = false,
     users         = [],
+    // Additional library mounts beyond the default `testlib` fixtures.
+    // Shape: { vpathName: '/absolute/dir', ... }. Each entry is added
+    // as a music folder the scanner will walk at boot. Useful for
+    // tests that need a curated library distinct from the shared
+    // fixtures (e.g. the V17 multi-artist suite builds compilation
+    // and collab tracks on the fly).
+    extraFolders  = {},
   } = opts;
 
   const musicDir = await ensureFixtures();
@@ -110,7 +117,12 @@ export async function startServer(opts = {}) {
       port: sPort,
     },
     ...(rustPlayerPort != null ? { rustPlayerPort } : {}),
-    folders: { testlib: { root: musicDir } },
+    folders: {
+      testlib: { root: musicDir },
+      ...Object.fromEntries(
+        Object.entries(extraFolders).map(([name, root]) => [name, { root }])
+      ),
+    },
     storage: {
       albumArtDirectory:   path.join(tmpDir, 'image-cache'),
       dbDirectory:         path.join(tmpDir, 'db'),

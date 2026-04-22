@@ -9,7 +9,7 @@ use lofty::prelude::*;
 use lofty::probe::Probe;
 use lofty::tag::{ItemKey, ItemValue};
 use lofty::picture::MimeType;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::Deserialize;
 use walkdir::WalkDir;
 
@@ -223,11 +223,20 @@ fn run_scan(config: &ScanConfig) -> Result<(), Box<dyn std::error::Error>> {
         rusqlite::params![config.library_id, config.scan_id],
     )?;
 
-    // Clean up orphaned artists and albums
+    // Clean up orphaned artists and albums. An artist is kept if ANY of:
+    //   - tracks.artist_id references it (primary track artist)
+    //   - albums.artist_id references it (primary album artist)
+    //   - track_artists M2M references it (featured artists)
+    //   - album_artists M2M references it (co-credited album artists)
+    // Missing the M2M checks would orphan featured/credited artists whose
+    // only reference is via the V17 M2M tables — cascade-deleting their
+    // M2M rows and breaking `song.artists` for collabs.
     conn.execute_batch(
         "DELETE FROM albums WHERE id NOT IN (SELECT DISTINCT album_id FROM tracks WHERE album_id IS NOT NULL);
-         DELETE FROM artists WHERE id NOT IN (SELECT DISTINCT artist_id FROM tracks WHERE artist_id IS NOT NULL)
-                                AND id NOT IN (SELECT DISTINCT artist_id FROM albums WHERE artist_id IS NOT NULL);
+         DELETE FROM artists WHERE id NOT IN (SELECT DISTINCT artist_id FROM tracks  WHERE artist_id IS NOT NULL)
+                                AND id NOT IN (SELECT DISTINCT artist_id FROM albums  WHERE artist_id IS NOT NULL)
+                                AND id NOT IN (SELECT DISTINCT artist_id FROM track_artists)
+                                AND id NOT IN (SELECT DISTINCT artist_id FROM album_artists);
          DELETE FROM genres WHERE id NOT IN (SELECT DISTINCT genre_id FROM track_genres);"
     )?;
 
@@ -264,19 +273,22 @@ fn process_one(
     // hashes so we can migrate user-facing rows (stars, ratings, play
     // counts, bookmarks, play queue) if the track's canonical identity
     // changed on re-parse — typical trigger is an external ID3 tag editor.
-    let existing: Option<(i64, i64, String, String)> = conn.prepare_cached(
-        "SELECT id, modified, file_hash, audio_hash FROM tracks WHERE filepath = ? AND library_id = ?"
+    // Also captures the existing track's album_id so we can migrate
+    // user_album_stars on the V17 compilation-collapse path.
+    let existing: Option<(i64, i64, String, String, Option<i64>)> = conn.prepare_cached(
+        "SELECT id, modified, file_hash, audio_hash, album_id FROM tracks WHERE filepath = ? AND library_id = ?"
     )?.query_row(rusqlite::params![rel_path, config.library_id], |row| {
         Ok((
             row.get(0)?,
             row.get(1)?,
             row.get::<_, Option<String>>(2)?.unwrap_or_default(),
             row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+            row.get::<_, Option<i64>>(4)?,
         ))
     }).ok();
 
-    let (old_hash, old_audio_hash): (Option<String>, Option<String>) =
-        if let Some((id, existing_mod, old_file, old_audio)) = &existing {
+    let (old_hash, old_audio_hash, old_album_id): (Option<String>, Option<String>, Option<i64>) =
+        if let Some((id, existing_mod, old_file, old_audio, old_album)) = &existing {
             if *existing_mod == mod_time && !config.force_rescan {
                 // Unchanged — just update scan_id
                 conn.execute("UPDATE tracks SET scan_id = ? WHERE id = ?",
@@ -287,9 +299,10 @@ fn process_one(
             (
                 if old_file.is_empty()  { None } else { Some(old_file.clone())  },
                 if old_audio.is_empty() { None } else { Some(old_audio.clone()) },
+                *old_album,
             )
         } else {
-            (None, None)
+            (None, None, None)
         };
 
     // Parse metadata
@@ -308,6 +321,13 @@ fn process_one(
     let mut sample_rate: Option<i64> = None;
     let mut channels: Option<i64> = None;
     let mut bit_depth: Option<i64> = None;
+    // V17: multi-artist / compilation extraction. Mirrors the JS helper
+    // in src/db/artist-extraction.js — same tag aliases, same delimiter
+    // list, same fallback rules.
+    let mut album_artist_tag: Option<String> = None;
+    let mut album_artists_multi: Vec<String> = Vec::new();
+    let mut track_artists_multi: Vec<String> = Vec::new();
+    let mut is_compilation = false;
 
     // Use Relaxed parsing so malformed frames (e.g. odd-length UTF-16 strings,
     // invalid year lengths) get dropped individually instead of failing the
@@ -349,12 +369,46 @@ fn process_one(
                         aa_file = save_embedded_art(pic, config);
                     }
                 }
+
+                // Album artist (single-value scalar tag, may need splitting).
+                album_artist_tag = tag.get_string(&ItemKey::AlbumArtist).map(|s| s.to_string());
+
+                // Multi-value ARTIST / ALBUMARTIST: get every item (each item
+                // may be Text or Locator). Honour multi-value natively.
+                for item in tag.get_items(&ItemKey::AlbumArtist) {
+                    if let ItemValue::Text(s) = item.value() {
+                        album_artists_multi.push(s.to_string());
+                    }
+                }
+                for item in tag.get_items(&ItemKey::TrackArtist) {
+                    if let ItemValue::Text(s) = item.value() {
+                        track_artists_multi.push(s.to_string());
+                    }
+                }
+
+                // Compilation flag — ID3v2 TCMP, MP4 cpil, Vorbis COMPILATION,
+                // WMA WM/IsCompilation. lofty normalises all via FlagCompilation.
+                is_compilation = tag.get_string(&ItemKey::FlagCompilation)
+                    .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false);
+
             }
         }
         Err(e) => {
             eprintln!("Warning: metadata parse error on {}: {}", filepath.display(), e);
         }
     }
+
+    // Resolve final artist lists using the shared fallback rules.
+    let album_artists = resolve_album_artists(
+        album_artist_tag.as_deref(),
+        &album_artists_multi,
+    );
+    let track_artists = resolve_track_artists(
+        artist.as_deref(),
+        &track_artists_multi,
+    );
+
 
     if aa_file.is_none() && !config.skip_img {
         aa_file = check_directory_for_album_art(filepath, config, dir_art_cache);
@@ -389,16 +443,39 @@ fn process_one(
         }
     }
 
-    // Find or create artist
-    let artist_id = match &artist {
-        Some(name) => Some(find_or_create_artist(conn, name)?),
-        None => None,
+    // Resolve track-artist ids (primary first) and album-artist ids.
+    let primary_track_artist_name = track_artists.first().cloned()
+        .or_else(|| artist.clone());
+    let primary_track_artist_id = match primary_track_artist_name.as_deref() {
+        Some(name) if !name.is_empty() => Some(find_or_create_artist(conn, name)?),
+        _ => None,
+    };
+    let mut album_artist_ids: Vec<i64> = Vec::new();
+    for name in &album_artists {
+        if !name.is_empty() {
+            album_artist_ids.push(find_or_create_artist(conn, name)?);
+        }
+    }
+
+    // Fallback chain for the primary album-artist (what goes in albums.artist_id):
+    //   1. First ALBUMARTIST value, if present.
+    //   2. Various Artists seed, if compilation flag is set.
+    //   3. Primary track artist.
+    let primary_album_artist_id = if !album_artist_ids.is_empty() {
+        Some(album_artist_ids[0])
+    } else if is_compilation {
+        find_various_artists(conn).ok().flatten().or(primary_track_artist_id)
+    } else {
+        primary_track_artist_id
     };
 
     // Find or create album
     let album_id = match &album {
         Some(name) => {
-            let aid = find_or_create_album(conn, name, artist_id, year, aa_file.as_deref())?;
+            let aid = find_or_create_album(
+                conn, name, primary_album_artist_id, year, aa_file.as_deref(),
+                album_artist_tag.as_deref(), is_compilation,
+            )?;
             Some(aid)
         }
         None => None,
@@ -411,7 +488,7 @@ fn process_one(
          replaygain_track_db, sample_rate, channels, bit_depth, modified, scan_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rusqlite::params![
-            rel_path, config.library_id, title, artist_id, album_id,
+            rel_path, config.library_id, title, primary_track_artist_id, album_id,
             track_num, disc_num, year, duration_sec, ext, hash, audio_hash,
             aa_file, genre, rg_track_db, sample_rate, channels, bit_depth,
             mod_time, config.scan_id
@@ -421,6 +498,47 @@ fn process_one(
     let track_id = conn.last_insert_rowid();
     set_track_genres(conn, track_id, genre.as_deref())?;
 
+    // V17: populate M2M. Album-artists — INSERT OR IGNORE across multiple
+    // tracks sharing the same album. Fall back to the primary album-artist
+    // id so the M2M isn't empty for legacy single-artist albums.
+    if let Some(aid) = album_id {
+        let m2m_ids: Vec<i64> = if !album_artist_ids.is_empty() {
+            album_artist_ids.clone()
+        } else {
+            primary_album_artist_id.into_iter().collect()
+        };
+        for (i, artist_fk) in m2m_ids.iter().enumerate() {
+            conn.execute(
+                "INSERT OR IGNORE INTO album_artists (album_id, artist_id, role, position)
+                 VALUES (?, ?, 'main', ?)",
+                rusqlite::params![aid, artist_fk, i as i64],
+            )?;
+        }
+    }
+
+    // Track-artists — clear first (defensive; REPLACE above should have
+    // cascaded, but a partial-run rescan could leave orphans). Primary is
+    // role='main'; any additional collaborators are 'featured' in tag order.
+    conn.execute("DELETE FROM track_artists WHERE track_id = ?",
+        rusqlite::params![track_id])?;
+    let mut track_artist_ids: Vec<i64> = Vec::new();
+    for name in &track_artists {
+        if !name.is_empty() {
+            track_artist_ids.push(find_or_create_artist(conn, name)?);
+        }
+    }
+    if track_artist_ids.is_empty() {
+        if let Some(id) = primary_track_artist_id { track_artist_ids.push(id); }
+    }
+    for (i, artist_fk) in track_artist_ids.iter().enumerate() {
+        let role = if i == 0 { "main" } else { "featured" };
+        conn.execute(
+            "INSERT OR IGNORE INTO track_artists (track_id, artist_id, role, position)
+             VALUES (?, ?, ?, ?)",
+            rusqlite::params![track_id, artist_fk, role, i as i64],
+        )?;
+    }
+
     // Migrate user_* rows to the new canonical identity. Canonical = audio_hash
     // when present, file_hash otherwise. A tag edit keeps audio_hash stable,
     // so the common case is a no-op; migration only runs on real content
@@ -429,6 +547,13 @@ fn process_one(
     let old_canon = old_audio_hash.clone().unwrap_or_else(|| old_hash.clone().unwrap_or_default());
     if !old_canon.is_empty() && old_canon != new_canon {
         migrate_hash_references(conn, &old_canon, &new_canon)?;
+    }
+
+    // V17: album-stars migration on compilation-collapse.
+    if let (Some(old), Some(new)) = (old_album_id, album_id) {
+        if old != new {
+            migrate_album_stars(conn, old, new)?;
+        }
     }
 
     Ok(true)
@@ -506,7 +631,8 @@ fn find_or_create_artist(conn: &Connection, name: &str) -> Result<i64, rusqlite:
 }
 
 fn find_or_create_album(
-    conn: &Connection, name: &str, artist_id: Option<i64>, year: Option<i64>, art: Option<&str>
+    conn: &Connection, name: &str, artist_id: Option<i64>, year: Option<i64>,
+    art: Option<&str>, album_artist_display: Option<&str>, compilation: bool,
 ) -> Result<i64, rusqlite::Error> {
     let existing: Result<i64, _> = conn.query_row(
         "SELECT id FROM albums WHERE name = ? AND artist_id IS ? AND year IS ?",
@@ -520,13 +646,123 @@ fn find_or_create_album(
                 rusqlite::params![art_file, id],
             )?;
         }
+        // Re-asserting display + compilation keeps them fresh on rescan.
+        conn.execute(
+            "UPDATE albums SET album_artist = COALESCE(?, album_artist), compilation = ? WHERE id = ?",
+            rusqlite::params![album_artist_display, compilation as i64, id],
+        )?;
         return Ok(id);
     }
     conn.execute(
-        "INSERT INTO albums (name, artist_id, year, album_art_file) VALUES (?, ?, ?, ?)",
-        rusqlite::params![name, artist_id, year, art],
+        "INSERT INTO albums (name, artist_id, year, album_art_file, album_artist, compilation)
+         VALUES (?, ?, ?, ?, ?, ?)",
+        rusqlite::params![name, artist_id, year, art, album_artist_display, compilation as i64],
     )?;
     Ok(conn.last_insert_rowid())
+}
+
+/// Return the id of the seeded "Various Artists" row, if any. Used by
+/// the album-artist fallback chain when COMPILATION=1 is set but no
+/// ALBUMARTIST tag is present.
+fn find_various_artists(conn: &Connection) -> Result<Option<i64>, rusqlite::Error> {
+    conn.query_row(
+        "SELECT id FROM artists WHERE name = 'Various Artists' LIMIT 1",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).optional()
+}
+
+/// Re-map user_album_stars rows from an old album id to a new one.
+/// Used when a compilation collapses from N fragmented rows into a
+/// single canonical row on rescan. Mirrors the JS migrateAlbumStars
+/// helper in src/db/album-migration.js — same union semantics (earlier
+/// starred_at wins when the user already had a star on the target).
+fn migrate_album_stars(
+    conn: &Connection, old_album_id: i64, new_album_id: i64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if old_album_id == new_album_id { return Ok(()); }
+    let mut stmt = conn.prepare(
+        "SELECT user_id, starred_at FROM user_album_stars WHERE album_id = ?"
+    )?;
+    let rows: Vec<(i64, String)> = stmt
+        .query_map(rusqlite::params![old_album_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .filter_map(|r| r.ok())
+        .collect();
+    for (user_id, starred_at) in rows {
+        conn.execute(
+            "INSERT INTO user_album_stars (user_id, album_id, starred_at) VALUES (?, ?, ?)
+             ON CONFLICT(user_id, album_id) DO UPDATE SET
+               starred_at = MIN(user_album_stars.starred_at, excluded.starred_at)",
+            rusqlite::params![user_id, new_album_id, starred_at],
+        )?;
+        conn.execute(
+            "DELETE FROM user_album_stars WHERE user_id = ? AND album_id = ?",
+            rusqlite::params![user_id, old_album_id],
+        )?;
+    }
+    Ok(())
+}
+
+// ── Artist-list extraction helpers (mirror src/db/artist-extraction.js) ────
+
+const ARTIST_DELIMITERS: &[&str] = &[
+    " / ",
+    " feat. ",
+    " feat ",
+    " ft. ",
+    " ft ",
+    "; ",
+];
+
+fn split_artist_string(s: &str) -> Vec<String> {
+    let mut parts: Vec<String> = vec![s.to_string()];
+    for delim in ARTIST_DELIMITERS {
+        let mut next = Vec::new();
+        for p in &parts {
+            if p.contains(delim) {
+                for piece in p.split(delim) { next.push(piece.to_string()); }
+            } else {
+                next.push(p.clone());
+            }
+        }
+        parts = next;
+    }
+    parts.into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Returns the canonical ordered list of track-artist names. Each
+/// value (whether from a multi-value tag or a single scalar) is split
+/// on the delimiter list so `"A feat. B"` always becomes `["A", "B"]`
+/// regardless of how the user tagged it. Duplicates dedup'd, order
+/// preserved (first-seen wins).
+fn resolve_artists_list(scalar: Option<&str>, multi: &[String]) -> Vec<String> {
+    let values: Vec<String> = if !multi.is_empty() {
+        multi.to_vec()
+    } else {
+        scalar.map(|s| vec![s.to_string()]).unwrap_or_default()
+    };
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for v in &values {
+        for piece in split_artist_string(v) {
+            if !seen.contains(&piece) {
+                seen.insert(piece.clone());
+                out.push(piece);
+            }
+        }
+    }
+    out
+}
+
+fn resolve_track_artists(scalar: Option<&str>, multi: &[String]) -> Vec<String> {
+    resolve_artists_list(scalar, multi)
+}
+
+fn resolve_album_artists(scalar: Option<&str>, multi: &[String]) -> Vec<String> {
+    resolve_artists_list(scalar, multi)
 }
 
 // ── Genre helpers ────────────────────────────────────────────────────────────

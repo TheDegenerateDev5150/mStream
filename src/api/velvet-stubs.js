@@ -126,6 +126,8 @@ export function setup(mstream) {
   });
 
   // ── Multi-artist album query ─────────────────────────────────
+  // V17: match albums where ANY of the requested artists appears in
+  // album_artists (compilation/collab) OR is the primary album-artist.
   mstream.post('/api/v1/db/artists-albums-multi', (req, res) => {
     const artists = req.body.artists;
     if (!Array.isArray(artists) || !artists.length) return res.json({ albums: [] });
@@ -136,9 +138,14 @@ export function setup(mstream) {
       FROM albums al
       JOIN tracks t ON t.album_id = al.id
       LEFT JOIN artists a ON al.artist_id = a.id
-      WHERE a.name COLLATE NOCASE IN (${placeholders}) AND ${f.clause}
+      WHERE (
+        a.name COLLATE NOCASE IN (${placeholders})
+        OR al.id IN (SELECT aa.album_id FROM album_artists aa
+                     JOIN artists aa2 ON aa2.id = aa.artist_id
+                     WHERE aa2.name COLLATE NOCASE IN (${placeholders}))
+      ) AND ${f.clause}
       ORDER BY al.year DESC, al.name COLLATE NOCASE
-    `).all(...artists, ...f.params);
+    `).all(...artists, ...artists, ...f.params);
     res.json({ albums: rows });
   });
 
