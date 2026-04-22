@@ -25,6 +25,9 @@ const ADMINDATA = (() => {
   // server settings
   module.serverParams = {};
   module.serverParamsUpdated = { ts: 0 };
+  // server audio backend (rust vs CLI fallback)
+  module.serverAudioInfo = { backend: null, player: null, detectedCliPlayers: [] };
+  module.serverAudioInfoUpdated = { ts: 0 };
   // transcoding
   module.transcodeParams = {};
   module.transcodeParamsUpdated = { ts: 0 };
@@ -152,6 +155,30 @@ const ADMINDATA = (() => {
     });
 
     module.serverParamsUpdated.ts = Date.now();
+  }
+
+  module.getServerAudioInfo = async () => {
+    try {
+      const res = await API.axios({
+        method: 'GET',
+        url: `${API.url()}/api/v1/admin/server-audio/info`
+      });
+      module.serverAudioInfo.backend = res.data.backend;
+      module.serverAudioInfo.player = res.data.player;
+      module.serverAudioInfo.detectedCliPlayers = res.data.detectedCliPlayers || [];
+      module.serverAudioInfoUpdated.ts = Date.now();
+    } catch (_err) {}
+  }
+
+  // Force a fresh detection probe server-side, then pull the updated info.
+  module.redetectCliPlayers = async () => {
+    try {
+      await API.axios({
+        method: 'POST',
+        url: `${API.url()}/api/v1/admin/server-audio/detect`
+      });
+      await module.getServerAudioInfo();
+    } catch (_err) {}
   }
 
   module.getTranscodeParams = async () => {
@@ -350,6 +377,7 @@ ADMINDATA.getFolders();
 ADMINDATA.getUsers();
 ADMINDATA.getDbParams();
 ADMINDATA.getServerParams();
+ADMINDATA.getServerAudioInfo();
 ADMINDATA.getFederationParams();
 ADMINDATA.getDlnaParams();
 ADMINDATA.getSubsonicParams();
@@ -699,6 +727,7 @@ const usersView = Vue.component('users-view', {
       makeAdmin: Object.keys(ADMINDATA.users).length === 0 ? true : false,
       allowMkdir: true,
       allowUpload: true,
+      allowServerAudio: true,
       submitPending: false,
       selectInstance: null
     };
@@ -744,6 +773,10 @@ const usersView = Vue.component('users-view', {
                       <div class="pad-checkbox"><label>
                         <input type="checkbox" v-model="allowUpload"/>
                         <span>{{ t('admin.users.allowUpload') }}</span>
+                      </label></div>
+                      <div class="pad-checkbox"><label>
+                        <input type="checkbox" v-model="allowServerAudio"/>
+                        <span>Allow Server Audio</span>
                       </label></div>
                     </div>
                     <!-- <div class="col s12 m6">
@@ -887,7 +920,8 @@ const usersView = Vue.component('users-view', {
             vpaths: Array.from(selected).map(el => el.value),
             admin: this.makeAdmin,
             allowMkdir: this.allowMkdir,
-            allowUpload: this.allowUpload
+            allowUpload: this.allowUpload,
+            allowServerAudio: this.allowServerAudio
           };
 
           await API.axios({
@@ -896,7 +930,7 @@ const usersView = Vue.component('users-view', {
             data: data
           });
 
-          Vue.set(ADMINDATA.users, this.newUsername, { vpaths: data.vpaths, admin: data.admin, allowMkdir: data.allowMkdir, allowUpload: data.allowUpload });
+          Vue.set(ADMINDATA.users, this.newUsername, { vpaths: data.vpaths, admin: data.admin, allowMkdir: data.allowMkdir, allowUpload: data.allowUpload, allowServerAudio: data.allowServerAudio });
           this.newUsername = '';
           this.newPassword = '';
 
@@ -938,8 +972,22 @@ const advancedView = Vue.component('advanced-view', {
   data() {
     return {
       params: ADMINDATA.serverParams,
-      paramsTS: ADMINDATA.serverParamsUpdated
+      paramsTS: ADMINDATA.serverParamsUpdated,
+      audioInfo: ADMINDATA.serverAudioInfo,
+      audioInfoTS: ADMINDATA.serverAudioInfoUpdated
     };
+  },
+  computed: {
+    activePlayerLabel: function() {
+      if (!this.audioInfo.backend) { return 'None'; }
+      if (this.audioInfo.backend === 'rust') { return 'rust-server-audio (native)'; }
+      if (this.audioInfo.backend === 'cli') { return (this.audioInfo.player || 'cli') + ' (CLI fallback)'; }
+      return this.audioInfo.player || 'Unknown';
+    },
+    detectedCliPlayersLabel: function() {
+      const d = this.audioInfo.detectedCliPlayers || [];
+      return d.length ? d.join(', ') : 'None';
+    }
   },
   template: `
     <div v-if="paramsTS.ts === 0" class="row">
@@ -1035,6 +1083,16 @@ const advancedView = Vue.component('advanced-view', {
                       <td>
                         [<a v-on:click="openModal('edit-rust-player-port-modal')">{{ t('admin.settings.edit') }}</a>]
                       </td>
+                    </tr>
+                    <tr>
+                      <td><b>Active player:</b> {{ activePlayerLabel }}</td>
+                      <td>
+                        [<a v-on:click="refreshServerAudioInfo()">refresh</a>]
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><b>Detected CLI players:</b> {{ detectedCliPlayersLabel }}</td>
+                      <td></td>
                     </tr>
                   </tbody>
                 </table>
@@ -1321,6 +1379,9 @@ const advancedView = Vue.component('advanced-view', {
         ]
       });
     },
+    refreshServerAudioInfo: function() {
+      ADMINDATA.redetectCliPlayers();
+    },
     toggleAutoBootServerAudio: function() {
       iziToast.question({
         timeout: 20000,
@@ -1344,6 +1405,7 @@ const advancedView = Vue.component('advanced-view', {
               data: { autoBootServerAudio: !this.params.autoBootServerAudio }
             }).then(() => {
               Vue.set(ADMINDATA.serverParams, 'autoBootServerAudio', !this.params.autoBootServerAudio);
+              setTimeout(() => ADMINDATA.getServerAudioInfo(), 500);
               iziToast.success({
                 title: t('admin.settings.updated'),
                 position: 'topCenter',
@@ -3586,7 +3648,8 @@ const userAccessView = Vue.component('user-access-view', {
       submitPending: false,
       isAdmin: ADMINDATA.users[ADMINDATA.selectedUser.value].admin,
       allowMkdir: ADMINDATA.users[ADMINDATA.selectedUser.value].allowMkdir !== false,
-      allowUpload: ADMINDATA.users[ADMINDATA.selectedUser.value].allowUpload !== false
+      allowUpload: ADMINDATA.users[ADMINDATA.selectedUser.value].allowUpload !== false,
+      allowServerAudio: ADMINDATA.users[ADMINDATA.selectedUser.value].allowServerAudio !== false
     };
   },
   template: `
@@ -3605,6 +3668,10 @@ const userAccessView = Vue.component('user-access-view', {
         <div class="pad-checkbox"><label>
           <input type="checkbox" v-model="allowUpload"/>
           <span>{{ t('admin.modal.uploadFiles') }}</span>
+        </label></div>
+        <div class="pad-checkbox"><label>
+          <input type="checkbox" v-model="allowServerAudio"/>
+          <span>Allow Server Audio</span>
         </label></div>
       </div>
       <div class="modal-footer">
@@ -3630,7 +3697,8 @@ const userAccessView = Vue.component('user-access-view', {
               username: this.currentUser.value,
               admin: this.isAdmin,
               allowMkdir: this.allowMkdir,
-              allowUpload: this.allowUpload
+              allowUpload: this.allowUpload,
+              allowServerAudio: this.allowServerAudio
             }
           });
 
@@ -3638,6 +3706,7 @@ const userAccessView = Vue.component('user-access-view', {
           Vue.set(ADMINDATA.users[this.currentUser.value], 'admin', this.isAdmin);
           Vue.set(ADMINDATA.users[this.currentUser.value], 'allowMkdir', this.allowMkdir);
           Vue.set(ADMINDATA.users[this.currentUser.value], 'allowUpload', this.allowUpload);
+          Vue.set(ADMINDATA.users[this.currentUser.value], 'allowServerAudio', this.allowServerAudio);
     
           // close & reset the modal
           M.Modal.getInstance(document.getElementById('admin-modal')).close();

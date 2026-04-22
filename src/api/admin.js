@@ -12,7 +12,7 @@ import * as imageCompress from '../db/image-compress-manager.js';
 import * as transcode from './transcode.js';
 import * as db from '../db/manager.js';
 import { joiValidate } from '../util/validation.js';
-import { bootRustPlayer, killRustPlayer, proxyToRust } from './server-playback.js';
+import { bootRustPlayer, killRustPlayer, proxyToRust, getActiveBackend, getDetectedCliPlayers, refreshDetectedCliPlayers } from './server-playback.js';
 import { listImplementedMethods } from './subsonic/index.js';
 import { listTokenAuthAttempts, clearTokenAuthAttempts, generateApiKey } from './subsonic/auth.js';
 import * as nowPlaying from './subsonic/now-playing.js';
@@ -190,7 +190,8 @@ export function setup(mstream) {
         vpaths: libraries.map(l => l.name),
         allowMkdir: user.allow_mkdir === 1,
         allowUpload: user.allow_upload === 1,
-        allowFileModify: user.allow_file_modify === 1
+        allowFileModify: user.allow_file_modify === 1,
+        allowServerAudio: user.allow_server_audio === 1
       };
     }
     res.json(result);
@@ -237,7 +238,8 @@ export function setup(mstream) {
       vpaths: Joi.array().items(Joi.string()).required(),
       admin: Joi.boolean().optional().default(false),
       allowMkdir: Joi.boolean().optional().default(true),
-      allowUpload: Joi.boolean().optional().default(true)
+      allowUpload: Joi.boolean().optional().default(true),
+      allowServerAudio: Joi.boolean().optional().default(true)
     });
     const input = joiValidate(schema, req.body);
 
@@ -247,7 +249,8 @@ export function setup(mstream) {
       input.value.admin,
       input.value.vpaths,
       input.value.allowMkdir,
-      input.value.allowUpload
+      input.value.allowUpload,
+      input.value.allowServerAudio
     );
     res.json({});
   });
@@ -322,11 +325,19 @@ export function setup(mstream) {
       admin: Joi.boolean().required(),
       allowMkdir: Joi.boolean().required(),
       allowUpload: Joi.boolean().required(),
-      allowFileModify: Joi.boolean().optional().default(true)
+      allowFileModify: Joi.boolean().optional().default(true),
+      allowServerAudio: Joi.boolean().optional().default(true)
     });
     joiValidate(schema, req.body);
 
-    await admin.editUserAccess(req.body.username, req.body.admin, req.body.allowMkdir, req.body.allowUpload, req.body.allowFileModify);
+    await admin.editUserAccess(
+      req.body.username,
+      req.body.admin,
+      req.body.allowMkdir,
+      req.body.allowUpload,
+      req.body.allowFileModify,
+      req.body.allowServerAudio
+    );
     res.json({});
   });
 
@@ -436,12 +447,12 @@ export function setup(mstream) {
 
     await admin.editAutoBootServerAudio(req.body.autoBootServerAudio);
 
-    // Start or stop the Rust player immediately
-    if (req.body.autoBootServerAudio) {
-      bootRustPlayer();
-    } else {
-      killRustPlayer();
-    }
+    // Flag controls Rust preference now. Either way, re-boot server audio so
+    // the active backend matches the new setting:
+    //   true  → kill current backend, boot Rust (with CLI fallback)
+    //   false → kill current backend, boot CLI directly (MPD preferred)
+    killRustPlayer();
+    await bootRustPlayer();
 
     res.json({});
   });
@@ -454,6 +465,23 @@ export function setup(mstream) {
 
     await admin.editRustPlayerPort(req.body.rustPlayerPort);
     res.json({});
+  });
+
+  mstream.get("/api/v1/admin/server-audio/info", (req, res) => {
+    const active = getActiveBackend();
+    res.json({
+      backend: active.backend,
+      player: active.player,
+      detectedCliPlayers: getDetectedCliPlayers(),
+    });
+  });
+
+  // Re-run the CLI player detection probe. Use this after installing or
+  // removing a player (mpv, vlc, mplayer, or an MPD daemon) without having
+  // to restart the server.
+  mstream.post("/api/v1/admin/server-audio/detect", async (req, res) => {
+    const detected = await refreshDetectedCliPlayers();
+    res.json({ detectedCliPlayers: detected });
   });
 
   mstream.post("/api/v1/admin/config/secret", async (req, res) => {

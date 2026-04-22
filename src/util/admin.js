@@ -76,7 +76,7 @@ export async function removeDirectory(vpath) {
 
 // ── User management (now in SQLite) ─────────────────────────────────────────
 
-export async function addUser(username, password, admin, vpaths, allowMkdir, allowUpload) {
+export async function addUser(username, password, admin, vpaths, allowMkdir, allowUpload, allowServerAudio = true) {
   const existing = db.getUserByUsername(username);
   if (existing) { throw new Error(`'${username}' already exists`); }
 
@@ -84,9 +84,9 @@ export async function addUser(username, password, admin, vpaths, allowMkdir, all
   const d = db.getDB();
 
   const result = d.prepare(
-    `INSERT INTO users (username, password, salt, is_admin, allow_upload, allow_mkdir)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(username, hash.hashPassword, hash.salt, admin ? 1 : 0, allowUpload ? 1 : 0, allowMkdir ? 1 : 0);
+    `INSERT INTO users (username, password, salt, is_admin, allow_upload, allow_mkdir, allow_server_audio)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(username, hash.hashPassword, hash.salt, admin ? 1 : 0, allowUpload ? 1 : 0, allowMkdir ? 1 : 0, allowServerAudio ? 1 : 0);
 
   const userId = Number(result.lastInsertRowid);
 
@@ -141,13 +141,13 @@ export async function editUserVPaths(username, vpaths) {
   db.invalidateCache();
 }
 
-export async function editUserAccess(username, admin, allowMkdir, allowUpload, allowFileModify = true) {
+export async function editUserAccess(username, admin, allowMkdir, allowUpload, allowFileModify = true, allowServerAudio = true) {
   const user = db.getUserByUsername(username);
   if (!user) { throw new Error(`'${username}' does not exist`); }
 
   db.getDB().prepare(
-    'UPDATE users SET is_admin = ?, allow_mkdir = ?, allow_upload = ?, allow_file_modify = ? WHERE id = ?'
-  ).run(admin ? 1 : 0, allowMkdir ? 1 : 0, allowUpload ? 1 : 0, allowFileModify ? 1 : 0, user.id);
+    'UPDATE users SET is_admin = ?, allow_mkdir = ?, allow_upload = ?, allow_file_modify = ?, allow_server_audio = ? WHERE id = ?'
+  ).run(admin ? 1 : 0, allowMkdir ? 1 : 0, allowUpload ? 1 : 0, allowFileModify ? 1 : 0, allowServerAudio ? 1 : 0, user.id);
 
   db.invalidateCache();
 }

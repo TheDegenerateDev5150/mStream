@@ -292,8 +292,9 @@ export async function serveIt(configFile) {
       subsonicServer.start();
     }
 
-    // Auto-boot the Rust server audio player if configured
-    serverPlaybackApi.bootRustPlayer();
+    // Boot server audio (Rust preferred, CLI fallback) — runs CLI detection
+    // eagerly so the admin endpoint has fresh data by the time it's called.
+    serverPlaybackApi.bootRustPlayer().catch(() => {});
   });
 }
 
