@@ -468,10 +468,5 @@
   "admin.modal.invitePlaceholder": "Twój token zaproszenia zostanie umieszczony tutaj",
   "admin.modal.copyClipboard": "Kopiuj do Schowka",
   "admin.modal.nothingToFederate": "Nic do Sfederowania",
-  "admin.modal.inviteFailed": "Nie udało się utworzyć zaproszenia",
-  "admin.db.waveformConcurrency": "Waveform Concurrency:",
-  "admin.modal.waveformConcurrency": "Waveform Concurrency",
-  "admin.modal.editWaveformConcurrency": "Edit Waveform Concurrency",
-  "admin.modal.waveformConcurrencyHint": "Number of ffmpeg processes to run in parallel during bulk waveform generation. Bump up on dedicated servers.",
-  "admin.db.generateWaveforms": "Generate Waveforms:"
+  "admin.modal.inviteFailed": "Nie udało się utworzyć zaproszenia"
 }

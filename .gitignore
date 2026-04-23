@@ -53,6 +53,10 @@ save/waveforms/*
 waveform-cache/*
 !waveform-cache/README.md
 
+# Integration test fixtures are generated on first run via the bundled ffmpeg;
+# no need to commit the binary MP3 blobs.
+test/fixtures/music/
+
 .claude/*
 
 /TODO.md

@@ -1,10 +1,16 @@
-// Shared waveform generation helpers.
+// Waveform generation helpers for the on-demand fallback path.
 //
-// Used by both the on-demand endpoint (src/api/waveform.js — single track,
-// requested by the player) and the bulk post-scan generator
-// (src/db/waveform-generator-script.js — batches entire library).
+// The primary waveform generator now lives in rust-parser (symphonia-based,
+// runs inline during the scan, writes .bin files keyed by audio_hash). This
+// module is the fallback used by the on-demand endpoint (src/api/waveform.js)
+// when the Rust scanner didn't produce a cache entry — typically because the
+// user is on the JS fallback scanner, the file is Opus (symphonia 0.5 has no
+// decoder), or the file was added/played before a scan completed.
 //
-// Both call generateWaveformBars() which:
+// generateWaveformBars() here spawns ffmpeg; the cache helpers read/write
+// the same .bin format the Rust scanner uses so both paths interoperate.
+//
+// generateWaveformBars():
 //   1. spawns ffmpeg to decode the audio to mono 8-bit unsigned PCM at 8 kHz
 //      (plenty of resolution for 800 visual bars; 4× smaller than float32)
 //   2. buffers up to MAX_PCM_BYTES of PCM output
@@ -33,24 +39,40 @@ export function hasCachedWaveform(dir, fileHash) {
   return fs.existsSync(cacheFilePath(dir, fileHash));
 }
 
-/** Read a cached waveform. Returns null if nothing is cached. */
+/**
+ * Read a cached waveform. Returns null if nothing is cached OR the file
+ * exists but isn't exactly NUM_BARS bytes (partial write from a prior
+ * crash, wrong-format leftover, etc.) — in which case the caller
+ * regenerates, so the corrupt cache file self-heals next time.
+ */
 export async function readCachedWaveform(dir, fileHash) {
+  let buf;
   try {
-    const buf = await fsp.readFile(cacheFilePath(dir, fileHash));
-    return Array.from(buf);
+    buf = await fsp.readFile(cacheFilePath(dir, fileHash));
   } catch (err) {
     if (err.code === 'ENOENT') { return null; }
     throw err;
   }
+  if (buf.length !== NUM_BARS) { return null; }
+  return Array.from(buf);
 }
 
 /**
- * Write a cached waveform. Values outside [0, 255] are masked to 8 bits by
- * Buffer.from — shouldn't happen given generateWaveformBars() clamps on
- * output, but the clamp is implicit rather than asserted.
+ * Write a cached waveform atomically: write to a sibling `.bin.tmp`, then
+ * rename to `.bin`. Prevents partial writes from a process crash or
+ * power-loss leaving a truncated file that `readCachedWaveform` would see
+ * as valid. Mirrors the atomic-write pattern the Rust scanner uses on the
+ * scan path.
+ *
+ * Values outside [0, 255] are masked to 8 bits by Buffer.from — shouldn't
+ * happen given generateWaveformBars() clamps on output, but the clamp is
+ * implicit rather than asserted.
  */
 export async function writeCachedWaveform(dir, fileHash, bars) {
-  await fsp.writeFile(cacheFilePath(dir, fileHash), Buffer.from(bars));
+  const finalPath = cacheFilePath(dir, fileHash);
+  const tmpPath = path.join(dir, fileHash + CACHE_EXT + '.tmp');
+  await fsp.writeFile(tmpPath, Buffer.from(bars));
+  await fsp.rename(tmpPath, finalPath);
 }
 
 const FFMPEG_TIMEOUT = 30000;            // 30 seconds per track

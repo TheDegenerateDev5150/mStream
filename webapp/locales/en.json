@@ -324,7 +324,6 @@
   "admin.db.recompress": "re-compress",
   "admin.db.maxConcurrentScans": "Max Concurrent Scans:",
   "admin.db.scanCommitInterval": "Scan Commit Interval:",
-  "admin.db.waveformConcurrency": "Waveform Concurrency:",
   "admin.db.albumArtLookup": "Album Art Lookup",
   "admin.db.autoLookup": "Auto Lookup:",
   "admin.db.writeToFolder": "Write to Folder:",
@@ -445,9 +444,6 @@
   "admin.modal.maxScans": "Max Concurrent Scans",
   "admin.modal.editMaxScans": "Edit Max Scans",
   "admin.modal.experimentalWarning": "Using a value more than '1' is experimental",
-  "admin.modal.waveformConcurrency": "Waveform Concurrency",
-  "admin.modal.editWaveformConcurrency": "Edit Waveform Concurrency",
-  "admin.modal.waveformConcurrencyHint": "Number of ffmpeg processes to run in parallel during bulk waveform generation. Bump up on dedicated servers.",
   "admin.modal.bootScanDelay": "Boot Scan Delay",
   "admin.modal.editScanInterval": "Edit Scan Interval",
   "admin.modal.scanInterval": "Scan Interval",
@@ -472,6 +468,5 @@
   "admin.modal.invitePlaceholder": "Your invite token will be put here",
   "admin.modal.copyClipboard": "Copy To Clipboard",
   "admin.modal.nothingToFederate": "Nothing to Federate",
-  "admin.modal.inviteFailed": "Failed to make invite",
-  "admin.db.generateWaveforms": "Generate Waveforms:"
+  "admin.modal.inviteFailed": "Failed to make invite"
 }

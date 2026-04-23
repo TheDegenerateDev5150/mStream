@@ -84,8 +84,23 @@ function runMigrations() {
   for (const migration of MIGRATIONS) {
     if (migration.version > currentVersion) {
       winston.info(`Applying migration v${migration.version}...`);
-      db.exec(migration.sql);
-      setSchemaVersion(migration.version);
+      // Wrap each migration in a single transaction so a multi-statement
+      // migration (e.g. CREATE TABLE + CREATE INDEX + ALTER TABLE) either
+      // applies fully or rolls back fully. Without this, a partial failure
+      // could leave the DB in an inconsistent state that the next boot's
+      // migration loop can't self-heal (e.g. ALTER TABLE ADD COLUMN has no
+      // IF NOT EXISTS, so re-running after a mid-migration failure would
+      // error with "duplicate column").
+      db.exec('BEGIN');
+      try {
+        db.exec(migration.sql);
+        setSchemaVersion(migration.version);
+        db.exec('COMMIT');
+      } catch (err) {
+        try { db.exec('ROLLBACK'); } catch (_) { /* already rolled back */ }
+        winston.error(`Migration v${migration.version} failed: ${err.message}`);
+        throw err;
+      }
       if (migration.rescanRequired) {
         needsRescan = true;
       }

@@ -9,11 +9,14 @@ import * as admin from '../util/admin.js';
 import * as config from '../state/config.js';
 import * as dbQueue from '../db/task-queue.js';
 import * as imageCompress from '../db/image-compress-manager.js';
-import * as waveformGenerator from '../db/waveform-generator.js';
 import * as transcode from './transcode.js';
 import * as db from '../db/manager.js';
 import { joiValidate } from '../util/validation.js';
-import { bootRustPlayer, killRustPlayer } from './server-playback.js';
+import { bootRustPlayer, killRustPlayer, proxyToRust, getActiveBackend, getDetectedCliPlayers, refreshDetectedCliPlayers } from './server-playback.js';
+import { listImplementedMethods, methodStatusTable } from './subsonic/index.js';
+import * as lyricsLrclib from './lyrics-lrclib.js';
+import { listTokenAuthAttempts, clearTokenAuthAttempts, generateApiKey } from './subsonic/auth.js';
+import * as nowPlaying from './subsonic/now-playing.js';
 
 import { getTransCodecs, getTransBitrates } from '../api/transcode.js';
 
@@ -76,7 +79,13 @@ export function setup(mstream) {
     const libraries = db.getAllLibraries();
     const result = {};
     for (const lib of libraries) {
-      result[lib.name] = { root: lib.root_path, type: lib.type };
+      result[lib.name] = {
+        root: lib.root_path,
+        type: lib.type,
+        // V21: per-library boolean. Admin panel renders a simple
+        // on/off toggle; default false matches the Rust scanner.
+        followSymlinks: lib.follow_symlinks === 1,
+      };
     }
     res.json(result);
   });
@@ -145,26 +154,6 @@ export function setup(mstream) {
     res.json({});
   });
 
-  mstream.post("/api/v1/admin/db/params/generate-waveforms", async (req, res) => {
-    const schema = Joi.object({
-      generateWaveforms: Joi.boolean().required()
-    });
-    joiValidate(schema, req.body);
-
-    await admin.editGenerateWaveforms(req.body.generateWaveforms);
-    res.json({});
-  });
-
-  mstream.post("/api/v1/admin/db/params/waveform-concurrency", async (req, res) => {
-    const schema = Joi.object({
-      waveformConcurrency: Joi.number().integer().min(1).required()
-    });
-    joiValidate(schema, req.body);
-
-    await admin.editWaveformConcurrency(req.body.waveformConcurrency);
-    res.json({});
-  });
-
   mstream.post("/api/v1/admin/db/params/auto-album-art", async (req, res) => {
     const schema = Joi.object({ autoAlbumArt: Joi.boolean().required() });
     joiValidate(schema, req.body);
@@ -208,7 +197,8 @@ export function setup(mstream) {
         vpaths: libraries.map(l => l.name),
         allowMkdir: user.allow_mkdir === 1,
         allowUpload: user.allow_upload === 1,
-        allowFileModify: user.allow_file_modify === 1
+        allowFileModify: user.allow_file_modify === 1,
+        allowServerAudio: user.allow_server_audio === 1
       };
     }
     res.json(result);
@@ -248,6 +238,18 @@ export function setup(mstream) {
     res.json({});
   });
 
+  // V21: per-library followSymlinks flag. Takes effect on the next
+  // scan of this library.
+  mstream.post('/api/v1/admin/directory/follow-symlinks', async (req, res) => {
+    const schema = Joi.object({
+      vpath: Joi.string().pattern(/[a-zA-Z0-9-]+/).required(),
+      followSymlinks: Joi.boolean().required(),
+    });
+    const { value } = joiValidate(schema, req.body || {});
+    await admin.setLibraryFollowSymlinks(value.vpath, value.followSymlinks);
+    res.json({});
+  });
+
   mstream.put("/api/v1/admin/users", async (req, res) => {
     const schema = Joi.object({
       username: Joi.string().required(),
@@ -255,7 +257,11 @@ export function setup(mstream) {
       vpaths: Joi.array().items(Joi.string()).required(),
       admin: Joi.boolean().optional().default(false),
       allowMkdir: Joi.boolean().optional().default(true),
-      allowUpload: Joi.boolean().optional().default(true)
+      allowUpload: Joi.boolean().optional().default(true),
+      // Server-audio access is opt-in per user — admins always bypass
+      // the gate in server-playback.js, everyone else must be granted
+      // explicitly via the admin panel.
+      allowServerAudio: Joi.boolean().optional().default(false)
     });
     const input = joiValidate(schema, req.body);
 
@@ -265,17 +271,14 @@ export function setup(mstream) {
       input.value.admin,
       input.value.vpaths,
       input.value.allowMkdir,
-      input.value.allowUpload
+      input.value.allowUpload,
+      input.value.allowServerAudio
     );
     res.json({});
   });
 
   mstream.post("/api/v1/admin/db/force-compress-images", (req, res) => {
     res.json({ started: imageCompress.run() });
-  });
-
-  mstream.post("/api/v1/admin/db/generate-waveforms", (req, res) => {
-    res.json({ started: waveformGenerator.run() });
   });
 
   mstream.post("/api/v1/admin/db/scan/all", (req, res) => {
@@ -344,11 +347,22 @@ export function setup(mstream) {
       admin: Joi.boolean().required(),
       allowMkdir: Joi.boolean().required(),
       allowUpload: Joi.boolean().required(),
-      allowFileModify: Joi.boolean().optional().default(true)
+      allowFileModify: Joi.boolean().optional().default(true),
+      // Opt-in per user. A PATCH that doesn't name allowServerAudio
+      // leaves the user without access — clients that want to update
+      // only one field must read the current value first and echo it.
+      allowServerAudio: Joi.boolean().optional().default(false)
     });
     joiValidate(schema, req.body);
 
-    await admin.editUserAccess(req.body.username, req.body.admin, req.body.allowMkdir, req.body.allowUpload, req.body.allowFileModify);
+    await admin.editUserAccess(
+      req.body.username,
+      req.body.admin,
+      req.body.allowMkdir,
+      req.body.allowUpload,
+      req.body.allowFileModify,
+      req.body.allowServerAudio
+    );
     res.json({});
   });
 
@@ -382,7 +396,8 @@ export function setup(mstream) {
 
   mstream.post("/api/v1/admin/config/ui", async (req, res) => {
     const schema = Joi.object({
-      ui: Joi.string().valid('default', 'velvet').required()
+      // Keep this list in sync with state/config.js `ui` validator.
+      ui: Joi.string().valid('default', 'velvet', 'subsonic').required()
     });
     joiValidate(schema, req.body);
 
@@ -458,12 +473,12 @@ export function setup(mstream) {
 
     await admin.editAutoBootServerAudio(req.body.autoBootServerAudio);
 
-    // Start or stop the Rust player immediately
-    if (req.body.autoBootServerAudio) {
-      bootRustPlayer();
-    } else {
-      killRustPlayer();
-    }
+    // Flag controls Rust preference now. Either way, re-boot server audio so
+    // the active backend matches the new setting:
+    //   true  → kill current backend, boot Rust (with CLI fallback)
+    //   false → kill current backend, boot CLI directly (MPD preferred)
+    killRustPlayer();
+    await bootRustPlayer();
 
     res.json({});
   });
@@ -476,6 +491,23 @@ export function setup(mstream) {
 
     await admin.editRustPlayerPort(req.body.rustPlayerPort);
     res.json({});
+  });
+
+  mstream.get("/api/v1/admin/server-audio/info", (req, res) => {
+    const active = getActiveBackend();
+    res.json({
+      backend: active.backend,
+      player: active.player,
+      detectedCliPlayers: getDetectedCliPlayers(),
+    });
+  });
+
+  // Re-run the CLI player detection probe. Use this after installing or
+  // removing a player (mpv, vlc, mplayer, or an MPD daemon) without having
+  // to restart the server.
+  mstream.post("/api/v1/admin/server-audio/detect", async (req, res) => {
+    const detected = await refreshDetectedCliPlayers();
+    res.json({ detectedCliPlayers: detected });
   });
 
   mstream.post("/api/v1/admin/config/secret", async (req, res) => {
@@ -617,6 +649,248 @@ export function setup(mstream) {
     setTimeout(() => { dlnaDebouncer = false; }, 2000);
 
     res.json({});
+  });
+
+  // ── Subsonic ────────────────────────────────────────────────────────────
+
+  mstream.get('/api/v1/admin/subsonic', (req, res) => {
+    res.json({
+      mode: config.program.subsonic.mode,
+      port: config.program.subsonic.port,
+    });
+  });
+
+  let subsonicDebouncer = false;
+  mstream.post('/api/v1/admin/subsonic/mode', async (req, res) => {
+    const schema = Joi.object({
+      mode: Joi.string().valid('disabled', 'same-port', 'separate-port').required(),
+      port: Joi.number().integer().min(1).max(65535).optional(),
+    });
+    const input = joiValidate(schema, req.body);
+
+    if (subsonicDebouncer === true) { throw new Error('Debouncer Enabled'); }
+
+    // Guard against breaking the bundled Subsonic UI: if the operator
+    // runs ui='subsonic' and tries to move Subsonic off same-port,
+    // the Refix SPA can no longer reach /rest/*. Return a clear 403
+    // instead of silently breaking the UI — the admin can either
+    // switch the UI first or pick same-port.
+    if (config.program.ui === 'subsonic' && input.value.mode !== 'same-port') {
+      return res.status(403).json({
+        error: "Cannot change Subsonic mode while ui='subsonic': the bundled Refix client " +
+               "requires Subsonic on the same origin. Switch `ui` to 'default' or 'velvet' first.",
+      });
+    }
+
+    await admin.enableSubsonic(input.value.mode, input.value.port);
+
+    subsonicDebouncer = true;
+    setTimeout(() => { subsonicDebouncer = false; }, 2000);
+
+    res.json({});
+  });
+
+  // ── Subsonic admin-panel data endpoints ─────────────────────────────────
+  // Backs the Subsonic admin UI widgets: method-count card, now-playing
+  // strip, jukebox status, token-auth warnings. All admin-only (guarded
+  // by the /api/v1/admin/* middleware at the top of this file).
+
+  // Methods + now-playing snapshot, for the main status card.
+  mstream.get('/api/v1/admin/subsonic/stats', (req, res) => {
+    const methods = listImplementedMethods();
+    const methodStatuses = methodStatusTable();
+    const fullCount = methodStatuses.filter(m => m.status === 'full').length;
+    const stubCount = methodStatuses.length - fullCount;
+    // Join now-playing entries to tracks so the admin UI can render
+    // readable "who's listening to what" rows without re-resolving.
+    const snap = nowPlaying.snapshot();
+    const byUserTrack = snap.map(s => {
+      const row = db.getDB().prepare(`
+        SELECT t.title, ar.name AS artist, al.name AS album
+        FROM tracks t
+        LEFT JOIN artists ar ON ar.id = t.artist_id
+        LEFT JOIN albums  al ON al.id = t.album_id
+        WHERE t.id = ?
+      `).get(s.trackId);
+      return {
+        username:   s.username,
+        trackId:    s.trackId,
+        title:      row?.title || null,
+        artist:     row?.artist || null,
+        album:      row?.album || null,
+        sinceMs:    Date.now() - s.since,
+      };
+    });
+    // V20: lyrics cache stats (LRCLib fallback). Always emitted so
+    // older admin UIs see it; shown only when config.lyrics.lrclib
+    // is true (UI gates the render).
+    const lyricsCfg   = config.program.lyrics || {};
+    const lyricsCache = lyricsLrclib.cacheStats();
+
+    res.json({
+      methodsImplemented: methods.length,
+      methods,
+      // [{name, status: 'full' | 'stub'}] — lets the admin card show
+      // Full vs Stub badges next to each name. Older admin UIs just
+      // look at `methods` and ignore this.
+      methodStatuses,
+      fullCount,
+      stubCount,
+      nowPlaying: byUserTrack,
+      lyrics: {
+        lrclibEnabled:       !!lyricsCfg.lrclib,
+        writeSidecarEnabled: !!lyricsCfg.writeSidecar,
+        cache:               lyricsCache,
+      },
+    });
+  });
+
+  // V20: lyrics-cache management. Admin-only (guarded by the /admin/*
+  // middleware). Two purge modes:
+  //   - full  → drop every row (useful after disabling LRCLib or
+  //             after a big tag-cleanup pass)
+  //   - retry → drop just 'error' + 'pending' rows (shakes loose a
+  //             network-outage window without losing hits)
+  mstream.post('/api/v1/admin/subsonic/lyrics-cache/purge', (req, res) => {
+    // Match the Joi validation style the rest of /admin uses — a
+    // malformed body (extra keys, wrong `mode` string) throws to the
+    // 403 handler rather than silently proceeding with defaults.
+    const schema = Joi.object({
+      mode: Joi.string().valid('full', 'retry').default('full'),
+    });
+    const { value } = joiValidate(schema, req.body || {});
+    const removed = value.mode === 'retry'
+      ? lyricsLrclib.purgeTransient()
+      : lyricsLrclib.purgeAll();
+    res.json({ removed, mode: value.mode });
+  });
+
+  // V20: toggle the LRCLib fallback. Persists to the config file so
+  // the change survives a restart. Does NOT purge the cache — a
+  // previous hit stays valid whether or not fetching is enabled; the
+  // toggle only gates NEW fetches.
+  mstream.post('/api/v1/admin/subsonic/lyrics-cache/enabled', async (req, res) => {
+    const schema = Joi.object({ enabled: Joi.boolean().required() });
+    const { value } = joiValidate(schema, req.body || {});
+    const loadConfig = await admin.loadFile(config.configFile);
+    loadConfig.lyrics = { ...(loadConfig.lyrics || {}), lrclib: value.enabled };
+    await admin.saveFile(loadConfig, config.configFile);
+    const wasEnabled = !!config.program.lyrics?.lrclib;
+    config.program.lyrics = { ...(config.program.lyrics || {}), lrclib: value.enabled };
+    // On transition to disabled, drop queued-but-not-yet-running
+    // jobs so no new HTTP traffic goes to lrclib.net. In-flight
+    // jobs complete (their request is already out) but won't start
+    // new ones — see drain()'s isEnabled check.
+    let cancelled = 0;
+    if (wasEnabled && !value.enabled) {
+      cancelled = lyricsLrclib.cancelQueuedJobs();
+    }
+    res.json({ enabled: value.enabled, cancelledJobs: cancelled });
+  });
+
+  // Toggle the writeSidecar option. Mirrors the lrclib toggle above —
+  // persisted to config.json, flipped in-memory immediately. Has no
+  // effect on already-cached rows (they live in SQLite either way);
+  // only gates future write-through to the filesystem.
+  mstream.post('/api/v1/admin/subsonic/lyrics-cache/write-sidecar', async (req, res) => {
+    const schema = Joi.object({ enabled: Joi.boolean().required() });
+    const { value } = joiValidate(schema, req.body || {});
+    const loadConfig = await admin.loadFile(config.configFile);
+    loadConfig.lyrics = { ...(loadConfig.lyrics || {}), writeSidecar: value.enabled };
+    await admin.saveFile(loadConfig, config.configFile);
+    config.program.lyrics = { ...(config.program.lyrics || {}), writeSidecar: value.enabled };
+    res.json({ writeSidecar: value.enabled });
+  });
+
+  // Ping-the-Subsonic-endpoint probe for the "test connection" button.
+  // Hits our own /rest/ping using an ephemeral internal call so we exercise
+  // the real auth + response path rather than short-circuiting.
+  mstream.get('/api/v1/admin/subsonic/test', async (req, res) => {
+    // Use the HTTP port the Subsonic handler is actually mounted on — same
+    // port when mode=same-port, separate when mode=separate-port.
+    const subMode = config.program.subsonic.mode;
+    if (subMode === 'disabled') {
+      return res.json({ ok: false, reason: 'Subsonic API is disabled' });
+    }
+    const port = subMode === 'separate-port' ? config.program.subsonic.port : config.program.port;
+    const host = config.program.address === '0.0.0.0' ? '127.0.0.1' : config.program.address;
+    try {
+      // Admin user already has a JWT; mint a throwaway API key for this
+      // probe so we don't need to thread the admin's plaintext password.
+      const key = generateApiKey(req.user.id, `admin-probe-${Date.now()}`);
+      const url = `http://${host}:${port}/rest/ping?f=json&apiKey=${encodeURIComponent(key)}`;
+      const start = Date.now();
+      const r = await fetch(url);
+      const body = await r.json();
+      const ms = Date.now() - start;
+      const envelope = body['subsonic-response'];
+      // Revoke the probe key immediately — single-use.
+      db.getDB().prepare('DELETE FROM user_api_keys WHERE key = ?').run(key);
+      res.json({
+        ok:      envelope?.status === 'ok',
+        status:  envelope?.status || 'unknown',
+        version: envelope?.version,
+        serverVersion: envelope?.serverVersion,
+        latencyMs: ms,
+        url,
+      });
+    } catch (err) {
+      res.json({ ok: false, reason: err.message || 'test failed' });
+    }
+  });
+
+  // Live jukebox status (via rust-server-audio). Returns a normalised
+  // envelope so the admin UI can render "not available", "idle",
+  // "playing X" without having to probe multiple endpoints.
+  mstream.get('/api/v1/admin/subsonic/jukebox', async (req, res) => {
+    if (!config.program.autoBootServerAudio) {
+      return res.json({ available: false, reason: 'autoBootServerAudio is disabled' });
+    }
+    try {
+      const { data: status } = await proxyToRust('GET', '/status');
+      const { data: queue } = await proxyToRust('GET', '/queue');
+      res.json({
+        available:   true,
+        playing:     !!status?.playing,
+        paused:      !!status?.paused,
+        position:    status?.position || 0,
+        duration:    status?.duration || 0,
+        volume:      status?.volume ?? 1.0,
+        currentFile: status?.file || '',
+        queueLength: Array.isArray(queue?.queue) ? queue.queue.length : 0,
+        queueIndex:  status?.queue_index ?? 0,
+        shuffle:     !!status?.shuffle,
+        loopMode:    status?.loop_mode || 'none',
+      });
+    } catch (err) {
+      res.json({ available: false, reason: err.message });
+    }
+  });
+
+  // Recent token-auth failures. Real-world Subsonic clients often default
+  // to token auth and get stuck in a "wrong credentials" loop; surfacing
+  // these lets admins see who's affected and act fast.
+  mstream.get('/api/v1/admin/subsonic/token-auth-attempts', (req, res) => {
+    res.json({ attempts: listTokenAuthAttempts() });
+  });
+
+  mstream.delete('/api/v1/admin/subsonic/token-auth-attempts', (req, res) => {
+    clearTokenAuthAttempts();
+    res.json({});
+  });
+
+  // Admin-mints-key-for-another-user. Return value includes the plaintext
+  // key exactly once so the admin can copy-paste it to the end user.
+  mstream.post('/api/v1/admin/subsonic/mint-key', (req, res) => {
+    const schema = Joi.object({
+      username: Joi.string().required(),
+      name:     Joi.string().trim().min(1).max(100).required(),
+    });
+    const { value } = joiValidate(schema, req.body);
+    const user = db.getUserByUsername(value.username);
+    if (!user) { return res.status(404).json({ error: `User '${value.username}' not found` }); }
+    const key = generateApiKey(user.id, value.name);
+    res.json({ key, name: value.name, username: value.username });
   });
 
   mstream.post("/api/v1/admin/ssl", async (req, res) => {

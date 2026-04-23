@@ -7,7 +7,6 @@ import * as config from '../state/config.js';
 import * as db from './manager.js';
 import { addToKillQueue, removeFromKillQueue } from '../state/kill-list.js';
 import { getDirname } from '../util/esm-helpers.js';
-import * as waveformGenerator from './waveform-generator.js';
 import * as dlnaApi from '../api/dlna.js';
 
 const __dirname = getDirname(import.meta.url);
@@ -17,12 +16,19 @@ const runningTasks = new Set();
 const vpathLimiter = new Set();
 let scanIntervalTimer = null;
 // True when any scan in the current batch added, changed, or removed tracks.
-// Reset to false after the waveform post-processor runs.
+// Used to decide whether to bump DLNA's SystemUpdateID after the final scan
+// in a batch — skipped on fully-unchanged rescans so control points aren't
+// poked for nothing.
 let anyScansChanged = false;
-// SQLite-format timestamp ("YYYY-MM-DD HH:MM:SS" UTC) captured when a new
-// batch starts. Passed to the waveform generator so it can query only
-// tracks created during this batch instead of the whole library.
-let batchStartTime = null;
+// True between runAfterBoot noticing a `.rescan-pending` migration marker
+// and the resulting rescanAll() draining the queue. The marker is only
+// unlinked once this flag is set AND the queue empties — if the process
+// crashes partway through the rescan, the marker survives and the next
+// boot re-runs the rescan. Without this, an interrupted boot rescan left
+// the DB stuck on pre-rescan row shapes (e.g. V18 compilations still
+// fragmented) with no surfacing signal.
+let bootRescanInFlight = false;
+let bootRescanMarkerPath = null;
 
 // ── Rust parser binary detection ────────────────────────────────────────────
 
@@ -192,19 +198,37 @@ function onScanClose(forkedScan, scanObj, code) {
 
   nextTask();
 
-  // When all scans are done, run the waveform post-processor — but only if
-  // some scan actually changed the DB. A scheduled rescan over an unchanged
-  // library shouldn't fork a child just to SELECT and return "up to date".
-  if (runningTasks.size === 0 && taskQueue.length === 0 && anyScansChanged) {
-    const since = batchStartTime;
+  const queueDrained = runningTasks.size === 0 && taskQueue.length === 0;
+
+  // When all scans are done, bump DLNA's SystemUpdateID so control points
+  // refresh their caches — but only if some scan actually changed the DB.
+  // Safe to call whether or not DLNA is enabled.
+  if (queueDrained && anyScansChanged) {
     anyScansChanged = false;
-    batchStartTime = null;
-    if (config.program.scanOptions.generateWaveforms !== false) {
-      waveformGenerator.run(since);
-    }
-    // Bump SystemUpdateID so DLNA control points refresh their caches.
-    // Safe to call whether or not DLNA is enabled.
     dlnaApi.bumpSystemUpdateID();
+  }
+
+  // Clear the migration rescan marker only after every queued library
+  // has finished. If the process dies before this point, the marker
+  // survives on disk and the next boot re-triggers rescanAll() — the
+  // alternative (unlinking up-front at boot) silently strands the DB
+  // on pre-rescan row shapes when the scan crashes partway through.
+  if (queueDrained && bootRescanInFlight) {
+    bootRescanInFlight = false;
+    if (bootRescanMarkerPath) {
+      try {
+        fs.unlinkSync(bootRescanMarkerPath);
+        winston.info('Migration rescan complete — cleared .rescan-pending marker');
+      } catch (err) {
+        // ENOENT is fine (another code path cleared it, or marker already absent);
+        // anything else means the marker might live on and re-trigger next boot.
+        // Logging at warn so operators can notice a stuck marker.
+        if (err.code !== 'ENOENT') {
+          winston.warn(`Could not clear .rescan-pending marker at ${bootRescanMarkerPath}: ${err.message}`);
+        }
+      }
+      bootRescanMarkerPath = null;
+    }
   }
 }
 
@@ -223,15 +247,6 @@ function runScan(scanObj) {
     return;
   }
 
-  // Stamp the start of the batch using SQLite's own clock so the string
-  // format ("YYYY-MM-DD HH:MM:SS") lines up with rows' created_at defaults
-  // and lexical comparison is valid.
-  if (batchStartTime === null) {
-    try {
-      batchStartTime = db.getDB()?.prepare("SELECT datetime('now') AS ts").get()?.ts || null;
-    } catch (_) { batchStartTime = null; }
-  }
-
   const dbPath = path.join(config.program.storage.dbDirectory, 'mstream.db');
 
   const jsonLoad = {
@@ -245,7 +260,18 @@ function runScan(scanObj) {
     compressImage: config.program.scanOptions.compressImage,
     supportedFiles: config.program.supportedAudioFiles,
     scanCommitInterval: config.program.scanOptions.scanCommitInterval || 25,
-    forceRescan: scanObj.forceRescan || false
+    forceRescan: scanObj.forceRescan || false,
+    // Per-library followSymlinks flag (V21). Pulled straight from
+    // the libraries row — toggling it in the admin panel takes
+    // effect on the next scan of this vpath without the scanner
+    // needing to know anything about the admin UI.
+    followSymlinks: library.follow_symlinks === 1,
+    // The Rust scanner generates waveform .bin files inline via symphonia
+    // and writes them here (keyed by audio_hash, falling back to file_hash).
+    // The JS fallback scanner doesn't generate waveforms — for those users,
+    // the on-demand GET /api/v1/db/waveform endpoint produces them lazily
+    // via ffmpeg on first playback.
+    waveformCacheDir: config.program.storage.waveformCacheDirectory,
   };
 
   if (!findRustParser()) {
@@ -299,13 +325,17 @@ export function runAfterBoot() {
   // Clear any stale scan progress rows left from a previous crash
   try { db.getDB()?.prepare('DELETE FROM scan_progress').run(); } catch (_) {}
 
-  // Check if a migration flagged a force rescan
+  // Check if a migration flagged a force rescan. We DO NOT unlink the
+  // marker here — it stays on disk until onScanClose sees the queue
+  // drain. If the process crashes during the rescan, the marker
+  // survives and the next boot re-triggers the rescan automatically.
   const markerPath = path.join(config.program.storage.dbDirectory, '.rescan-pending');
   let pendingRescan = false;
   try {
     if (fs.existsSync(markerPath)) {
       pendingRescan = true;
-      fs.unlinkSync(markerPath);
+      bootRescanInFlight = true;
+      bootRescanMarkerPath = markerPath;
       winston.info('Force rescan pending from migration — will rescan all libraries');
     }
   } catch (_) {}

@@ -63,7 +63,7 @@ export function trackQuery(userId) {
     LEFT JOIN artists a ON t.artist_id = a.id
     LEFT JOIN albums al ON t.album_id = al.id
     LEFT JOIN libraries l ON t.library_id = l.id
-    LEFT JOIN user_metadata um ON t.file_hash = um.track_hash AND um.user_id = ${userId ? '?' : 'NULL'}
+    LEFT JOIN user_metadata um ON COALESCE(t.audio_hash, t.file_hash) = um.track_hash AND um.user_id = ${userId ? '?' : 'NULL'}
   `;
 }
 
@@ -146,15 +146,25 @@ export function setup(mstream) {
   mstream.post('/api/v1/db/artists-albums', (req, res) => {
     const filter = libraryFilter(req.user, req.body?.ignoreVPaths);
 
-    // Get albums for this artist
+    // V17: also include albums where this artist appears in album_artists
+    // or track_artists (compilation / collab appearances) — "click Artist A
+    // → see every album Artist A is on" stays correct after the schema
+    // change.
     const albumRows = d().prepare(`
       SELECT DISTINCT al.name, al.year, al.album_art_file
       FROM albums al
-      JOIN artists a ON al.artist_id = a.id
       JOIN tracks t ON t.album_id = al.id
-      WHERE a.name = ? AND ${filter.clause}
+      WHERE (
+        al.artist_id IN (SELECT id FROM artists WHERE name = ?)
+        OR al.id IN (SELECT album_id FROM album_artists
+                     WHERE artist_id IN (SELECT id FROM artists WHERE name = ?))
+        OR al.id IN (SELECT t2.album_id FROM track_artists ta
+                     JOIN tracks t2 ON t2.id = ta.track_id
+                     WHERE ta.artist_id IN (SELECT id FROM artists WHERE name = ?)
+                       AND t2.album_id IS NOT NULL)
+      ) AND ${filter.clause}
       ORDER BY al.year DESC
-    `).all(String(req.body.artist), ...filter.params);
+    `).all(String(req.body.artist), String(req.body.artist), String(req.body.artist), ...filter.params);
 
     const albums = albumRows.map(r => ({
       name: r.name,
@@ -385,7 +395,7 @@ export function setup(mstream) {
     if (!lib) { throw new Error('Library not found'); }
 
     const track = d().prepare(
-      'SELECT file_hash FROM tracks WHERE filepath = ? AND library_id = ?'
+      'SELECT file_hash, audio_hash FROM tracks WHERE filepath = ? AND library_id = ?'
     ).get(pathInfo.relativePath, lib.id);
     if (!track) { throw new Error('File Not Found'); }
 
@@ -393,7 +403,7 @@ export function setup(mstream) {
       INSERT INTO user_metadata (user_id, track_hash, rating)
       VALUES (?, ?, ?)
       ON CONFLICT(user_id, track_hash) DO UPDATE SET rating = excluded.rating
-    `).run(req.user.id, track.file_hash, req.body.rating);
+    `).run(req.user.id, track.audio_hash || track.file_hash, req.body.rating);
 
     res.json({});
   });

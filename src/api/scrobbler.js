@@ -51,7 +51,7 @@ export function setup(mstream) {
     if (!lib) { return res.json({ scrobble: false }); }
 
     const track = d().prepare(`
-      SELECT t.file_hash, t.title, a.name AS artist, al.name AS album
+      SELECT t.file_hash, t.audio_hash, t.title, a.name AS artist, al.name AS album
       FROM tracks t
       LEFT JOIN artists a ON t.artist_id = a.id
       LEFT JOIN albums al ON t.album_id = al.id
@@ -62,6 +62,10 @@ export function setup(mstream) {
       return res.json({ scrobble: false });
     }
 
+    // Prefer audio_hash (stable across tag edits). Older rows and
+    // formats we don't yet parse fall back to file_hash.
+    const trackKey = track.audio_hash || track.file_hash;
+
     // Update play count and last played
     d().prepare(`
       INSERT INTO user_metadata (user_id, track_hash, play_count, last_played)
@@ -69,7 +73,7 @@ export function setup(mstream) {
       ON CONFLICT(user_id, track_hash) DO UPDATE SET
         play_count = play_count + 1,
         last_played = datetime('now')
-    `).run(req.user.id, track.file_hash);
+    `).run(req.user.id, trackKey);
 
     res.json({});
 

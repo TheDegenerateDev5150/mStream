@@ -11,6 +11,7 @@ import * as db from '../db/manager.js';
 import * as syncthing from '../state/syncthing.js';
 import * as dlnaSsdp from '../dlna/ssdp.js';
 import * as dlnaServer from '../dlna/dlna-server.js';
+import * as subsonicServer from '../subsonic/subsonic-server.js';
 import { getDirname } from './esm-helpers.js';
 
 const __dirname = getDirname(import.meta.url);
@@ -36,8 +37,13 @@ export async function addDirectory(directory, vpath, autoAccess, isAudioBooks, m
 
   const d = db.getDB();
   const type = isAudioBooks ? 'audio-books' : 'music';
+  // follow_symlinks is explicitly set to 0 here rather than relying
+  // on the column default: dev hosts that ran an earlier V21 variant
+  // (nullable column, no DEFAULT) would otherwise get NULL on new
+  // INSERTs. Reader code in task-queue.js is null-safe (`=== 1`) but
+  // we'd rather not leave dangling NULLs in the table.
   const result = d.prepare(
-    'INSERT INTO libraries (name, root_path, type) VALUES (?, ?, ?)'
+    'INSERT INTO libraries (name, root_path, type, follow_symlinks) VALUES (?, ?, ?, 0)'
   ).run(vpath, directory, type);
   const libraryId = Number(result.lastInsertRowid);
 
@@ -55,6 +61,27 @@ export async function addDirectory(directory, vpath, autoAccess, isAudioBooks, m
   mstream.use(`/media/${vpath}/`, express.static(directory));
 }
 
+/**
+ * Set the per-library followSymlinks flag.
+ *
+ *   followSymlinks === true   → scanner follows symlinks in this library
+ *   followSymlinks === false  → scanner skips symlink entries (default)
+ *
+ * Takes effect on the next scan of this library. Does NOT trigger
+ * a rescan on its own — the operator should click "Rescan" manually
+ * if they want existing tracks re-evaluated under the new rule.
+ * (Running an auto-rescan would be surprising for libraries that
+ * don't actually contain any symlinks.)
+ */
+export async function setLibraryFollowSymlinks(vpath, followSymlinks) {
+  const library = db.getLibraryByName(vpath);
+  if (!library) { throw new Error(`'${vpath}' not found`); }
+  db.getDB().prepare(
+    'UPDATE libraries SET follow_symlinks = ? WHERE id = ?'
+  ).run(followSymlinks ? 1 : 0, library.id);
+  db.invalidateCache();
+}
+
 export async function removeDirectory(vpath) {
   const library = db.getLibraryByName(vpath);
   if (!library) { throw new Error(`'${vpath}' not found`); }
@@ -63,9 +90,15 @@ export async function removeDirectory(vpath) {
   // CASCADE will delete tracks and user_libraries entries
   d.prepare('DELETE FROM libraries WHERE id = ?').run(library.id);
 
-  // Clean up orphaned artists/albums
+  // Clean up orphaned artists/albums. Keep artists referenced by either
+  // the single-valued FKs OR the V17 M2M tables — otherwise cascade would
+  // drop track_artists/album_artists rows for featured/co-credited artists.
   d.exec('DELETE FROM albums WHERE id NOT IN (SELECT DISTINCT album_id FROM tracks WHERE album_id IS NOT NULL)');
-  d.exec('DELETE FROM artists WHERE id NOT IN (SELECT DISTINCT artist_id FROM tracks WHERE artist_id IS NOT NULL) AND id NOT IN (SELECT DISTINCT artist_id FROM albums WHERE artist_id IS NOT NULL)');
+  d.exec(`DELETE FROM artists
+          WHERE id NOT IN (SELECT DISTINCT artist_id FROM tracks         WHERE artist_id IS NOT NULL)
+            AND id NOT IN (SELECT DISTINCT artist_id FROM albums         WHERE artist_id IS NOT NULL)
+            AND id NOT IN (SELECT DISTINCT artist_id FROM track_artists)
+            AND id NOT IN (SELECT DISTINCT artist_id FROM album_artists)`);
 
   db.invalidateCache();
 
@@ -75,7 +108,7 @@ export async function removeDirectory(vpath) {
 
 // ── User management (now in SQLite) ─────────────────────────────────────────
 
-export async function addUser(username, password, admin, vpaths, allowMkdir, allowUpload) {
+export async function addUser(username, password, admin, vpaths, allowMkdir, allowUpload, allowServerAudio = false) {
   const existing = db.getUserByUsername(username);
   if (existing) { throw new Error(`'${username}' already exists`); }
 
@@ -83,9 +116,9 @@ export async function addUser(username, password, admin, vpaths, allowMkdir, all
   const d = db.getDB();
 
   const result = d.prepare(
-    `INSERT INTO users (username, password, salt, is_admin, allow_upload, allow_mkdir)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(username, hash.hashPassword, hash.salt, admin ? 1 : 0, allowUpload ? 1 : 0, allowMkdir ? 1 : 0);
+    `INSERT INTO users (username, password, salt, is_admin, allow_upload, allow_mkdir, allow_server_audio)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(username, hash.hashPassword, hash.salt, admin ? 1 : 0, allowUpload ? 1 : 0, allowMkdir ? 1 : 0, allowServerAudio ? 1 : 0);
 
   const userId = Number(result.lastInsertRowid);
 
@@ -140,13 +173,13 @@ export async function editUserVPaths(username, vpaths) {
   db.invalidateCache();
 }
 
-export async function editUserAccess(username, admin, allowMkdir, allowUpload, allowFileModify = true) {
+export async function editUserAccess(username, admin, allowMkdir, allowUpload, allowFileModify = true, allowServerAudio = false) {
   const user = db.getUserByUsername(username);
   if (!user) { throw new Error(`'${username}' does not exist`); }
 
   db.getDB().prepare(
-    'UPDATE users SET is_admin = ?, allow_mkdir = ?, allow_upload = ?, allow_file_modify = ? WHERE id = ?'
-  ).run(admin ? 1 : 0, allowMkdir ? 1 : 0, allowUpload ? 1 : 0, allowFileModify ? 1 : 0, user.id);
+    'UPDATE users SET is_admin = ?, allow_mkdir = ?, allow_upload = ?, allow_file_modify = ?, allow_server_audio = ? WHERE id = ?'
+  ).run(admin ? 1 : 0, allowMkdir ? 1 : 0, allowUpload ? 1 : 0, allowFileModify ? 1 : 0, allowServerAudio ? 1 : 0, user.id);
 
   db.invalidateCache();
 }
@@ -157,6 +190,19 @@ export async function editUI(ui) {
   if (config.program.ui === ui) { return; }
   const loadConfig = await loadFile(config.configFile);
   loadConfig.ui = ui;
+  // When switching TO ui='subsonic', auto-enable Subsonic same-port if
+  // it's currently disabled / separate-port. The bundled Refix SPA
+  // only works with same-port (its env.js SERVER_URL="" resolves to
+  // the current origin). Leaving the admin to manually fix subsonic
+  // mode after a UI switch produces a broken client with a silent
+  // failure mode — they see Refix's "couldn't reach server" error
+  // with no guidance. Flip it for them and log.
+  if (ui === 'subsonic') {
+    if (!loadConfig.subsonic) { loadConfig.subsonic = {}; }
+    if (loadConfig.subsonic.mode !== 'same-port') {
+      loadConfig.subsonic.mode = 'same-port';
+    }
+  }
   await saveFile(loadConfig, config.configFile);
   mStreamServer.reboot();
 }
@@ -261,22 +307,6 @@ export async function editScanCommitInterval(val) {
   config.program.scanOptions.scanCommitInterval = val;
 }
 
-export async function editGenerateWaveforms(val) {
-  const loadConfig = await loadFile(config.configFile);
-  if (!loadConfig.scanOptions) { loadConfig.scanOptions = {}; }
-  loadConfig.scanOptions.generateWaveforms = val;
-  await saveFile(loadConfig, config.configFile);
-  config.program.scanOptions.generateWaveforms = val;
-}
-
-export async function editWaveformConcurrency(val) {
-  const loadConfig = await loadFile(config.configFile);
-  if (!loadConfig.scanOptions) { loadConfig.scanOptions = {}; }
-  loadConfig.scanOptions.waveformConcurrency = val;
-  await saveFile(loadConfig, config.configFile);
-  config.program.scanOptions.waveformConcurrency = val;
-}
-
 export async function editAutoAlbumArt(val) {
   const loadConfig = await loadFile(config.configFile);
   if (!loadConfig.scanOptions) { loadConfig.scanOptions = {}; }
@@ -375,6 +405,33 @@ export async function enableDlna(mode, port) {
   dlnaServer.stop();
   if (mode !== 'disabled') { dlnaSsdp.start(); }
   if (mode === 'separate-port') { dlnaServer.start(); }
+}
+
+export async function enableSubsonic(mode, port) {
+  const effectivePort = port !== undefined ? port : config.program.subsonic.port;
+  if (mode === config.program.subsonic.mode && effectivePort === config.program.subsonic.port) { return; }
+
+  const prevMode = config.program.subsonic.mode;
+
+  const loadConfig = await loadFile(config.configFile);
+  if (!loadConfig.subsonic) { loadConfig.subsonic = {}; }
+  loadConfig.subsonic.mode = mode;
+  if (port !== undefined) { loadConfig.subsonic.port = port; }
+  await saveFile(loadConfig, config.configFile);
+  config.program.subsonic.mode = mode;
+  if (port !== undefined) { config.program.subsonic.port = port; }
+
+  // same-port registers /rest/* routes on the main Express app, which needs a
+  // full reboot to take effect or be removed. Express doesn't support
+  // dynamic middleware removal.
+  if (mode === 'same-port' || prevMode === 'same-port') {
+    mStreamServer.reboot();
+    return;
+  }
+
+  // disabled ↔ separate-port: hot-swap the secondary server in place.
+  subsonicServer.stop();
+  if (mode === 'separate-port') { subsonicServer.start(); }
 }
 
 export async function enableFederation(val) {

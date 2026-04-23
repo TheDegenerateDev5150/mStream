@@ -29,9 +29,14 @@ import * as ytdlApi from './api/ytdl.js';
 import * as dlnaApi from './api/dlna.js';
 import * as dlnaSsdp from './dlna/ssdp.js';
 import * as dlnaServer from './dlna/dlna-server.js';
+import * as subsonicApi from './api/subsonic/index.js';
+import * as subsonicServer from './subsonic/subsonic-server.js';
+import * as userApiKeysApi from './api/user-api-keys.js';
 import * as serverPlaybackApi from './api/server-playback.js';
 import * as albumArtApi from './api/album-art.js';
 import * as waveformApi from './api/waveform.js';
+import * as lyricsApi from './api/lyrics.js';
+import * as lyricsLrclib from './api/lyrics-lrclib.js';
 // Velvet UI modules — dynamically imported only when ui='velvet' is active
 import WebError from './util/web-error.js';
 
@@ -137,9 +142,12 @@ export async function serveIt(configFile) {
       return next();
     }
 
-    // VELVET ONLY: skip login redirect — Velvet has a built-in login screen
-    // TODO: standardize login flow so both UIs handle auth the same way
-    if (config.program.ui === 'velvet') {
+    // Velvet and the bundled Subsonic client both handle auth inside
+    // the SPA (Velvet shows an inline form; Refix submits creds via
+    // ping/getArtists on first nav). Skip the server-side /login
+    // redirect for those — let the SPA decide what to render.
+    // TODO: standardize login flow so all UIs handle auth the same way
+    if (config.program.ui === 'velvet' || config.program.ui === 'subsonic') {
       return next();
     }
 
@@ -152,8 +160,9 @@ export async function serveIt(configFile) {
   });
 
   mstream.get('/login', (req, res, next) => {
-    // VELVET ONLY: redirect /login to / since Velvet handles login inline
-    if (config.program.ui === 'velvet') {
+    // Velvet / Subsonic both own their login UI — a server-side hit on
+    // /login is meaningless for them, so redirect back to the SPA root.
+    if (config.program.ui === 'velvet' || config.program.ui === 'subsonic') {
       return res.redirect(302, '/');
     }
 
@@ -172,18 +181,56 @@ export async function serveIt(configFile) {
   // Server-remote route (must be before static middleware to intercept /server-remote)
   serverPlaybackApi.setupBeforeAuth(mstream);
 
-  // Give access to public folder
-  // VELVET ONLY: serve webapp/velvet/ instead of webapp/ when ui='velvet'
+  // Give access to public folder. Three supported UIs — default, velvet,
+  // and the bundled Subsonic web client (Airsonic Refix). Subsonic UI
+  // talks to our own /rest/* endpoints so nothing else needs wiring
+  // differently.
   const webappDir = config.program.ui === 'velvet'
     ? path.join(config.program.webAppDirectory, 'velvet')
-    : config.program.webAppDirectory;
+    : config.program.ui === 'subsonic'
+      ? path.join(config.program.webAppDirectory, 'subsonic')
+      : config.program.webAppDirectory;
   mstream.use('/', express.static(webappDir));
+
+  // Subsonic-UI SPA fallback: the bundled client is a Vue SPA with
+  // history-mode routing (/servers, /albums, /artists, /playlists/...),
+  // so a reload of any route other than `/` must serve index.html and
+  // let the client-side router take over. Inserted right after the
+  // static middleware so it catches unmatched GETs BEFORE the mStream
+  // auth wall 401s them — the SPA handles its own auth by calling
+  // /rest/ping. Scoped to `ui === 'subsonic'` so the default and
+  // velvet UIs keep their 404 behaviour.
+  //
+  // Explicitly skip API namespaces so those fall through to their
+  // real handlers (and 404 properly when the method doesn't exist).
+  if (config.program.ui === 'subsonic') {
+    const SPA_SKIP = /^\/(rest|api|media|album-art|server-remote|shared|dlna)(\/|$)/;
+    const indexPath = path.join(webappDir, 'index.html');
+    // Read the shell once at boot — it's ~800B and never changes while
+    // the process is up.
+    const indexHtml = fs.readFileSync(indexPath, 'utf8');
+    mstream.get(/.*/, (req, res, next) => {
+      if (SPA_SKIP.test(req.path)) { return next(); }
+      // Request explicitly asks for a non-HTML resource — let it 404.
+      const accept = String(req.get('accept') || '');
+      if (accept && !accept.includes('text/html') && !accept.includes('*/*')) {
+        return next();
+      }
+      res.type('html').send(indexHtml);
+    });
+  }
 
   // Public APIs
   remoteApi.setupBeforeAuth(mstream, server);
   await sharedApi.setupBeforeSecurity(mstream);
   // DLNA routes must be before the auth wall — only needed in same-port mode
   if (config.program.dlna.mode === 'same-port') { dlnaApi.setup(mstream); }
+
+  // Subsonic REST API — sits before the auth wall because it carries its own
+  // credentials (u/p query string or apiKey) and populates req.user itself.
+  // Only mount when configured for same-port; separate-port uses its own
+  // http.Server started in the post-boot hook below.
+  if (config.program.subsonic.mode === 'same-port') { subsonicApi.setup(mstream); }
 
   // Everything below this line requires authentication
   authApi.setup(mstream);
@@ -202,7 +249,14 @@ export async function serveIt(configFile) {
   ytdlApi.setup(mstream);
   albumArtApi.setup(mstream);
   waveformApi.setup(mstream);
+  lyricsApi.setup(mstream);
+  // V20 housekeeping: clean up 'pending' lyrics_cache rows from any
+  // previous process that crashed mid-fetch, and start the periodic
+  // orphan sweep. Both are opt-in-cheap (single UPDATE / DELETE on
+  // a table that starts empty and is usually tiny).
+  lyricsLrclib.onBoot();
   serverPlaybackApi.setup(mstream);
+  userApiKeysApi.setup(mstream);
 
   // VELVET ONLY: additional API modules loaded only when ui='velvet'
   // These provide features specific to the Velvet UI (ListenBrainz, smart playlists,
@@ -278,9 +332,13 @@ export async function serveIt(configFile) {
     if (config.program.dlna.mode === 'separate-port') {
       dlnaServer.start();
     }
+    if (config.program.subsonic.mode === 'separate-port') {
+      subsonicServer.start();
+    }
 
-    // Auto-boot the Rust server audio player if configured
-    serverPlaybackApi.bootRustPlayer();
+    // Boot server audio (Rust preferred, CLI fallback) — runs CLI detection
+    // eagerly so the admin endpoint has fresh data by the time it's called.
+    serverPlaybackApi.bootRustPlayer().catch(() => {});
   });
 }
 
@@ -297,6 +355,7 @@ export function reboot() {
 
     dlnaSsdp.stop();
     dlnaServer.stop();
+    subsonicServer.stop();
     serverPlaybackApi.killRustPlayer();
 
     // Close the server

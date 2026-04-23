@@ -25,6 +25,9 @@ const ADMINDATA = (() => {
   // server settings
   module.serverParams = {};
   module.serverParamsUpdated = { ts: 0 };
+  // server audio backend (rust vs CLI fallback)
+  module.serverAudioInfo = { backend: null, player: null, detectedCliPlayers: [] };
+  module.serverAudioInfoUpdated = { ts: 0 };
   // transcoding
   module.transcodeParams = {};
   module.transcodeParamsUpdated = { ts: 0 };
@@ -40,6 +43,16 @@ const ADMINDATA = (() => {
   // dlna
   module.dlnaParams = {};
   module.dlnaParamsUpdated = { ts: 0 };
+  // subsonic
+  module.subsonicParams = {};
+  module.subsonicParamsUpdated = { ts: 0 };
+  // subsonic — API keys for the currently-authenticated user. Keys are
+  // returned in full only at creation; subsequent listings are metadata-only.
+  module.apiKeys = [];
+  module.apiKeysUpdated = { ts: 0 };
+  // Holds the most recently minted key so the UI can render a one-time
+  // "copy this now" panel. Cleared as soon as the user dismisses it.
+  module.lastMintedKey = { val: null, name: null };
 
   module.getSharedPlaylists = async () => {
     const res = await API.axios({
@@ -144,6 +157,30 @@ const ADMINDATA = (() => {
     module.serverParamsUpdated.ts = Date.now();
   }
 
+  module.getServerAudioInfo = async () => {
+    try {
+      const res = await API.axios({
+        method: 'GET',
+        url: `${API.url()}/api/v1/admin/server-audio/info`
+      });
+      module.serverAudioInfo.backend = res.data.backend;
+      module.serverAudioInfo.player = res.data.player;
+      module.serverAudioInfo.detectedCliPlayers = res.data.detectedCliPlayers || [];
+      module.serverAudioInfoUpdated.ts = Date.now();
+    } catch (_err) {}
+  }
+
+  // Force a fresh detection probe server-side, then pull the updated info.
+  module.redetectCliPlayers = async () => {
+    try {
+      await API.axios({
+        method: 'POST',
+        url: `${API.url()}/api/v1/admin/server-audio/detect`
+      });
+      await module.getServerAudioInfo();
+    } catch (_err) {}
+  }
+
   module.getTranscodeParams = async () => {
     const res = await API.axios({
       method: 'GET',
@@ -185,6 +222,125 @@ const ADMINDATA = (() => {
     module.dlnaParamsUpdated.ts = Date.now();
   }
 
+  module.getSubsonicParams = async () => {
+    try {
+      const res = await API.axios({
+        method: 'GET',
+        url: `${API.url()}/api/v1/admin/subsonic`
+      });
+      Object.keys(res.data).forEach(key => { module.subsonicParams[key] = res.data[key]; });
+    } catch (err) {}
+    module.subsonicParamsUpdated.ts = Date.now();
+  }
+
+  // ── Subsonic API key management ───────────────────────────────────────
+  // All three helpers operate on the currently-authenticated user's keys
+  // via /api/v1/user/api-keys.
+  module.getApiKeys = async () => {
+    try {
+      const res = await API.axios({
+        method: 'GET',
+        url: `${API.url()}/api/v1/user/api-keys`
+      });
+      module.apiKeys.length = 0;
+      res.data.forEach(k => module.apiKeys.push(k));
+    } catch (err) { /* not fatal for panel load */ }
+    module.apiKeysUpdated.ts = Date.now();
+  }
+
+  module.createApiKey = async (name) => {
+    const res = await API.axios({
+      method: 'POST',
+      url: `${API.url()}/api/v1/user/api-keys`,
+      data: { name }
+    });
+    // Stash the plaintext key for the one-time display card.
+    module.lastMintedKey.val = res.data.key;
+    module.lastMintedKey.name = res.data.name;
+    await module.getApiKeys();
+    return res.data.key;
+  }
+
+  module.revokeApiKey = async (id) => {
+    await API.axios({
+      method: 'DELETE',
+      url: `${API.url()}/api/v1/user/api-keys/${id}`
+    });
+    await module.getApiKeys();
+  }
+
+  // ── Subsonic admin-panel polish data ────────────────────────────────
+  module.subsonicStats = { methodsImplemented: 0, methods: [], nowPlaying: [] };
+  module.subsonicStatsUpdated = { ts: 0 };
+  module.getSubsonicStats = async () => {
+    try {
+      const res = await API.axios({
+        method: 'GET', url: `${API.url()}/api/v1/admin/subsonic/stats`,
+      });
+      Object.assign(module.subsonicStats, res.data);
+    } catch (err) { /* UI shows placeholder */ }
+    module.subsonicStatsUpdated.ts = Date.now();
+  }
+
+  // Jukebox status card. `available: false` means autoBootServerAudio is
+  // disabled or the rust-server-audio binary isn't reachable — the UI
+  // hides the whole card in that case.
+  module.jukeboxStatus = { available: false };
+  module.jukeboxStatusUpdated = { ts: 0 };
+  module.getJukeboxStatus = async () => {
+    try {
+      const res = await API.axios({
+        method: 'GET', url: `${API.url()}/api/v1/admin/subsonic/jukebox`,
+      });
+      module.jukeboxStatus = res.data;
+    } catch (err) { module.jukeboxStatus = { available: false, reason: err.message }; }
+    module.jukeboxStatusUpdated.ts = Date.now();
+  }
+
+  // Recent token-auth rejections. Each entry is { username, client, at, ua }.
+  module.tokenAuthAttempts = [];
+  module.tokenAuthAttemptsUpdated = { ts: 0 };
+  module.getTokenAuthAttempts = async () => {
+    try {
+      const res = await API.axios({
+        method: 'GET', url: `${API.url()}/api/v1/admin/subsonic/token-auth-attempts`,
+      });
+      module.tokenAuthAttempts.length = 0;
+      (res.data.attempts || []).forEach(a => module.tokenAuthAttempts.push(a));
+    } catch (err) { /* empty list */ }
+    module.tokenAuthAttemptsUpdated.ts = Date.now();
+  }
+
+  module.clearTokenAuthAttempts = async () => {
+    await API.axios({
+      method: 'DELETE', url: `${API.url()}/api/v1/admin/subsonic/token-auth-attempts`,
+    });
+    await module.getTokenAuthAttempts();
+  }
+
+  // Admin mints a key on behalf of a specific user. Returns the plaintext
+  // key once so the admin can relay it to the affected client.
+  module.mintKeyFor = async (username, name) => {
+    const res = await API.axios({
+      method: 'POST',
+      url: `${API.url()}/api/v1/admin/subsonic/mint-key`,
+      data: { username, name },
+    });
+    return res.data;
+  }
+
+  // Hit the Subsonic API as a real client would and return { ok, latencyMs, ... }.
+  module.testSubsonicConnection = async () => {
+    try {
+      const res = await API.axios({
+        method: 'GET', url: `${API.url()}/api/v1/admin/subsonic/test`,
+      });
+      return res.data;
+    } catch (err) {
+      return { ok: false, reason: err.message };
+    }
+  }
+
   module.getVersion = async () => {
     try {
       const res = await API.axios({
@@ -221,8 +377,14 @@ ADMINDATA.getFolders();
 ADMINDATA.getUsers();
 ADMINDATA.getDbParams();
 ADMINDATA.getServerParams();
+ADMINDATA.getServerAudioInfo();
 ADMINDATA.getFederationParams();
 ADMINDATA.getDlnaParams();
+ADMINDATA.getSubsonicParams();
+ADMINDATA.getApiKeys();
+ADMINDATA.getSubsonicStats();
+ADMINDATA.getJukeboxStatus();
+ADMINDATA.getTokenAuthAttempts();
 ADMINDATA.getVersion();
 ADMINDATA.getWinDrives();
 
@@ -416,6 +578,7 @@ const foldersView = Vue.component('folders-view', {
               <tr>
                 <th>{{ t('admin.folders.vPathHeader') }}</th>
                 <th>{{ t('admin.folders.directoryHeader') }}</th>
+                <th title="When 'on', the scanner follows symlinks INSIDE this library. Default is 'off' to keep scanned content strictly within the library's physical tree.">Follow symlinks</th>
                 <th>{{ t('admin.folders.actionsHeader') }}</th>
               </tr>
             </thead>
@@ -423,6 +586,14 @@ const foldersView = Vue.component('folders-view', {
               <tr v-for="(v, k) in folders">
                 <td>{{k}}</td>
                 <td>{{v.root}}</td>
+                <td>
+                  <select :value="v.followSymlinks ? 'true' : 'false'"
+                          v-on:change="setFollowSymlinks(k, $event.target.value === 'true')"
+                          style="margin:0;display:inline-block;width:auto;height:28px;font-size:13px">
+                    <option value="false">off</option>
+                    <option value="true">on</option>
+                  </select>
+                </td>
                 <td>[<a v-on:click="removeFolder(k, v.root)">{{ t('admin.folders.remove') }}</a>]</td>
               </tr>
             </tbody>
@@ -439,6 +610,32 @@ const foldersView = Vue.component('folders-view', {
       }
     },
     methods: {
+      // V21: per-library followSymlinks flag. Default false —
+      // operators opt in per library when they want the scanner to
+      // traverse symlinks inside that vpath.
+      setFollowSymlinks: async function(vpath, value) {
+        try {
+          await API.axios({
+            method: 'POST',
+            url: `${API.url()}/api/v1/admin/directory/follow-symlinks`,
+            data: { vpath, followSymlinks: value },
+          });
+          // Reflect the change locally so the <select> stays in sync
+          // without waiting for the next folder-list poll.
+          if (ADMINDATA.folders[vpath]) {
+            Vue.set(ADMINDATA.folders[vpath], 'followSymlinks', value);
+          }
+          iziToast.success({
+            title: `Symlink policy updated for ${vpath}`,
+            position: 'topCenter', timeout: 2500,
+          });
+        } catch (err) {
+          iziToast.error({
+            title: `Failed: ${err.message || '?'}`,
+            position: 'topCenter', timeout: 3000,
+          });
+        }
+      },
       makeVPath(dir) {
         const newName = dir.split(/[\\\/]/).pop().toLowerCase().replace(' ', '-').replace(/[^a-zA-Z0-9-]/g, "");
         
@@ -565,6 +762,10 @@ const usersView = Vue.component('users-view', {
       makeAdmin: Object.keys(ADMINDATA.users).length === 0 ? true : false,
       allowMkdir: true,
       allowUpload: true,
+      // Opt-in per user. Admins bypass the gate anyway; everyone else
+      // starts without /api/v1/server-playback access and gets it only
+      // when the operator ticks the box explicitly.
+      allowServerAudio: false,
       submitPending: false,
       selectInstance: null
     };
@@ -610,6 +811,10 @@ const usersView = Vue.component('users-view', {
                       <div class="pad-checkbox"><label>
                         <input type="checkbox" v-model="allowUpload"/>
                         <span>{{ t('admin.users.allowUpload') }}</span>
+                      </label></div>
+                      <div class="pad-checkbox"><label>
+                        <input type="checkbox" v-model="allowServerAudio"/>
+                        <span>Allow Server Audio</span>
                       </label></div>
                     </div>
                     <!-- <div class="col s12 m6">
@@ -753,7 +958,8 @@ const usersView = Vue.component('users-view', {
             vpaths: Array.from(selected).map(el => el.value),
             admin: this.makeAdmin,
             allowMkdir: this.allowMkdir,
-            allowUpload: this.allowUpload
+            allowUpload: this.allowUpload,
+            allowServerAudio: this.allowServerAudio
           };
 
           await API.axios({
@@ -762,7 +968,7 @@ const usersView = Vue.component('users-view', {
             data: data
           });
 
-          Vue.set(ADMINDATA.users, this.newUsername, { vpaths: data.vpaths, admin: data.admin, allowMkdir: data.allowMkdir, allowUpload: data.allowUpload });
+          Vue.set(ADMINDATA.users, this.newUsername, { vpaths: data.vpaths, admin: data.admin, allowMkdir: data.allowMkdir, allowUpload: data.allowUpload, allowServerAudio: data.allowServerAudio });
           this.newUsername = '';
           this.newPassword = '';
 
@@ -804,8 +1010,22 @@ const advancedView = Vue.component('advanced-view', {
   data() {
     return {
       params: ADMINDATA.serverParams,
-      paramsTS: ADMINDATA.serverParamsUpdated
+      paramsTS: ADMINDATA.serverParamsUpdated,
+      audioInfo: ADMINDATA.serverAudioInfo,
+      audioInfoTS: ADMINDATA.serverAudioInfoUpdated
     };
+  },
+  computed: {
+    activePlayerLabel: function() {
+      if (!this.audioInfo.backend) { return 'None'; }
+      if (this.audioInfo.backend === 'rust') { return 'rust-server-audio (native)'; }
+      if (this.audioInfo.backend === 'cli') { return (this.audioInfo.player || 'cli') + ' (CLI fallback)'; }
+      return this.audioInfo.player || 'Unknown';
+    },
+    detectedCliPlayersLabel: function() {
+      const d = this.audioInfo.detectedCliPlayers || [];
+      return d.length ? d.join(', ') : 'None';
+    }
   },
   template: `
     <div v-if="paramsTS.ts === 0" class="row">
@@ -874,9 +1094,9 @@ const advancedView = Vue.component('advanced-view', {
                       </td>
                     </tr>
                     <tr>
-                      <td><b>{{ t('admin.settings.frontend') }}</b> {{params.ui === 'velvet' ? 'Velvet' : 'Default'}}</td>
+                      <td><b>{{ t('admin.settings.frontend') }}</b> {{uiLabel(params.ui)}}</td>
                       <td>
-                        [<a v-on:click="switchUI()">switch to {{params.ui === 'velvet' ? 'Default' : 'Velvet'}}</a>]
+                        [<a v-on:click="switchUI()">switch to {{uiLabel(nextUI(params.ui))}}</a>]
                       </td>
                     </tr>
                   </tbody>
@@ -901,6 +1121,16 @@ const advancedView = Vue.component('advanced-view', {
                       <td>
                         [<a v-on:click="openModal('edit-rust-player-port-modal')">{{ t('admin.settings.edit') }}</a>]
                       </td>
+                    </tr>
+                    <tr>
+                      <td><b>Active player:</b> {{ activePlayerLabel }}</td>
+                      <td>
+                        [<a v-on:click="refreshServerAudioInfo()">refresh</a>]
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><b>Detected CLI players:</b> {{ detectedCliPlayersLabel }}</td>
+                      <td></td>
                     </tr>
                   </tbody>
                 </table>
@@ -943,9 +1173,21 @@ const advancedView = Vue.component('advanced-view', {
       modVM.currentViewModal = modalView;
       M.Modal.getInstance(document.getElementById('admin-modal')).open();
     },
+    // Lookup: internal UI id → user-visible label. The Subsonic option
+    // serves Airsonic Refix (webapp/subsonic/), which talks to mStream's
+    // own /rest/* endpoints — users log in with their mStream creds.
+    uiLabel: function(id) {
+      return ({ default: 'Default', velvet: 'Velvet', subsonic: 'Subsonic UI' })[id] || id;
+    },
+    // Rotate through the three supported UIs on each click.
+    nextUI: function(id) {
+      const order = ['default', 'velvet', 'subsonic'];
+      const i = order.indexOf(id);
+      return order[(i < 0 ? 0 : i + 1) % order.length];
+    },
     switchUI: function() {
-      const newUI = this.params.ui === 'velvet' ? 'default' : 'velvet';
-      const label = newUI === 'velvet' ? 'Velvet' : 'Default';
+      const newUI = this.nextUI(this.params.ui);
+      const label = this.uiLabel(newUI);
       iziToast.question({
         timeout: 20000,
         close: false,
@@ -1187,6 +1429,9 @@ const advancedView = Vue.component('advanced-view', {
         ]
       });
     },
+    refreshServerAudioInfo: function() {
+      ADMINDATA.redetectCliPlayers();
+    },
     toggleAutoBootServerAudio: function() {
       iziToast.question({
         timeout: 20000,
@@ -1210,6 +1455,7 @@ const advancedView = Vue.component('advanced-view', {
               data: { autoBootServerAudio: !this.params.autoBootServerAudio }
             }).then(() => {
               Vue.set(ADMINDATA.serverParams, 'autoBootServerAudio', !this.params.autoBootServerAudio);
+              setTimeout(() => ADMINDATA.getServerAudioInfo(), 500);
               iziToast.success({
                 title: t('admin.settings.updated'),
                 position: 'topCenter',
@@ -1283,18 +1529,6 @@ const dbView = Vue.component('db-view', {
                       <td><b>{{ t('admin.db.maxConcurrentScans') }}</b> {{dbParams.maxConcurrentTasks}}</td>
                       <td>
                         [<a v-on:click="openModal('edit-max-scan-modal')">{{ t('admin.settings.edit') }}</a>]
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><b>{{ t('admin.db.generateWaveforms') }}</b> {{ dbParams.generateWaveforms ? t('admin.settings.enabled') : t('admin.settings.disabled') }}</td>
-                      <td>
-                        [<a v-on:click="toggleGenerateWaveforms()">{{ t('admin.settings.edit') }}</a>]
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><b>{{ t('admin.db.waveformConcurrency') }}</b> {{dbParams.waveformConcurrency}}</td>
-                      <td>
-                        [<a v-on:click="openModal('edit-waveform-concurrency-modal')">{{ t('admin.settings.edit') }}</a>]
                       </td>
                     </tr>
                   </tbody>
@@ -1622,47 +1856,6 @@ const dbView = Vue.component('db-view', {
                 timeout: 3500
               });
             }
-          }, true],
-          [`<button>${t('admin.folders.goBack')}</button>`, (instance, toast) => {
-            instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
-          }],
-        ]
-      });
-    },
-    toggleGenerateWaveforms: function() {
-      iziToast.question({
-        timeout: 20000,
-        close: false,
-        overlayClose: true,
-        overlay: true,
-        displayMode: 'once',
-        id: 'question',
-        zindex: 99999,
-        layout: 2,
-        maxWidth: 600,
-        title: `<b>${this.dbParams.generateWaveforms === true ? t('admin.settings.disableButton') : t('admin.settings.enableButton')} ${t('admin.db.generateWaveforms').replace(':', '')}?</b>`,
-        position: 'center',
-        buttons: [
-          [`<button><b>${this.dbParams.generateWaveforms === true ? t('admin.settings.disableButton') : t('admin.settings.enableButton')}</b></button>`, (instance, toast) => {
-            instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
-            API.axios({
-              method: 'POST',
-              url: `${API.url()}/api/v1/admin/db/params/generate-waveforms`,
-              data: { generateWaveforms: !this.dbParams.generateWaveforms }
-            }).then(() => {
-              Vue.set(ADMINDATA.dbParams, 'generateWaveforms', !this.dbParams.generateWaveforms);
-              iziToast.success({
-                title: t('admin.settings.updated'),
-                position: 'topCenter',
-                timeout: 3500
-              });
-            }).catch(() => {
-              iziToast.error({
-                title: t('admin.settings.failed'),
-                position: 'topCenter',
-                timeout: 3500
-              });
-            });
           }, true],
           [`<button>${t('admin.folders.goBack')}</button>`, (instance, toast) => {
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
@@ -2756,6 +2949,602 @@ const dlnaView = Vue.component('dlna-view', {
   }
 });
 
+const subsonicView = Vue.component('subsonic-view', {
+  data() {
+    return {
+      paramsTS: ADMINDATA.subsonicParamsUpdated,
+      params: ADMINDATA.subsonicParams,
+      selectedMode: 'disabled',
+      selectedPort: 3012,
+      applyPending: false,
+      // API keys — the state lives in ADMINDATA so every view sees a fresh
+      // list, but we reach in locally for the inputs driving this form.
+      apiKeysTS:  ADMINDATA.apiKeysUpdated,
+      apiKeys:    ADMINDATA.apiKeys,
+      newKeyName: '',
+      mintPending: false,
+      lastMintedKey: ADMINDATA.lastMintedKey,
+      // Polish widgets — stats / now-playing / jukebox / token-auth log.
+      statsTS:            ADMINDATA.subsonicStatsUpdated,
+      stats:              ADMINDATA.subsonicStats,
+      jukeboxTS:          ADMINDATA.jukeboxStatusUpdated,
+      jukebox:            ADMINDATA.jukeboxStatus,
+      tokenAttemptsTS:    ADMINDATA.tokenAuthAttemptsUpdated,
+      tokenAttempts:      ADMINDATA.tokenAuthAttempts,
+      testResult:         null,
+      testPending:        false,
+      showMethodList:     false,
+      // Transient success message shown next to the purge buttons.
+      lyricsCachePurgeMsg: null,
+      // One-time display for admin-minted-on-behalf-of keys. Mirrors
+      // `lastMintedKey` but carries the target username too.
+      adminMintedForUser: { val: null, name: null, username: null },
+      pollTimer:          null,
+    };
+  },
+
+  mounted() {
+    // Refresh the live widgets every 5s so now-playing / jukebox state
+    // stays fresh without the admin reloading the page. Stopped on unmount.
+    this.pollTimer = setInterval(() => {
+      ADMINDATA.getSubsonicStats();
+      ADMINDATA.getJukeboxStatus();
+      ADMINDATA.getTokenAuthAttempts();
+    }, 5000);
+  },
+  beforeDestroy() {
+    if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
+  },
+  watch: {
+    'paramsTS.ts': {
+      immediate: true,
+      handler: function() {
+        this.selectedMode = this.params.mode || 'disabled';
+        this.selectedPort = this.params.port || 3012;
+      }
+    }
+  },
+  template: `
+    <div v-if="paramsTS.ts === 0" class="row">
+      <svg class="spinner" width="65px" height="65px" viewBox="0 0 66 66" xmlns="http://www.w3.org/2000/svg"><circle class="spinner-path" fill="none" stroke-width="6" stroke-linecap="round" cx="33" cy="33" r="30"></circle></svg>
+    </div>
+    <div v-else class="container">
+      <div class="row" style="margin-top:24px">
+        <div class="col s12">
+          <div class="card">
+            <div class="card-content">
+              <span class="card-title">Subsonic REST API</span>
+              <p>The Subsonic API lets you use third-party music apps &mdash; DSub, Symfonium, Substreamer, play:Sub, Feishin, Sonixd, and many others &mdash; as clients for your mStream library. Each user signs in with their mStream username and password (or an API key they generate on their profile) from inside the client app.</p>
+              <div style="margin-top:16px">
+                <p><b>Current mode:</b> {{params.mode || 'disabled'}}</p>
+                <p v-if="params.mode === 'separate-port'"><b>Subsonic port:</b> {{params.port}}</p>
+              </div>
+              <div style="margin-top:20px">
+                <p><b>Change mode:</b></p>
+                <p>
+                  <label style="margin-right:20px">
+                    <input type="radio" v-model="selectedMode" value="disabled" />
+                    <span>Disabled</span>
+                  </label>
+                  <label style="margin-right:20px">
+                    <input type="radio" v-model="selectedMode" value="same-port" />
+                    <span>Same port as mStream</span>
+                  </label>
+                  <label>
+                    <input type="radio" v-model="selectedMode" value="separate-port" />
+                    <span>Separate port</span>
+                  </label>
+                </p>
+                <div v-if="selectedMode === 'separate-port'" style="margin-top:12px">
+                  <div class="input-field" style="max-width:200px">
+                    <input id="subsonic-port" type="number" v-model.number="selectedPort" min="1" max="65535" />
+                    <label for="subsonic-port" class="active">Subsonic Port</label>
+                  </div>
+                </div>
+              </div>
+              <div v-if="selectedMode !== 'disabled'" class="card-panel orange lighten-4" style="margin-top:16px">
+                <p><b>Security notice:</b> Subsonic clients authenticate with your mStream user credentials. For best security, enable HTTPS before exposing the Subsonic API to untrusted networks, and use an API key in each client instead of sharing your password.</p>
+                <p style="margin-top:8px">Mint and revoke API keys in the section below. Token-style auth (<code>t=</code>, <code>s=</code>) is not supported &mdash; use plaintext over HTTPS, or an API key.</p>
+              </div>
+            </div>
+            <div class="card-action flow-root">
+              <a v-on:click="applyMode()" :disabled="applyPending"
+                 class="waves-effect waves-light btn right">
+                Apply
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Methods implemented + test connection -->
+      <div v-if="params.mode !== 'disabled'" class="row">
+        <div class="col s12 m6">
+          <div class="card">
+            <div class="card-content">
+              <span class="card-title">API Surface</span>
+              <p style="font-size:32px;font-weight:300;margin:8px 0">
+                {{stats.methodsImplemented || '—'}}
+                <span style="font-size:14px;color:#777;font-weight:400">
+                  Subsonic methods implemented
+                </span>
+              </p>
+              <p v-if="stats.fullCount != null" style="color:#777;margin:0 0 4px">
+                <small>{{stats.fullCount}} fully implemented &middot; {{stats.stubCount}} stubbed (empty response — real feature not backed)</small>
+              </p>
+              <p style="color:#777"><small>Subsonic 1.16.1 + OpenSubsonic defines roughly 70 methods. The ones this server does not implement at all return a "method not found" error — see the decline list in docs/subsonic-phase3.md.</small></p>
+              <a v-on:click="showMethodList = !showMethodList" class="btn-flat waves-effect" style="padding:0 8px">
+                {{showMethodList ? 'Hide' : 'Show'}} method list
+              </a>
+              <div v-if="showMethodList" style="margin-top:12px;max-height:220px;overflow-y:auto;background:#f5f5f5;padding:8px;border-radius:4px;font-family:monospace;font-size:12px">
+                <!-- New shape: per-method {name, status}. Fall back to the
+                     plain list on older server builds that don't emit it. -->
+                <div v-if="stats.methodStatuses && stats.methodStatuses.length">
+                  <div v-for="m in stats.methodStatuses" :key="m.name">
+                    <span v-if="m.status === 'stub'"
+                          style="display:inline-block;min-width:42px;background:#f0ad4e;color:#fff;padding:0 4px;border-radius:2px;margin-right:6px;font-size:10px;text-align:center;vertical-align:1px">STUB</span>
+                    <span v-else
+                          style="display:inline-block;min-width:42px;background:#5cb85c;color:#fff;padding:0 4px;border-radius:2px;margin-right:6px;font-size:10px;text-align:center;vertical-align:1px">FULL</span>
+                    {{m.name}}
+                  </div>
+                </div>
+                <div v-else>
+                  <div v-for="m in stats.methods" :key="m">{{m}}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="col s12 m6">
+          <div class="card">
+            <div class="card-content">
+              <span class="card-title">Test Connection</span>
+              <p>Make a ping request against the running Subsonic endpoint as if a client were connecting. Useful for verifying a mode change took effect.</p>
+              <a v-on:click="runTest()" :disabled="testPending"
+                 class="waves-effect waves-light btn" style="margin-top:8px">
+                {{testPending ? 'Testing…' : 'Test Connection'}}
+              </a>
+              <div v-if="testResult" style="margin-top:16px" :class="testResult.ok ? 'card-panel green lighten-4' : 'card-panel red lighten-4'">
+                <p><b>{{testResult.ok ? 'OK' : 'Failed'}}</b>
+                  <span v-if="testResult.ok"> — {{testResult.latencyMs}}ms, server v{{testResult.serverVersion}}</span>
+                  <span v-else> — {{testResult.reason || testResult.status || 'unknown error'}}</span>
+                </p>
+                <p v-if="testResult.url" style="margin-top:6px"><small><code>{{testResult.url}}</code></small></p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Now-playing strip -->
+      <div v-if="params.mode !== 'disabled'" class="row">
+        <div class="col s12">
+          <div class="card">
+            <div class="card-content">
+              <span class="card-title">Now Playing</span>
+              <p v-if="stats.nowPlaying.length === 0" style="color:#777"><i>Nobody is streaming right now.</i></p>
+              <table v-else class="striped">
+                <thead>
+                  <tr><th>User</th><th>Track</th><th>Artist</th><th>Album</th><th>Since</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="p in stats.nowPlaying" :key="p.username + ':' + p.trackId">
+                    <td><b>{{p.username}}</b></td>
+                    <td>{{p.title || '(unknown title)'}}</td>
+                    <td>{{p.artist || '—'}}</td>
+                    <td>{{p.album || '—'}}</td>
+                    <td><small>{{formatSince(p.sinceMs)}}</small></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Lyrics cache (LRCLib fallback, V20). Visible regardless of
+           Subsonic mode because /api/v1/lyrics works through the main
+           mStream auth wall (Velvet UI uses that path), so an operator
+           running Subsonic=disabled but Velvet=on still benefits. -->
+      <div v-if="stats.lyrics" class="row">
+        <div class="col s12">
+          <div class="card">
+            <div class="card-content">
+              <span class="card-title">Lyrics Lookup (LRCLib)</span>
+              <p>
+                When a track has no embedded lyrics and no sibling <code>.lrc</code> / <code>.txt</code> sidecar,
+                mStream can fetch from
+                <a href="https://lrclib.net" target="_blank" rel="noopener">lrclib.net</a> and cache the result.
+              </p>
+              <p style="color:#b26500;background:#fff3e0;padding:8px;border-radius:4px;margin:8px 0">
+                <small><b>Privacy:</b> enabling this sends <code>{artist, title, duration}</code>
+                over HTTPS to lrclib.net for every track that has no local lyrics.
+                No user identity is included. Disable if your server is meant to be fully offline.</small>
+              </p>
+              <p style="margin:12px 0">
+                <span class="chip" :class="stats.lyrics.lrclibEnabled ? 'green lighten-4' : 'grey lighten-3'">
+                  {{stats.lyrics.lrclibEnabled ? 'Enabled' : 'Disabled'}}
+                </span>
+                <a v-on:click="toggleLrclib()" class="btn-flat waves-effect" style="padding:0 8px">
+                  {{stats.lyrics.lrclibEnabled ? 'Disable' : 'Enable'}}
+                </a>
+              </p>
+              <p v-if="stats.lyrics.lrclibEnabled" style="margin:8px 0;padding:8px;background:#f9f9f9;border-radius:4px">
+                <label>
+                  <input type="checkbox" class="filled-in"
+                         :checked="stats.lyrics.writeSidecarEnabled"
+                         v-on:change="toggleWriteSidecar($event.target.checked)" />
+                  <span>
+                    <b>Also write <code>.lrc</code> / <code>.txt</code> sidecar next to the audio file</b><br>
+                    <small style="color:#777">
+                      Default off. When on, a successful LRCLib fetch also drops a sibling sidecar
+                      file so the lyrics travel with the track if it's copied elsewhere.
+                      Never overwrites an existing sidecar; silently skipped on read-only storage.
+                    </small>
+                  </span>
+                </label>
+              </p>
+              <table v-if="stats.lyrics.cache" style="max-width:400px">
+                <tbody>
+                  <tr><td><b>Cached hits</b></td>  <td>{{stats.lyrics.cache.hit}}</td></tr>
+                  <tr><td><b>Cached misses</b></td><td>{{stats.lyrics.cache.miss}}</td></tr>
+                  <tr><td><b>Errors</b></td>       <td>{{stats.lyrics.cache.error}}</td></tr>
+                  <tr><td><b>Pending</b></td>      <td>{{stats.lyrics.cache.pending}}</td></tr>
+                  <tr><td><b>Total rows</b></td>   <td>{{stats.lyrics.cache.total}}</td></tr>
+                </tbody>
+              </table>
+              <p style="margin-top:12px">
+                <a v-on:click="purgeLyricsCache('retry')" class="btn-flat waves-effect" style="padding:0 8px">
+                  Retry errors
+                </a>
+                <a v-on:click="purgeLyricsCache('full')" class="btn-flat waves-effect red-text" style="padding:0 8px">
+                  Purge all
+                </a>
+                <span v-if="lyricsCachePurgeMsg" style="margin-left:12px;color:#5cb85c">
+                  {{lyricsCachePurgeMsg}}
+                </span>
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Jukebox live status -->
+      <div v-if="params.mode !== 'disabled' && jukebox.available" class="row">
+        <div class="col s12">
+          <div class="card">
+            <div class="card-content">
+              <span class="card-title">Jukebox (Server Audio)</span>
+              <p>
+                <span v-if="jukebox.playing" class="chip green lighten-4" style="font-size:12px">Playing</span>
+                <span v-else-if="jukebox.paused" class="chip orange lighten-4" style="font-size:12px">Paused</span>
+                <span v-else class="chip grey lighten-3" style="font-size:12px">Idle</span>
+                <span v-if="jukebox.queueLength > 0" style="margin-left:12px">
+                  Track {{jukebox.queueIndex + 1}} of {{jukebox.queueLength}}
+                </span>
+              </p>
+              <p v-if="jukebox.currentFile"><b>Current file:</b> <code>{{jukebox.currentFile}}</code></p>
+              <p v-if="jukebox.duration > 0">
+                <b>Position:</b> {{formatSeconds(jukebox.position)}} / {{formatSeconds(jukebox.duration)}}
+              </p>
+              <p>
+                <b>Volume:</b> {{Math.round(jukebox.volume * 100)}}% &middot;
+                <b>Loop:</b> {{jukebox.loopMode}} &middot;
+                <b>Shuffle:</b> {{jukebox.shuffle ? 'on' : 'off'}}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Token-auth warning log -->
+      <div v-if="params.mode !== 'disabled' && tokenAttempts.length > 0" class="row">
+        <div class="col s12">
+          <div class="card orange lighten-5">
+            <div class="card-content">
+              <span class="card-title" style="color:#bf5700">Token-auth attempts — clients stuck in a login loop</span>
+              <p>mStream cannot support Subsonic's legacy token auth (the server would need the plaintext password to compute the MD5 digest — it only keeps PBKDF2 hashes). Clients that default to token auth get rejected with error 41 and usually loop. Mint an API key for the affected user below and hand it to them.</p>
+              <table class="striped" style="margin-top:12px">
+                <thead>
+                  <tr><th>User</th><th>Client</th><th>When</th><th></th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(a, i) in tokenAttempts" :key="i">
+                    <td><b>{{a.username || '(anonymous)'}}</b></td>
+                    <td>{{a.client || '—'}}</td>
+                    <td><small>{{formatSince(Date.now() - a.at)}} ago</small></td>
+                    <td>
+                      <a v-if="a.username" v-on:click="mintForUser(a.username)"
+                         class="btn-small waves-effect waves-light blue">Generate key for {{a.username}}</a>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="card-action flow-root">
+              <a v-on:click="clearTokenLog()" class="btn-flat waves-effect right">Clear log</a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Admin-minted-key one-time display -->
+      <div v-if="adminMintedForUser.val" class="row">
+        <div class="col s12">
+          <div class="card-panel green lighten-4">
+            <p><b>Key created for user "{{adminMintedForUser.username}}":</b> {{adminMintedForUser.name}}</p>
+            <p style="margin-top:8px">
+              <code style="user-select:all;word-break:break-all;background:#fff;padding:4px 8px;border-radius:4px;display:inline-block">{{adminMintedForUser.val}}</code>
+            </p>
+            <p style="margin-top:8px"><small>Relay this to the user. They paste it as their API key in their Subsonic client.</small></p>
+            <a v-on:click="dismissAdminMintedKey()" class="waves-effect btn-flat">Dismiss</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col s12">
+          <div class="card">
+            <div class="card-content">
+              <span class="card-title">Your Subsonic API Keys</span>
+              <p>API keys are per-user. Each key authenticates Subsonic clients without exposing your mStream password. The full key value is only shown at creation &mdash; copy it into your client immediately, or revoke it and mint a new one.</p>
+
+              <div v-if="lastMintedKey.val" class="card-panel green lighten-4" style="margin-top:16px">
+                <p><b>New key created:</b> {{lastMintedKey.name}}</p>
+                <p style="margin-top:8px">
+                  <code style="user-select:all;word-break:break-all;background:#fff;padding:4px 8px;border-radius:4px;display:inline-block">{{lastMintedKey.val}}</code>
+                </p>
+                <p style="margin-top:8px"><small>This is the only time the full key will be shown. Paste it into your Subsonic client now.</small></p>
+                <a v-on:click="dismissMintedKey()" class="waves-effect btn-flat">Dismiss</a>
+              </div>
+
+              <div style="margin-top:16px">
+                <div class="row" style="margin-bottom:0">
+                  <div class="input-field col s12 m8">
+                    <input id="api-key-name" type="text" v-model="newKeyName" maxlength="100" placeholder="e.g. phone-dsub, laptop-feishin" />
+                    <label for="api-key-name" class="active">New key name</label>
+                  </div>
+                  <div class="col s12 m4" style="padding-top:20px">
+                    <a v-on:click="mintKey()" :disabled="mintPending || !newKeyName.trim()"
+                       class="waves-effect waves-light btn">Generate key</a>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="apiKeysTS.ts > 0" style="margin-top:16px">
+                <p v-if="apiKeys.length === 0"><i>No API keys yet.</i></p>
+                <table v-else class="striped">
+                  <thead>
+                    <tr><th>Name</th><th>Created</th><th>Last used</th><th></th></tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="k in apiKeys" :key="k.id">
+                      <td>{{k.name || '(unnamed)'}}</td>
+                      <td><small>{{formatTs(k.created_at)}}</small></td>
+                      <td><small>{{formatTs(k.last_used) || '—'}}</small></td>
+                      <td>
+                        <a v-on:click="revokeKey(k)" class="waves-effect waves-red btn-small red lighten-1">Revoke</a>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>`,
+  methods: {
+    formatTs: function(s) {
+      if (!s) { return null; }
+      // SQLite stores as "YYYY-MM-DD HH:MM:SS" in UTC.
+      const d = new Date(s.replace(' ', 'T') + 'Z');
+      return isNaN(d.getTime()) ? s : d.toLocaleString();
+    },
+    // "12.3 seconds ago" → "12s", "123s" → "2m", "4000s" → "1h". Tight
+    // formatting for the inline-table durations.
+    formatSince: function(ms) {
+      if (!Number.isFinite(ms) || ms < 0) { return '—'; }
+      const s = Math.floor(ms / 1000);
+      if (s < 60)   { return `${s}s`; }
+      if (s < 3600) { return `${Math.floor(s / 60)}m`; }
+      return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+    },
+    // "1:23" / "62:15" position/duration formatting.
+    formatSeconds: function(s) {
+      if (!Number.isFinite(s) || s < 0) { return '0:00'; }
+      const m = Math.floor(s / 60);
+      const ss = String(Math.floor(s) % 60).padStart(2, '0');
+      return `${m}:${ss}`;
+    },
+    dismissMintedKey: function() {
+      ADMINDATA.lastMintedKey.val = null;
+      ADMINDATA.lastMintedKey.name = null;
+    },
+    dismissAdminMintedKey: function() {
+      this.adminMintedForUser = { val: null, name: null, username: null };
+    },
+    runTest: async function() {
+      this.testPending = true;
+      this.testResult = null;
+      try {
+        this.testResult = await ADMINDATA.testSubsonicConnection();
+      } catch (err) {
+        this.testResult = { ok: false, reason: err.message };
+      } finally {
+        this.testPending = false;
+      }
+    },
+    // V20: LRCLib lyrics-cache controls. Toggle flips the config flag;
+    // purge wipes rows (mode='full' for all, 'retry' for error/pending).
+    // Each call refreshes the stats so the UI counters stay accurate.
+    toggleLrclib: async function() {
+      const enabled = !this.stats.lyrics?.lrclibEnabled;
+      try {
+        await API.axios({
+          method: 'POST',
+          url: `${API.url()}/api/v1/admin/subsonic/lyrics-cache/enabled`,
+          data: { enabled },
+        });
+        await ADMINDATA.getSubsonicStats();
+      } catch (err) {
+        iziToast.error({ title: `Failed to ${enabled ? 'enable' : 'disable'}: ${err.message || '?'}`,
+          position: 'topCenter', timeout: 3000 });
+      }
+    },
+    toggleWriteSidecar: async function(enabled) {
+      try {
+        await API.axios({
+          method: 'POST',
+          url: `${API.url()}/api/v1/admin/subsonic/lyrics-cache/write-sidecar`,
+          data: { enabled },
+        });
+        await ADMINDATA.getSubsonicStats();
+      } catch (err) {
+        iziToast.error({ title: `Sidecar toggle failed: ${err.message || '?'}`,
+          position: 'topCenter', timeout: 3000 });
+      }
+    },
+    purgeLyricsCache: async function(mode) {
+      try {
+        const r = await API.axios({
+          method: 'POST',
+          url: `${API.url()}/api/v1/admin/subsonic/lyrics-cache/purge`,
+          data: { mode },
+        });
+        this.lyricsCachePurgeMsg = `Removed ${r.data.removed} row(s).`;
+        setTimeout(() => { this.lyricsCachePurgeMsg = null; }, 4000);
+        await ADMINDATA.getSubsonicStats();
+      } catch (err) {
+        iziToast.error({ title: `Purge failed: ${err.message || '?'}`,
+          position: 'topCenter', timeout: 3000 });
+      }
+    },
+    mintForUser: async function(username) {
+      // Same prompt shape as iziToast's question so it feels consistent
+      // with the rest of the admin panel's confirm dialogs.
+      const name = `admin-minted-${new Date().toISOString().slice(0, 10)}`;
+      iziToast.question({
+        timeout: 20000, close: false, overlayClose: true, overlay: true,
+        displayMode: 'once', id: 'admin-mint-key', zindex: 99999, layout: 2,
+        title: `Create a Subsonic API key for "${username}"?`,
+        message: `The key will be labelled "${name}". You will see the key value once and must relay it to the user yourself.`,
+        position: 'center',
+        buttons: [
+          [`<button><b>Create key</b></button>`, async (instance, toast) => {
+            try {
+              const data = await ADMINDATA.mintKeyFor(username, name);
+              this.adminMintedForUser = { val: data.key, name: data.name, username: data.username };
+              iziToast.success({ title: `Key created for ${username}`, position: 'topCenter', timeout: 3000 });
+            } catch (err) {
+              iziToast.error({ title: `Failed to create key: ${err.message || 'unknown error'}`, position: 'topCenter', timeout: 4000 });
+            } finally {
+              instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
+            }
+          }, true],
+          [`<button>Cancel</button>`, (instance, toast) => {
+            instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
+          }],
+        ]
+      });
+    },
+    clearTokenLog: async function() {
+      try {
+        await ADMINDATA.clearTokenAuthAttempts();
+      } catch (err) {
+        iziToast.error({ title: 'Failed to clear log', position: 'topCenter', timeout: 3000 });
+      }
+    },
+    mintKey: async function() {
+      const name = this.newKeyName.trim();
+      if (!name) { return; }
+      try {
+        this.mintPending = true;
+        await ADMINDATA.createApiKey(name);
+        this.newKeyName = '';
+        iziToast.success({ title: 'API key created', position: 'topCenter', timeout: 3000 });
+      } catch (err) {
+        iziToast.error({ title: 'Failed to create API key', position: 'topCenter', timeout: 3500 });
+      } finally {
+        this.mintPending = false;
+      }
+    },
+    revokeKey: function(k) {
+      iziToast.question({
+        timeout: 20000, close: false, overlayClose: true, overlay: true,
+        displayMode: 'once', id: 'api-key-revoke', zindex: 99999, layout: 2,
+        title: `Revoke API key "${k.name || '(unnamed)'}"?`,
+        message: 'Any client using this key will stop working. You cannot undo this.',
+        position: 'center',
+        buttons: [
+          [`<button><b>Revoke</b></button>`, async (instance, toast) => {
+            try {
+              await ADMINDATA.revokeApiKey(k.id);
+              iziToast.success({ title: 'Key revoked', position: 'topCenter', timeout: 2500 });
+            } catch (err) {
+              iziToast.error({ title: 'Failed to revoke key', position: 'topCenter', timeout: 3500 });
+            } finally {
+              instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
+            }
+          }, true],
+          [`<button>Cancel</button>`, (instance, toast) => {
+            instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
+          }],
+        ]
+      });
+    },
+    applyMode: async function() {
+      const mode = this.selectedMode;
+      const port = this.selectedPort;
+      const modeLabels = { disabled: 'Disabled', 'same-port': 'Same Port', 'separate-port': 'Separate Port' };
+      iziToast.question({
+        timeout: 20000,
+        close: false,
+        overlayClose: true,
+        overlay: true,
+        displayMode: 'once',
+        id: 'subsonic-question',
+        zindex: 99999,
+        layout: 2,
+        maxWidth: 600,
+        title: `Set Subsonic mode to "${modeLabels[mode] || mode}"?`,
+        message: mode === 'same-port' || this.params.mode === 'same-port'
+          ? 'This will restart the mStream server.'
+          : '',
+        position: 'center',
+        buttons: [
+          [`<button><b>Apply</b></button>`, async (instance, toast) => {
+            try {
+              this.applyPending = true;
+              const data = { mode };
+              if (mode === 'separate-port') { data.port = port; }
+              await API.axios({
+                method: 'POST',
+                url: `${API.url()}/api/v1/admin/subsonic/mode`,
+                data
+              });
+              await ADMINDATA.getSubsonicParams();
+              instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
+              iziToast.success({
+                title: `Subsonic mode set to ${modeLabels[mode] || mode}`,
+                position: 'topCenter',
+                timeout: 3500
+              });
+            } catch(err) {
+              iziToast.error({ title: 'Failed to update Subsonic setting', position: 'topCenter', timeout: 3500 });
+            } finally {
+              this.applyPending = false;
+            }
+          }, true],
+          [`<button>Cancel</button>`, (instance, toast) => {
+            instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
+          }],
+        ]
+      });
+    }
+  }
+});
+
 const vm = new Vue({
   el: '#content',
   components: {
@@ -2767,6 +3556,7 @@ const vm = new Vue({
     'transcode-view': transcodeView,
     'federation-view': federationView,
     'dlna-view': dlnaView,
+    'subsonic-view': subsonicView,
     'logs-view': logsView,
     'rpn-view': rpnView,
     'lock-view': lockView,
@@ -3038,7 +3828,8 @@ const userAccessView = Vue.component('user-access-view', {
       submitPending: false,
       isAdmin: ADMINDATA.users[ADMINDATA.selectedUser.value].admin,
       allowMkdir: ADMINDATA.users[ADMINDATA.selectedUser.value].allowMkdir !== false,
-      allowUpload: ADMINDATA.users[ADMINDATA.selectedUser.value].allowUpload !== false
+      allowUpload: ADMINDATA.users[ADMINDATA.selectedUser.value].allowUpload !== false,
+      allowServerAudio: ADMINDATA.users[ADMINDATA.selectedUser.value].allowServerAudio !== false
     };
   },
   template: `
@@ -3057,6 +3848,10 @@ const userAccessView = Vue.component('user-access-view', {
         <div class="pad-checkbox"><label>
           <input type="checkbox" v-model="allowUpload"/>
           <span>{{ t('admin.modal.uploadFiles') }}</span>
+        </label></div>
+        <div class="pad-checkbox"><label>
+          <input type="checkbox" v-model="allowServerAudio"/>
+          <span>Allow Server Audio</span>
         </label></div>
       </div>
       <div class="modal-footer">
@@ -3082,7 +3877,8 @@ const userAccessView = Vue.component('user-access-view', {
               username: this.currentUser.value,
               admin: this.isAdmin,
               allowMkdir: this.allowMkdir,
-              allowUpload: this.allowUpload
+              allowUpload: this.allowUpload,
+              allowServerAudio: this.allowServerAudio
             }
           });
 
@@ -3090,6 +3886,7 @@ const userAccessView = Vue.component('user-access-view', {
           Vue.set(ADMINDATA.users[this.currentUser.value], 'admin', this.isAdmin);
           Vue.set(ADMINDATA.users[this.currentUser.value], 'allowMkdir', this.allowMkdir);
           Vue.set(ADMINDATA.users[this.currentUser.value], 'allowUpload', this.allowUpload);
+          Vue.set(ADMINDATA.users[this.currentUser.value], 'allowServerAudio', this.allowServerAudio);
     
           // close & reset the modal
           M.Modal.getInstance(document.getElementById('admin-modal')).close();
@@ -3374,69 +4171,6 @@ const editMaxScanModal = Vue.component('edit-max-scans-modal', {
           timeout: 3500
         });
       }finally {
-        this.submitPending = false;
-      }
-    }
-  }
-});
-
-const editWaveformConcurrencyModal = Vue.component('edit-waveform-concurrency-modal', {
-  data() {
-    return {
-      params: ADMINDATA.dbParams,
-      submitPending: false,
-      editValue: ADMINDATA.dbParams.waveformConcurrency
-    };
-  },
-  template: `
-    <form @submit.prevent="updateParam">
-      <div class="modal-content">
-        <h4>{{ t('admin.modal.waveformConcurrency') }}</h4>
-        <div class="input-field">
-          <input v-model="editValue" id="edit-waveform-concurrency" required type="number" min="1">
-          <label for="edit-waveform-concurrency">{{ t('admin.modal.editWaveformConcurrency') }}</label>
-          <span class="helper-text">{{ t('admin.modal.waveformConcurrencyHint') }}</span>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <a href="#!" class="modal-close waves-effect waves-green btn-flat">{{ t('admin.modal.goBack') }}</a>
-        <button class="btn green waves-effect waves-light" type="submit" :disabled="submitPending === true">
-          {{ submitPending === false ? t('admin.modal.update') : t('admin.modal.updating') }}
-        </button>
-      </div>
-    </form>`,
-  mounted: function () {
-    M.updateTextFields();
-  },
-  methods: {
-    updateParam: async function() {
-      try {
-        this.submitPending = true;
-
-        await API.axios({
-          method: 'POST',
-          url: `${API.url()}/api/v1/admin/db/params/waveform-concurrency`,
-          data: { waveformConcurrency: Number(this.editValue) }
-        });
-
-        // update frontend data
-        Vue.set(ADMINDATA.dbParams, 'waveformConcurrency', Number(this.editValue));
-
-        // close & reset the modal
-        M.Modal.getInstance(document.getElementById('admin-modal')).close();
-
-        iziToast.success({
-          title: t('admin.settings.updated'),
-          position: 'topCenter',
-          timeout: 3500
-        });
-      } catch(err) {
-        iziToast.error({
-          title: t('admin.modal.updateFailed'),
-          position: 'topCenter',
-          timeout: 3500
-        });
-      } finally {
         this.submitPending = false;
       }
     }
@@ -4011,7 +4745,6 @@ const modVM = new Vue({
     'edit-select-codec-modal': editTranscodeCodecModal,
     'edit-transcode-bitrate-modal': editTranscodeDefaultBitrate,
     'edit-max-scan-modal': editMaxScanModal,
-    'edit-waveform-concurrency-modal': editWaveformConcurrencyModal,
     'edit-ssl-modal': editSslModal,
     'lastfm-modal': lastFMModal,
     'federation-generate-invite-modal': federationGenerateInvite,

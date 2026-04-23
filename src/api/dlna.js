@@ -630,7 +630,7 @@ function getRecentPlayedCount() {
   const row = db.getDB().prepare(`
     SELECT COUNT(DISTINCT t.id) AS n
     FROM tracks t
-    JOIN user_metadata um ON um.track_hash = t.file_hash
+    JOIN user_metadata um ON um.track_hash = COALESCE(t.audio_hash, t.file_hash)
     WHERE um.last_played IS NOT NULL
   `).get();
   return Math.min(row?.n || 0, SMART_LIMIT);
@@ -643,7 +643,7 @@ function getRecentPlayedTracks(start, count) {
   return db.getDB().prepare(`
     SELECT ${SMART_TRACK_COLS}, MAX(um.last_played) AS sort_key
     FROM tracks t
-    JOIN user_metadata um ON um.track_hash = t.file_hash
+    JOIN user_metadata um ON um.track_hash = COALESCE(t.audio_hash, t.file_hash)
     LEFT JOIN artists a  ON t.artist_id = a.id
     LEFT JOIN albums  al ON t.album_id  = al.id
     WHERE um.last_played IS NOT NULL
@@ -657,7 +657,7 @@ function getMostPlayedCount() {
   const row = db.getDB().prepare(`
     SELECT COUNT(*) AS n FROM (
       SELECT t.id FROM tracks t
-      JOIN user_metadata um ON um.track_hash = t.file_hash
+      JOIN user_metadata um ON um.track_hash = COALESCE(t.audio_hash, t.file_hash)
       GROUP BY t.id
       HAVING SUM(um.play_count) > 0
     )
@@ -672,7 +672,7 @@ function getMostPlayedTracks(start, count) {
   return db.getDB().prepare(`
     SELECT ${SMART_TRACK_COLS}, SUM(um.play_count) AS total_plays
     FROM tracks t
-    JOIN user_metadata um ON um.track_hash = t.file_hash
+    JOIN user_metadata um ON um.track_hash = COALESCE(t.audio_hash, t.file_hash)
     LEFT JOIN artists a  ON t.artist_id = a.id
     LEFT JOIN albums  al ON t.album_id  = al.id
     GROUP BY t.id
@@ -686,7 +686,7 @@ function getFavoriteCount() {
   const row = db.getDB().prepare(`
     SELECT COUNT(*) AS n FROM (
       SELECT t.id FROM tracks t
-      JOIN user_metadata um ON um.track_hash = t.file_hash
+      JOIN user_metadata um ON um.track_hash = COALESCE(t.audio_hash, t.file_hash)
       GROUP BY t.id
       HAVING MAX(um.rating) >= 4
     )
@@ -699,7 +699,7 @@ function getFavoriteTracks(start, count) {
   return db.getDB().prepare(`
     SELECT ${SMART_TRACK_COLS}, MAX(um.rating) AS top_rating
     FROM tracks t
-    JOIN user_metadata um ON um.track_hash = t.file_hash
+    JOIN user_metadata um ON um.track_hash = COALESCE(t.audio_hash, t.file_hash)
     LEFT JOIN artists a  ON t.artist_id = a.id
     LEFT JOIN albums  al ON t.album_id  = al.id
     GROUP BY t.id

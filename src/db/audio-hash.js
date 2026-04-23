@@ -1,0 +1,360 @@
+/**
+ * Dual-hash computation for the scanner.
+ *
+ *   file_hash  — MD5 of the whole file. Changes on any byte change.
+ *   audio_hash — MD5 of just the audio payload region (tag regions
+ *                stripped). Stable across tag edits.
+ *
+ * audio_hash is the preferred identity key for user-facing state
+ * (stars, play counts, bookmarks, play queue). It is NULL for formats
+ * whose audio boundary we can't parse — callers fall back to
+ * file_hash in that case.
+ *
+ * Supported formats (and the per-format tag-stripping rule):
+ *
+ *   mp3 / aac    — strip ID3v2 prefix, ID3v1 suffix, APEv2 suffix.
+ *                  AAC as ADTS follows the same container conventions.
+ *   flac         — skip all metadata blocks (everything up to and
+ *                  including the one with last_flag set).
+ *   wav          — hash only the `data` chunk payload; LIST/INFO, ID3,
+ *                  bext, iXML and similar metadata chunks are excluded.
+ *   ogg / opus   — walk Ogg pages; hash only the payloads of audio
+ *                  pages (pages from the first granule_position > 0
+ *                  page onwards). Skips id/comment/setup headers,
+ *                  OpusHead, OpusTags. Page headers (which carry
+ *                  page_sequence_number — drifts when preceding
+ *                  header pages change size) are NOT hashed, only
+ *                  payloads.
+ *   m4a/m4b/mp4  — hash only the `mdat` atom payload. `moov` (where
+ *                  iTunes-style tags live in udta/meta/ilst) is
+ *                  excluded automatically.
+ *
+ * MUST stay byte-identical with rust-parser/src/main.rs. Parity is
+ * enforced by test/audio-hash-parity.test.mjs for every supported
+ * extension. Any change to the byte-range logic here must land in
+ * both implementations simultaneously.
+ */
+
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
+import crypto from 'node:crypto';
+import path from 'node:path';
+
+// ── Core hashers ──────────────────────────────────────────────────────────
+
+function hashStream(filepath, start, end) {
+  // end is exclusive. Pass null for "to EOF".
+  return new Promise((resolve, reject) => {
+    const md5 = crypto.createHash('md5');
+    const opts = { start };
+    if (end != null) { opts.end = end - 1; }  // fs.createReadStream end is inclusive
+    const stream = fs.createReadStream(filepath, opts);
+    stream.on('data', chunk => md5.update(chunk));
+    stream.on('error', reject);
+    stream.on('end', () => resolve(md5.digest('hex')));
+  });
+}
+
+// Hash the concatenation of a list of byte ranges from a file.
+// Ranges are given as [start, end) pairs in file order.
+async function hashRanges(filepath, ranges) {
+  const md5 = crypto.createHash('md5');
+  for (const [start, end] of ranges) {
+    if (end <= start) { continue; }
+    await new Promise((resolve, reject) => {
+      const stream = fs.createReadStream(filepath, { start, end: end - 1 });
+      stream.on('data', chunk => md5.update(chunk));
+      stream.on('error', reject);
+      stream.on('end', resolve);
+    });
+  }
+  return md5.digest('hex');
+}
+
+export function fileHashOf(filepath) {
+  return hashStream(filepath, 0, null);
+}
+
+// ── Extractors: each returns an array of [start, end) ranges, or null
+// when the format isn't recognised or no audio payload can be identified.
+
+// MP3 & AAC (ADTS): strip ID3v2 prefix + ID3v1 suffix + APEv2 suffix.
+//
+// ID3v2 header at offset 0:
+//   bytes 0..2: "ID3"
+//   byte  5:    flags (bit 0x10 = footer present)
+//   bytes 6..9: synchsafe 32-bit tag size (excluding header/footer)
+// Audio starts at 10 + tagSize (+ 10 more if footer flag set).
+//
+// ID3v1 footer: exactly 128 bytes at EOF starting with "TAG".
+// APEv2 footer: 32-byte footer with "APETAGEX" signature, optionally
+//   followed by an ID3v1 block. Header-present flag in the flags word
+//   adds another 32 bytes to the strip size.
+async function mp3OrAacAudioRange(filepath, fileSize) {
+  if (fileSize < 10) { return null; }
+
+  const fd = await fsp.open(filepath, 'r');
+  try {
+    const head = Buffer.alloc(10);
+    await fd.read(head, 0, 10, 0);
+
+    let start = 0;
+    if (head[0] === 0x49 /*I*/ && head[1] === 0x44 /*D*/ && head[2] === 0x33 /*3*/) {
+      const tagSize = ((head[6] & 0x7f) << 21)
+                    | ((head[7] & 0x7f) << 14)
+                    | ((head[8] & 0x7f) << 7)
+                    |  (head[9] & 0x7f);
+      start = 10 + tagSize;
+      if (head[5] & 0x10) { start += 10; }  // footer flag
+    }
+
+    let end = fileSize;
+    if (fileSize >= 128) {
+      const trailer = Buffer.alloc(3);
+      await fd.read(trailer, 0, 3, fileSize - 128);
+      if (trailer[0] === 0x54 && trailer[1] === 0x41 && trailer[2] === 0x47) {
+        end = fileSize - 128;
+      }
+    }
+
+    // APEv2 probe: signature at (end - 32).
+    if (end >= 32) {
+      const apeHdr = Buffer.alloc(32);
+      await fd.read(apeHdr, 0, 32, end - 32);
+      if (apeHdr.toString('latin1', 0, 8) === 'APETAGEX') {
+        const sz = apeHdr.readUInt32LE(12);
+        const flags = apeHdr.readUInt32LE(20);
+        const hasHeader = !!(flags & 0x80000000);
+        end -= sz + (hasHeader ? 32 : 0);
+      }
+    }
+
+    if (start >= end) { return null; }
+    return [[start, end]];
+  } finally {
+    await fd.close();
+  }
+}
+
+// FLAC: 4-byte "fLaC" magic followed by a chain of metadata blocks.
+// Each block header: 1 byte [last_flag:1 | block_type:7] + 3 bytes big-endian length.
+// Audio frames start immediately after the block whose last_flag is 1.
+async function flacAudioRange(filepath, fileSize) {
+  if (fileSize < 4) { return null; }
+
+  const fd = await fsp.open(filepath, 'r');
+  try {
+    const magic = Buffer.alloc(4);
+    await fd.read(magic, 0, 4, 0);
+    if (magic.toString('latin1') !== 'fLaC') { return null; }
+
+    let cursor = 4;
+    const blkHdr = Buffer.alloc(4);
+    while (cursor + 4 <= fileSize) {
+      await fd.read(blkHdr, 0, 4, cursor);
+      const last = (blkHdr[0] & 0x80) !== 0;
+      const len = (blkHdr[1] << 16) | (blkHdr[2] << 8) | blkHdr[3];
+      cursor += 4 + len;
+      if (last) { break; }
+      if (cursor > fileSize) { return null; }
+    }
+    if (cursor >= fileSize) { return null; }
+    return [[cursor, fileSize]];
+  } finally {
+    await fd.close();
+  }
+}
+
+// WAV (RIFF/WAVE): 12-byte outer header, then chunks. Each chunk:
+//   4-byte ASCII id + 4-byte LE size + payload (padded to even length).
+// We walk the chunk chain and return the payload of the `data` chunk.
+// LIST/INFO, ID3, bext, iXML, and similar metadata chunks are ignored.
+async function wavAudioRange(filepath, fileSize) {
+  if (fileSize < 12) { return null; }
+
+  const fd = await fsp.open(filepath, 'r');
+  try {
+    const hdr = Buffer.alloc(12);
+    await fd.read(hdr, 0, 12, 0);
+    if (hdr.toString('latin1', 0, 4) !== 'RIFF') { return null; }
+    if (hdr.toString('latin1', 8, 12) !== 'WAVE') { return null; }
+
+    let cursor = 12;
+    const chunkHdr = Buffer.alloc(8);
+    while (cursor + 8 <= fileSize) {
+      await fd.read(chunkHdr, 0, 8, cursor);
+      const id   = chunkHdr.toString('latin1', 0, 4);
+      const size = chunkHdr.readUInt32LE(4);
+      const payloadStart = cursor + 8;
+      const payloadEnd   = Math.min(payloadStart + size, fileSize);
+      if (id === 'data') { return [[payloadStart, payloadEnd]]; }
+      // WAV chunks are word-aligned: odd-length payloads have a pad byte.
+      cursor = payloadStart + size + (size & 1);
+    }
+    return null;
+  } finally {
+    await fd.close();
+  }
+}
+
+// Ogg (Vorbis, Opus, FLAC-in-Ogg): logical stream of Ogg pages, each with
+// a 27-byte fixed header + variable segment table + payload.
+//
+// Tag payloads live in "header" packets that occur before the first
+// audio packet. Those header packets terminate with granule_position = 0
+// (they produce no samples); continuation pages for multi-page headers
+// use granule_position = -1 ("no packets finish on this page").
+//
+// Rule: skip every page until the first one with granule_position > 0
+// (the first page whose audio packet finishes within it). From there to
+// EOF, hash PAYLOADS ONLY — page headers carry page_sequence_number and
+// CRC, both of which drift when preceding header pages change size.
+async function oggAudioRange(filepath, fileSize) {
+  if (fileSize < 27) { return null; }
+
+  const fd = await fsp.open(filepath, 'r');
+  try {
+    const ranges = [];
+    let audioStarted = false;
+    let cursor = 0;
+    const pageHdr = Buffer.alloc(27);
+
+    while (cursor + 27 <= fileSize) {
+      await fd.read(pageHdr, 0, 27, cursor);
+      if (pageHdr.toString('latin1', 0, 4) !== 'OggS') { break; }
+      const granule = pageHdr.readBigInt64LE(6);
+      const pageSegments = pageHdr[26];
+      const segTable = Buffer.alloc(pageSegments);
+      await fd.read(segTable, 0, pageSegments, cursor + 27);
+      let payloadSize = 0;
+      for (let i = 0; i < pageSegments; i++) { payloadSize += segTable[i]; }
+      const payloadStart = cursor + 27 + pageSegments;
+      const payloadEnd   = payloadStart + payloadSize;
+      if (payloadEnd > fileSize) { return null; }  // truncated file
+
+      if (audioStarted) {
+        ranges.push([payloadStart, payloadEnd]);
+      } else if (granule > 0n) {
+        audioStarted = true;
+        ranges.push([payloadStart, payloadEnd]);
+      }
+      // granule === 0n or -1n → pre-audio header region, skip.
+
+      cursor = payloadEnd;
+    }
+
+    return ranges.length > 0 ? ranges : null;
+  } finally {
+    await fd.close();
+  }
+}
+
+// MP4 / M4A / M4B: ISO base media atom tree. Each atom is
+//   4-byte BE size + 4-byte type + payload.
+// Size == 1 means a 64-bit extended size immediately follows.
+// Size == 0 means "extends to end of file" (rare, used for streaming).
+//
+// Audio samples live in the `mdat` atom; tags live in
+// `moov/udta/meta/ilst` (among other places inside `moov`). Hashing
+// just `mdat` keeps audio_hash stable across any metadata-only edit.
+//
+// Some files have multiple `mdat` atoms (fragmented MP4). We hash all
+// of them in file order; the concatenation stays stable under tag edits.
+async function mp4AudioRange(filepath, fileSize) {
+  if (fileSize < 8) { return null; }
+
+  const fd = await fsp.open(filepath, 'r');
+  try {
+    const ranges = [];
+    let cursor = 0;
+    const atomHdr = Buffer.alloc(16);  // room for extended 64-bit size
+
+    while (cursor + 8 <= fileSize) {
+      await fd.read(atomHdr, 0, Math.min(16, fileSize - cursor), cursor);
+      const sz32 = atomHdr.readUInt32BE(0);
+      const type = atomHdr.toString('latin1', 4, 8);
+
+      let headerLen;
+      let atomEnd;
+      if (sz32 === 1) {
+        // 64-bit extended size at bytes 8..15.
+        const szHi = atomHdr.readUInt32BE(8);
+        const szLo = atomHdr.readUInt32BE(12);
+        const sz64 = szHi * 0x100000000 + szLo;
+        headerLen = 16;
+        atomEnd = cursor + sz64;
+      } else if (sz32 === 0) {
+        headerLen = 8;
+        atomEnd = fileSize;  // extends to EOF
+      } else {
+        headerLen = 8;
+        atomEnd = cursor + sz32;
+      }
+      // Malformed-size guards. `atomEnd < cursor + headerLen` catches
+      // size fields smaller than the header itself (pathological). Empty
+      // payload (atomEnd === cursor + headerLen, e.g. an 8-byte `free`
+      // padding atom) is legitimate and we just advance past it.
+      if (atomEnd > fileSize || atomEnd < cursor + headerLen) { break; }
+
+      if (type === 'mdat' && atomEnd > cursor + headerLen) {
+        ranges.push([cursor + headerLen, atomEnd]);
+      }
+      cursor = atomEnd;
+    }
+
+    return ranges.length > 0 ? ranges : null;
+  } finally {
+    await fd.close();
+  }
+}
+
+// ── Public entry point ────────────────────────────────────────────────────
+
+const EXTRACTORS = {
+  mp3:  mp3OrAacAudioRange,
+  aac:  mp3OrAacAudioRange,
+  flac: flacAudioRange,
+  wav:  wavAudioRange,
+  ogg:  oggAudioRange,
+  opus: oggAudioRange,
+  m4a:  mp4AudioRange,
+  m4b:  mp4AudioRange,
+  mp4:  mp4AudioRange,
+};
+
+/**
+ * Compute both hashes for a file in a single pass.
+ *
+ * @param {string} filepath
+ * @returns {Promise<{fileHash: string, audioHash: string|null, format: string|null}>}
+ */
+export async function computeHashes(filepath) {
+  const stat = await fsp.stat(filepath);
+  const fileSize = stat.size;
+  const fileHash = await hashStream(filepath, 0, null);
+
+  const ext = path.extname(filepath).slice(1).toLowerCase();
+  const extractor = EXTRACTORS[ext];
+  if (!extractor) {
+    return { fileHash, audioHash: null, format: null };
+  }
+
+  let ranges;
+  try { ranges = await extractor(filepath, fileSize); }
+  catch { return { fileHash, audioHash: null, format: ext }; }
+
+  if (!ranges || !ranges.length) { return { fileHash, audioHash: null, format: ext }; }
+
+  const audioHash = await hashRanges(filepath, ranges);
+  return { fileHash, audioHash, format: ext };
+}
+
+/**
+ * Convenience: pick the best identity key for a track.
+ * Preference: audio_hash (stable across tag edits), fall back to file_hash
+ * (what older rows use and what formats we don't parse yet emit).
+ */
+export function canonicalHash(track) {
+  if (!track) { return null; }
+  return track.audio_hash || track.file_hash || null;
+}
