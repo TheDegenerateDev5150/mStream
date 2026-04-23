@@ -11,6 +11,7 @@ import Joi from 'joi';
 import { Jimp } from 'jimp';
 import mime from 'mime-types';
 import { migrateHashReferences as migrateHashRefsShared } from './hash-migration.js';
+import { extractLyrics, sidecarMtime as probeLyricsSidecarMtime } from './lyrics-extraction.js';
 import { computeHashes } from './audio-hash.js';
 import { extractArtists, chooseAlbumArtistId } from './artist-extraction.js';
 import { migrateAlbumStars } from './album-migration.js';
@@ -64,7 +65,8 @@ const stmts = {
   // Capture album_id alongside the hashes so we can migrate
   // user_album_stars when a compilation collapses.
   getTrack: db.prepare(
-    'SELECT id, modified, file_hash, audio_hash, album_id FROM tracks WHERE filepath = ? AND library_id = ?'
+    `SELECT id, modified, file_hash, audio_hash, album_id, lyrics_sidecar_mtime
+       FROM tracks WHERE filepath = ? AND library_id = ?`
   ),
   updateScanId: db.prepare(
     'UPDATE tracks SET scan_id = ? WHERE id = ?'
@@ -96,8 +98,10 @@ const stmts = {
   insertTrack: db.prepare(
     `INSERT OR REPLACE INTO tracks (filepath, library_id, title, artist_id, album_id, track_number,
      disc_number, year, duration, format, file_hash, audio_hash, album_art_file, genre,
-     replaygain_track_db, sample_rate, channels, bit_depth, modified, scan_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     replaygain_track_db, sample_rate, channels, bit_depth,
+     lyrics_embedded, lyrics_synced_lrc, lyrics_lang, lyrics_sidecar_mtime,
+     modified, scan_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ),
   // V17: M2M artist-link maintenance. Album-artists use INSERT OR IGNORE
   // so the same album getting re-walked by multiple tracks doesn't pile
@@ -305,12 +309,25 @@ async function parseMyFile(absolutePath, modified) {
     // for the rules. Stored as a sub-object so `insertTrack` can pull it
     // without re-parsing.
     songInfo.artistInfo = extractArtists(parsed.common);
+    // V19: lyrics from embedded tags + sibling sidecars. Returns the
+    // four tracks.lyrics_* column values flat; insertTrack binds them
+    // directly. Kept in a sub-object for the same reason as artistInfo.
+    songInfo.lyricsInfo = extractLyrics(parsed.common, absolutePath);
   } catch (err) {
     console.error(`Warning: metadata parse error on ${absolutePath}: ${err.message}`);
     songInfo = { track: { no: null, of: null }, disk: { no: null, of: null }, duration: null,
                  sampleRate: null, channels: null, bitDepth: null,
                  artistInfo: { trackArtists: [], albumArtists: [], isCompilation: false,
-                               trackArtistDisplay: '', albumArtistDisplay: null } };
+                               trackArtistDisplay: '', albumArtistDisplay: null },
+                 lyricsInfo: { lyricsEmbedded: null, lyricsSyncedLrc: null,
+                               lyricsLang: null, lyricsSidecarMtime: null } };
+  }
+  // Even if the tag parse failed we may still have a usable sidecar —
+  // the extractor tolerates a null `common` gracefully, so run it
+  // again on the error path so `foo.flac` + `foo.lrc` still surfaces
+  // lyrics when the flac itself has corrupt tag frames.
+  if (!songInfo.lyricsInfo) {
+    songInfo.lyricsInfo = extractLyrics(songInfo, absolutePath);
   }
 
   songInfo.modified = modified;
@@ -370,6 +387,10 @@ function insertTrack(song) {
     ai.isCompilation,
   );
 
+  const li = song.lyricsInfo || {
+    lyricsEmbedded: null, lyricsSyncedLrc: null,
+    lyricsLang: null, lyricsSidecarMtime: null,
+  };
   const result = stmts.insertTrack.run(
     song.filePath,
     loadJson.libraryId,
@@ -389,6 +410,10 @@ function insertTrack(song) {
     song.sampleRate || null,
     song.channels || null,
     song.bitDepth || null,
+    li.lyricsEmbedded,
+    li.lyricsSyncedLrc,
+    li.lyricsLang,
+    li.lyricsSidecarMtime,
     song.modified,
     loadJson.scanId
   );
@@ -485,7 +510,15 @@ async function recursiveScan(dir) {
         const relativePath = path.relative(loadJson.directory, filepath).replace(/\\/g, '/');
         const existing = stmts.getTrack.get(relativePath, loadJson.libraryId);
 
-        if (existing && existing.modified === stat.mtime.getTime() && !loadJson.forceRescan) {
+        // Fast-path: audio file unchanged. Still re-read if a sidecar
+        // `.lrc` / `.txt` was edited (drift between stored mtime and
+        // on-disk) — sidecars are the only lyrics source the audio
+        // file's own mtime doesn't cover.
+        const sidecarCurrentMtime = probeLyricsSidecarMtime(filepath);
+        const sidecarDrifted =
+          (existing?.lyrics_sidecar_mtime || null) !== (sidecarCurrentMtime || null);
+
+        if (existing && existing.modified === stat.mtime.getTime() && !loadJson.forceRescan && !sidecarDrifted) {
           // File unchanged — just update the scan ID
           stmts.updateScanId.run(loadJson.scanId, existing.id);
         } else {

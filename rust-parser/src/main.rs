@@ -274,9 +274,12 @@ fn process_one(
     // counts, bookmarks, play queue) if the track's canonical identity
     // changed on re-parse — typical trigger is an external ID3 tag editor.
     // Also captures the existing track's album_id so we can migrate
-    // user_album_stars on the V17 compilation-collapse path.
-    let existing: Option<(i64, i64, String, String, Option<i64>)> = conn.prepare_cached(
-        "SELECT id, modified, file_hash, audio_hash, album_id FROM tracks WHERE filepath = ? AND library_id = ?"
+    // user_album_stars on the V17 compilation-collapse path. lyrics
+    // sidecar mtime (V19) lets us re-read a track whose audio file
+    // didn't change but whose .lrc / .txt sidecar got edited.
+    let existing: Option<(i64, i64, String, String, Option<i64>, Option<i64>)> = conn.prepare_cached(
+        "SELECT id, modified, file_hash, audio_hash, album_id, lyrics_sidecar_mtime
+           FROM tracks WHERE filepath = ? AND library_id = ?"
     )?.query_row(rusqlite::params![rel_path, config.library_id], |row| {
         Ok((
             row.get(0)?,
@@ -284,12 +287,19 @@ fn process_one(
             row.get::<_, Option<String>>(2)?.unwrap_or_default(),
             row.get::<_, Option<String>>(3)?.unwrap_or_default(),
             row.get::<_, Option<i64>>(4)?,
+            row.get::<_, Option<i64>>(5)?,
         ))
     }).ok();
 
+    // Probe sidecars BEFORE the fast-path decision so a drift between
+    // the stored mtime and what's on disk triggers a re-read.
+    let current_sidecar_mtime = sidecar_mtime(filepath);
+
     let (old_hash, old_audio_hash, old_album_id): (Option<String>, Option<String>, Option<i64>) =
-        if let Some((id, existing_mod, old_file, old_audio, old_album)) = &existing {
-            if *existing_mod == mod_time && !config.force_rescan {
+        if let Some((id, existing_mod, old_file, old_audio, old_album, old_sidecar_mtime)) = &existing {
+            let audio_unchanged = *existing_mod == mod_time;
+            let sidecar_drifted = *old_sidecar_mtime != current_sidecar_mtime;
+            if audio_unchanged && !config.force_rescan && !sidecar_drifted {
                 // Unchanged — just update scan_id
                 conn.execute("UPDATE tracks SET scan_id = ? WHERE id = ?",
                     rusqlite::params![config.scan_id, id])?;
@@ -328,6 +338,15 @@ fn process_one(
     let mut album_artists_multi: Vec<String> = Vec::new();
     let mut track_artists_multi: Vec<String> = Vec::new();
     let mut is_compilation = false;
+
+    // V19: lyrics. Populated by the lofty block below from ItemKey::Lyrics
+    // + ItemKey::LyricsLanguage (unsynced + language), then overlaid by
+    // the sibling `<basename>.lrc` / `.txt` sidecar probe. See
+    // src/db/lyrics-extraction.js for the JS mirror — same precedence,
+    // same language normalisation.
+    let mut lyrics_embedded: Option<String> = None;
+    let mut lyrics_synced_lrc: Option<String> = None;
+    let mut lyrics_lang: Option<String> = None;
 
     // Use Relaxed parsing so malformed frames (e.g. odd-length UTF-16 strings,
     // invalid year lengths) get dropped individually instead of failing the
@@ -392,6 +411,27 @@ fn process_one(
                     .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
                     .unwrap_or(false);
 
+                // V19: embedded lyrics. lofty exposes USLT / SYLT / Vorbis
+                // LYRICS / MP4 ©lyr / APE Lyrics under ItemKey::Lyrics. We
+                // have no easy way to pull ID3v2 SYLT structured timings
+                // through the unified API (lofty treats it as opaque
+                // non-text), so for synced we lean on sidecar .lrc files —
+                // which is by far the more common distribution channel
+                // anyway. Language comes from ItemKey::Language when
+                // present (ID3v2 USLT's 3-char field).
+                if let Some(t) = tag.get_string(&ItemKey::Lyrics) {
+                    let s = t.trim();
+                    if !s.is_empty() {
+                        if looks_like_lrc(s) {
+                            lyrics_synced_lrc = Some(s.to_string());
+                        } else {
+                            lyrics_embedded = Some(s.to_string());
+                        }
+                    }
+                }
+                if let Some(lang) = tag.get_string(&ItemKey::Language) {
+                    lyrics_lang = normalise_lang(lang);
+                }
             }
         }
         Err(e) => {
@@ -408,6 +448,31 @@ fn process_one(
         artist.as_deref(),
         &track_artists_multi,
     );
+
+    // V19: sidecar lyrics — only consulted when we haven't already got a
+    // synced variant from the tag. Mirrors the JS extractor's precedence
+    // (embedded synced > sidecar .lrc > embedded plain > sidecar .txt).
+    if lyrics_synced_lrc.is_none() {
+        if let Some((text, lang)) = read_lrc_sidecar(filepath) {
+            lyrics_synced_lrc = Some(text);
+            if lyrics_lang.is_none() {
+                lyrics_lang = lang.and_then(|l| normalise_lang(&l));
+            }
+        }
+    }
+    if lyrics_synced_lrc.is_none() && lyrics_embedded.is_none() {
+        if let Some(text) = read_txt_sidecar(filepath) {
+            if looks_like_lrc(&text) {
+                lyrics_synced_lrc = Some(text);
+            } else {
+                lyrics_embedded = Some(text);
+            }
+        }
+    }
+    // sidecar_mtime_val: the probe-time value is what we store, whether
+    // or not we ended up reading those bytes. The DB stores "newest
+    // sidecar mtime seen" — a tag-only track whose sibling later gains
+    // an .lrc still triggers re-read on the next scan.
 
 
     if aa_file.is_none() && !config.skip_img {
@@ -485,12 +550,15 @@ fn process_one(
     conn.execute(
         "INSERT OR REPLACE INTO tracks (filepath, library_id, title, artist_id, album_id, track_number,
          disc_number, year, duration, format, file_hash, audio_hash, album_art_file, genre,
-         replaygain_track_db, sample_rate, channels, bit_depth, modified, scan_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         replaygain_track_db, sample_rate, channels, bit_depth,
+         lyrics_embedded, lyrics_synced_lrc, lyrics_lang, lyrics_sidecar_mtime,
+         modified, scan_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rusqlite::params![
             rel_path, config.library_id, title, primary_track_artist_id, album_id,
             track_num, disc_num, year, duration_sec, ext, hash, audio_hash,
             aa_file, genre, rg_track_db, sample_rate, channels, bit_depth,
+            lyrics_embedded, lyrics_synced_lrc, lyrics_lang, current_sidecar_mtime,
             mod_time, config.scan_id
         ],
     )?;
@@ -763,6 +831,114 @@ fn resolve_track_artists(scalar: Option<&str>, multi: &[String]) -> Vec<String> 
 
 fn resolve_album_artists(scalar: Option<&str>, multi: &[String]) -> Vec<String> {
     resolve_artists_list(scalar, multi)
+}
+
+// ── Lyrics helpers (V19) ────────────────────────────────────────────────────
+//
+// Mirrors src/db/lyrics-extraction.js — keep the filename probe order
+// and the language normalisation table byte-identical. Any change here
+// MUST land on the JS side too.
+
+const LYRICS_LANG_PROBE: &[&str] = &[
+    "", "en", "eng", "ja", "jpn", "zh", "zho", "ko", "kor",
+    "de", "deu", "fr", "fra", "es", "spa", "it", "ita",
+    "pt", "por", "ru", "rus",
+];
+
+fn normalise_lang(raw: &str) -> Option<String> {
+    let s = raw.trim().to_lowercase();
+    if s.is_empty() { return None; }
+    if s.len() == 2 { return Some(s); }
+    let mapped = match s.as_str() {
+        "eng" => "en", "jpn" => "ja", "zho" => "zh", "kor" => "ko",
+        "deu" => "de", "fra" => "fr", "spa" => "es", "ita" => "it",
+        "por" => "pt", "rus" => "ru", "ara" => "ar", "hin" => "hi",
+        _ => return Some(s),
+    };
+    Some(mapped.to_string())
+}
+
+// Quick "is this LRC?" heuristic — matches any line whose first
+// non-whitespace run is a `[mm:ss]` or `[mm:ss.xx]` timestamp.
+fn looks_like_lrc(text: &str) -> bool {
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with('[') { continue; }
+        // Walk after the '['; we need `digit(s):digit(2)(.digits)?]`.
+        let after = &trimmed[1..];
+        let colon = match after.find(':') { Some(i) => i, None => continue };
+        let mm = &after[..colon];
+        if mm.is_empty() || !mm.chars().all(|c| c.is_ascii_digit()) { continue; }
+        let rest = &after[colon + 1..];
+        let close = match rest.find(']') { Some(i) => i, None => continue };
+        let ss = &rest[..close];
+        let ss_digits = ss.bytes().take_while(|b| b.is_ascii_digit()).count();
+        if ss_digits >= 1 { return true; }
+    }
+    false
+}
+
+// Newest mtime across `<base>.lrc`, `<base>.<lang>.lrc`, `<base>.txt`
+// siblings, in ms epoch. None if no sidecar exists. Called by both
+// the fast-path drift check (early in scan_file) and the full probe.
+fn sidecar_mtime(audio_path: &Path) -> Option<i64> {
+    let dir = audio_path.parent()?;
+    let base = audio_path.file_stem()?.to_string_lossy().to_string();
+    let mut newest: Option<i64> = None;
+    let push = |candidate: PathBuf, newest: &mut Option<i64>| {
+        if let Ok(meta) = fs::metadata(&candidate) {
+            if meta.is_file() {
+                if let Ok(modified) = meta.modified() {
+                    if let Ok(dur) = modified.duration_since(std::time::UNIX_EPOCH) {
+                        let ms = dur.as_millis() as i64;
+                        if newest.map(|n| ms > n).unwrap_or(true) { *newest = Some(ms); }
+                    }
+                }
+            }
+        }
+    };
+    for suffix in LYRICS_LANG_PROBE {
+        let name = if suffix.is_empty() {
+            format!("{}.lrc", base)
+        } else {
+            format!("{}.{}.lrc", base, suffix)
+        };
+        push(dir.join(name), &mut newest);
+    }
+    push(dir.join(format!("{}.txt", base)), &mut newest);
+    newest
+}
+
+// Return (contents, inferred-language) for the first matching sidecar.
+// BOM is stripped — Windows LRC editors add one and it breaks the first
+// line's timestamp parse.
+fn read_lrc_sidecar(audio_path: &Path) -> Option<(String, Option<String>)> {
+    let dir = audio_path.parent()?;
+    let base = audio_path.file_stem()?.to_string_lossy().to_string();
+    for suffix in LYRICS_LANG_PROBE {
+        let (name, lang) = if suffix.is_empty() {
+            (format!("{}.lrc", base), None)
+        } else {
+            (format!("{}.{}.lrc", base, suffix), Some((*suffix).to_string()))
+        };
+        if let Ok(text) = fs::read_to_string(dir.join(&name)) {
+            let clean = if text.starts_with('\u{FEFF}') { text[3..].to_string() } else { text };
+            if !clean.trim().is_empty() {
+                return Some((clean, lang));
+            }
+        }
+    }
+    None
+}
+
+fn read_txt_sidecar(audio_path: &Path) -> Option<String> {
+    let dir = audio_path.parent()?;
+    let base = audio_path.file_stem()?.to_string_lossy().to_string();
+    if let Ok(text) = fs::read_to_string(dir.join(format!("{}.txt", base))) {
+        let clean = if text.starts_with('\u{FEFF}') { text[3..].to_string() } else { text };
+        if !clean.trim().is_empty() { return Some(clean); }
+    }
+    None
 }
 
 // ── Genre helpers ────────────────────────────────────────────────────────────

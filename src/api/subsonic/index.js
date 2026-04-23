@@ -117,6 +117,52 @@ export function listImplementedMethods() {
   return Object.keys(METHODS).sort();
 }
 
+// Per-method implementation status. Used by the admin panel to render
+// Full / Stub badges alongside the method name so an operator can tell
+// at a glance which endpoints actually DO something vs. which return a
+// decline-shaped empty envelope.
+//
+//   'full' — real data, real behaviour
+//   'stub' — well-formed response but always empty (no backend feature)
+//
+// Missing entries default to 'full' — add a row here when you land a
+// new stub so the card stays accurate. Declined-at-the-router methods
+// (returning error 70 because they're not in METHODS) never reach the
+// admin card so they don't need a status here.
+const METHOD_STATUS = {
+  // Mood boards / catalogue features we deliberately don't implement;
+  // the handler returns an empty envelope so clients don't error out.
+  getInternetRadioStations: 'stub',
+  getPodcasts:              'stub',
+  getNewestPodcasts:        'stub',
+  getArtistInfo:            'stub',
+  getArtistInfo2:           'stub',
+  getAlbumInfo:             'stub',
+  getAlbumInfo2:            'stub',
+  getTopSongs:              'stub',
+  getSimilarSongs:          'stub',
+  getSimilarSongs2:         'stub',
+  getAvatar:                'stub',
+  // V19: lyrics went from 'stub' to 'full' once the scanner extracts
+  // embedded tags + sidecars and the handler serves real
+  // structuredLyrics entries. Kept here explicitly so a future editor
+  // auditing this table sees the move.
+  getLyrics:                'full',
+  getLyricsBySongId:        'full',
+};
+
+/**
+ * Returns `[{ name, status }]` for every implemented method, where
+ * `status` is one of 'full' | 'stub'. Consumed by the admin panel's
+ * API-surface card.
+ */
+export function methodStatusTable() {
+  return listImplementedMethods().map(name => ({
+    name,
+    status: METHOD_STATUS[name] || 'full',
+  }));
+}
+
 export function setup(mstream) {
   // Single handler for both `/rest/:method` and `/rest/:method.view`. We
   // normalise the method name (stripping any ".view"), look it up in the

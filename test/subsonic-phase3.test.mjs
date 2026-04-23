@@ -545,10 +545,16 @@ describe('Tier 3 stubs', () => {
     assert.deepEqual(env.podcasts.channel, []);
   });
 
-  test('getLyricsBySongId returns empty lyrics list', async () => {
+  test('getLyricsBySongId without id → error 10 (real handler now, not a stub)', async () => {
+    // Phase V19 turned this from an empty-envelope stub into a real
+    // handler that reads tracks.lyrics_* columns. The "no lyrics for
+    // this track" path still returns `lyricsList: { structuredLyrics: [] }`
+    // (covered by test/subsonic-lyrics.test.mjs); calling without an
+    // id now surfaces a missing-param error like every other
+    // id-indexed endpoint.
     const env = await call('getLyricsBySongId');
-    assert.equal(env.status, 'ok');
-    assert.deepEqual(env.lyricsList.structuredLyrics, []);
+    assert.equal(env.status, 'failed');
+    assert.equal(env.error.code, 10);
   });
 
   test('jukeboxControl is admin-only (role check)', async () => {

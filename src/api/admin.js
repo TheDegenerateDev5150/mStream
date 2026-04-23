@@ -13,7 +13,7 @@ import * as transcode from './transcode.js';
 import * as db from '../db/manager.js';
 import { joiValidate } from '../util/validation.js';
 import { bootRustPlayer, killRustPlayer, proxyToRust, getActiveBackend, getDetectedCliPlayers, refreshDetectedCliPlayers } from './server-playback.js';
-import { listImplementedMethods } from './subsonic/index.js';
+import { listImplementedMethods, methodStatusTable } from './subsonic/index.js';
 import { listTokenAuthAttempts, clearTokenAuthAttempts, generateApiKey } from './subsonic/auth.js';
 import * as nowPlaying from './subsonic/now-playing.js';
 
@@ -660,6 +660,9 @@ export function setup(mstream) {
   // Methods + now-playing snapshot, for the main status card.
   mstream.get('/api/v1/admin/subsonic/stats', (req, res) => {
     const methods = listImplementedMethods();
+    const methodStatuses = methodStatusTable();
+    const fullCount = methodStatuses.filter(m => m.status === 'full').length;
+    const stubCount = methodStatuses.length - fullCount;
     // Join now-playing entries to tracks so the admin UI can render
     // readable "who's listening to what" rows without re-resolving.
     const snap = nowPlaying.snapshot();
@@ -683,6 +686,12 @@ export function setup(mstream) {
     res.json({
       methodsImplemented: methods.length,
       methods,
+      // [{name, status: 'full' | 'stub'}] — lets the admin card show
+      // Full vs Stub badges next to each name. Older admin UIs just
+      // look at `methods` and ignore this.
+      methodStatuses,
+      fullCount,
+      stubCount,
       nowPlaying: byUserTrack,
     });
   });

@@ -3029,12 +3029,28 @@ const subsonicView = Vue.component('subsonic-view', {
                   Subsonic methods implemented
                 </span>
               </p>
-              <p style="color:#777"><small>Subsonic 1.16.1 + OpenSubsonic defines roughly 70 methods. The ones this server does not implement return a "method not found" error or an empty-envelope stub — see the decline list in docs/subsonic-phase3.md.</small></p>
+              <p v-if="stats.fullCount != null" style="color:#777;margin:0 0 4px">
+                <small>{{stats.fullCount}} fully implemented &middot; {{stats.stubCount}} stubbed (empty response — real feature not backed)</small>
+              </p>
+              <p style="color:#777"><small>Subsonic 1.16.1 + OpenSubsonic defines roughly 70 methods. The ones this server does not implement at all return a "method not found" error — see the decline list in docs/subsonic-phase3.md.</small></p>
               <a v-on:click="showMethodList = !showMethodList" class="btn-flat waves-effect" style="padding:0 8px">
                 {{showMethodList ? 'Hide' : 'Show'}} method list
               </a>
               <div v-if="showMethodList" style="margin-top:12px;max-height:220px;overflow-y:auto;background:#f5f5f5;padding:8px;border-radius:4px;font-family:monospace;font-size:12px">
-                <div v-for="m in stats.methods" :key="m">{{m}}</div>
+                <!-- New shape: per-method {name, status}. Fall back to the
+                     plain list on older server builds that don't emit it. -->
+                <div v-if="stats.methodStatuses && stats.methodStatuses.length">
+                  <div v-for="m in stats.methodStatuses" :key="m.name">
+                    <span v-if="m.status === 'stub'"
+                          style="display:inline-block;min-width:42px;background:#f0ad4e;color:#fff;padding:0 4px;border-radius:2px;margin-right:6px;font-size:10px;text-align:center;vertical-align:1px">STUB</span>
+                    <span v-else
+                          style="display:inline-block;min-width:42px;background:#5cb85c;color:#fff;padding:0 4px;border-radius:2px;margin-right:6px;font-size:10px;text-align:center;vertical-align:1px">FULL</span>
+                    {{m.name}}
+                  </div>
+                </div>
+                <div v-else>
+                  <div v-for="m in stats.methods" :key="m">{{m}}</div>
+                </div>
               </div>
             </div>
           </div>

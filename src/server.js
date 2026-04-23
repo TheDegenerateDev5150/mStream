@@ -35,6 +35,7 @@ import * as userApiKeysApi from './api/user-api-keys.js';
 import * as serverPlaybackApi from './api/server-playback.js';
 import * as albumArtApi from './api/album-art.js';
 import * as waveformApi from './api/waveform.js';
+import * as lyricsApi from './api/lyrics.js';
 // Velvet UI modules — dynamically imported only when ui='velvet' is active
 import WebError from './util/web-error.js';
 
@@ -247,6 +248,7 @@ export async function serveIt(configFile) {
   ytdlApi.setup(mstream);
   albumArtApi.setup(mstream);
   waveformApi.setup(mstream);
+  lyricsApi.setup(mstream);
   serverPlaybackApi.setup(mstream);
   userApiKeysApi.setup(mstream);
 

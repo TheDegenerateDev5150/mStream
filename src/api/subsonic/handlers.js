@@ -29,6 +29,7 @@ import { serveAlbumArtFile } from '../album-art.js';
 import * as serverPlayback from '../server-playback.js';
 import { sendOk, sendError, SubErr } from './response.js';
 import * as nowPlaying from './now-playing.js';
+import { parseLrc, linesToPlainText, plainTextToLines } from './lrc-parser.js';
 import { identiconFor } from './identicon.js';
 
 // ── Common helpers ──────────────────────────────────────────────────────────
@@ -2332,13 +2333,137 @@ export function getPodcasts(req, res) {
 export function getNewestPodcasts(req, res) {
   sendOk(req, res, { newestPodcasts: { episode: [] } });
 }
+// Internal: resolve a track row with its lyrics columns, scoped to the
+// libraries the current user can see. Returns null if the row doesn't
+// exist, the user can't see it, or no `artist`/`title` match.
+function lyricsRowByArtistTitle(req, artist, title) {
+  if (!artist || !title) { return null; }
+  const { clause, params } = libraryScope(req);
+  // Case-insensitive exact match on the artist row name + title.
+  // Clients (DSub, Jamstash) often send the joined-with-featuring
+  // display string — tolerate a substring match on either side so
+  // `"The Beatles"` finds `"the beatles"`, and `"Yesterday"` finds
+  // `"Yesterday (Remastered 2009)"`.
+  return db.getDB().prepare(`
+    SELECT t.id, t.title, t.lyrics_embedded, t.lyrics_synced_lrc, t.lyrics_lang,
+           a.name AS artist_name
+    FROM tracks t
+    LEFT JOIN artists a ON a.id = t.artist_id
+    WHERE ${clause}
+      AND LOWER(a.name)  LIKE '%' || LOWER(?) || '%'
+      AND LOWER(t.title) LIKE '%' || LOWER(?) || '%'
+      AND (t.lyrics_embedded IS NOT NULL OR t.lyrics_synced_lrc IS NOT NULL)
+    ORDER BY
+      CASE WHEN LOWER(a.name)  = LOWER(?) THEN 0 ELSE 1 END,
+      CASE WHEN LOWER(t.title) = LOWER(?) THEN 0 ELSE 1 END,
+      t.id
+    LIMIT 1
+  `).get(...params, artist, title, artist, title);
+}
+
+function lyricsRowById(req, trackId) {
+  const { clause, params } = libraryScope(req);
+  return db.getDB().prepare(`
+    SELECT t.id, t.title, t.lyrics_embedded, t.lyrics_synced_lrc, t.lyrics_lang,
+           a.name AS artist_name
+    FROM tracks t
+    LEFT JOIN artists a ON a.id = t.artist_id
+    WHERE t.id = ? AND ${clause}
+  `).get(trackId, ...params);
+}
+
+// Build a Subsonic-spec `structuredLyrics` entry from our stored
+// columns. `variant` picks which side to emit:
+//   'synced' → parse LRC, emit one `<line start="ms">` per line
+//   'plain'  → split on \n, emit one `<line>` per line, no start attr
+// When the requested variant isn't available, returns null.
+function structuredLyricsFromRow(row, variant) {
+  if (!row) { return null; }
+  if (variant === 'synced') {
+    if (!row.lyrics_synced_lrc) { return null; }
+    const parsed = parseLrc(row.lyrics_synced_lrc);
+    if (!parsed.lines.length) { return null; }
+    return {
+      lang:          row.lyrics_lang || 'xxx',  // OpenSubsonic "unspecified"
+      synced:        true,
+      displayArtist: row.artist_name || undefined,
+      displayTitle:  row.title       || undefined,
+      offset:        parsed.offsetMs || undefined,
+      // `start` is the spec's ms offset; omit on instrumental-break
+      // blanks so clients can choose to hide or show them.
+      line: parsed.lines.map(l => ({
+        start: l.time_ms,
+        value: l.text || '',
+      })),
+    };
+  }
+  // plain
+  if (!row.lyrics_embedded) { return null; }
+  const plain = plainTextToLines(row.lyrics_embedded);
+  return {
+    lang:          row.lyrics_lang || 'xxx',
+    synced:        false,
+    displayArtist: row.artist_name || undefined,
+    displayTitle:  row.title       || undefined,
+    line: plain.lines.map(l => ({ value: l.text })),
+  };
+}
+
+// Subsonic 1.2 getLyrics. Plain-text single `<lyrics>` envelope, no
+// timing info — if the track has only synced lyrics we flatten them.
 export function getLyrics(req, res) {
-  // No lyrics ingestion yet — see docs/subsonic-phase3.md Tier 3.
-  sendOk(req, res, { lyrics: { value: '' } });
+  const artist = req.query.artist ? String(req.query.artist).trim() : '';
+  const title  = req.query.title  ? String(req.query.title).trim()  : '';
+  if (!title) { return SubErr.MISSING_PARAM(req, res, 'title'); }
+
+  const row = lyricsRowByArtistTitle(req, artist, title);
+  // Spec: return an empty `<lyrics/>` element if the lookup fails —
+  // clients interpret that as "no lyrics available" rather than an
+  // error. Matches Airsonic/Navidrome behaviour.
+  let value = '';
+  let resolvedArtist = artist;
+  let resolvedTitle  = title;
+  if (row) {
+    resolvedArtist = row.artist_name || artist;
+    resolvedTitle  = row.title       || title;
+    if (row.lyrics_embedded) {
+      value = row.lyrics_embedded;
+    } else if (row.lyrics_synced_lrc) {
+      const parsed = parseLrc(row.lyrics_synced_lrc);
+      value = linesToPlainText(parsed.lines);
+    }
+  }
+  sendOk(req, res, {
+    lyrics: {
+      artist: resolvedArtist || undefined,
+      title:  resolvedTitle  || undefined,
+      value,
+    },
+  });
 }
+
+// OpenSubsonic getLyricsBySongId. Returns zero, one, or two
+// structuredLyrics entries — one synced, one plain — in preference
+// order (synced first). Clients pick whichever they can render.
 export function getLyricsBySongId(req, res) {
-  sendOk(req, res, { lyricsList: { structuredLyrics: [] } });
+  const parsed = decodeId(req.query.id, 'song');
+  if (!parsed) { return SubErr.MISSING_PARAM(req, res, 'id'); }
+  const row = lyricsRowById(req, parsed.id);
+  if (!row) { return SubErr.NOT_FOUND(req, res, 'Song'); }
+
+  const entries = [];
+  const synced = structuredLyricsFromRow(row, 'synced');
+  if (synced) { entries.push(synced); }
+  const plain = structuredLyricsFromRow(row, 'plain');
+  if (plain)  { entries.push(plain); }
+
+  sendOk(req, res, { lyricsList: { structuredLyrics: entries } });
 }
+
+// Internal helper exported for the new /api/v1/lyrics (Velvet-compatible)
+// endpoint — same SQL, same parser, different response envelope. Kept
+// here so callers don't have to re-import the LRC machinery.
+export { lyricsRowByArtistTitle, lyricsRowById };
 // ── Phase 4: Jukebox control ──────────────────────────────────────────────
 //
 // Backed by the rust-server-audio subsystem (src/api/server-playback.js).

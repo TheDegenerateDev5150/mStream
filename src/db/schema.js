@@ -1,7 +1,7 @@
 // SQLite schema definitions and migration system for mStream.
 // Uses PRAGMA user_version for tracking which migrations have been applied.
 
-export const SCHEMA_VERSION = 18;
+export const SCHEMA_VERSION = 19;
 
 export const SCHEMA_V1 = `
   -- Users
@@ -456,6 +456,47 @@ export const SCHEMA_V18 = `
     VALUES ('Various Artists', '89ad4ac3-39f7-470e-963a-56509c546377');
 `;
 
+export const SCHEMA_V19 = `
+  -- ── Lyrics storage ────────────────────────────────────────────────
+  --
+  -- Up to V18 the Subsonic getLyrics / getLyricsBySongId endpoints were
+  -- empty stubs. This migration gives the scanner four columns to park
+  -- whatever lyrics it finds at scan time, so the handlers can serve
+  -- them out without re-reading the audio file on every request.
+  --
+  --   lyrics_embedded       Plain-text unsynced lyrics from the tag
+  --                         (ID3v2 USLT, Vorbis LYRICS, MP4 '©lyr',
+  --                         APE Lyrics). NULL if no unsynced text.
+  --   lyrics_synced_lrc     LRC-format text (line-timed karaoke
+  --                         format). Populated from one of: ID3v2
+  --                         SYLT rendered back to LRC, a sibling
+  --                         <basename>.lrc sidecar, a multi-language
+  --                         <basename>.<lang>.lrc sidecar (first
+  --                         match wins; sidecars beat SYLT only when
+  --                         the tag had nothing). NULL otherwise.
+  --   lyrics_lang           ISO-639-1 language tag from USLT's 3-char
+  --                         language field (truncated) or the sidecar
+  --                         filename suffix. NULL when unknown — most
+  --                         clients treat that as "native".
+  --   lyrics_sidecar_mtime  ms-epoch mtime of the .lrc file we read,
+  --                         or NULL when no sidecar was present. Used
+  --                         by the next rescan to decide whether to
+  --                         re-read: sidecar mtime drifted → pick up
+  --                         the edit. Sidecars are the only lyrics
+  --                         source the scanner can notice changing
+  --                         independently of the audio file; embedded
+  --                         tags ride along with file_hash.
+  --
+  -- rescanRequired: true — populate these columns from the existing
+  -- library. Cheap: an extra fstat per track for the sidecar lookup,
+  -- piggy-backed on the readdir the scanner already does for album
+  -- art. No external fetches at scan time — that's Phase 3 / LRCLib.
+  ALTER TABLE tracks ADD COLUMN lyrics_embedded      TEXT;
+  ALTER TABLE tracks ADD COLUMN lyrics_synced_lrc    TEXT;
+  ALTER TABLE tracks ADD COLUMN lyrics_lang          TEXT;
+  ALTER TABLE tracks ADD COLUMN lyrics_sidecar_mtime INTEGER;
+`;
+
 // rescanRequired: true — marks migrations that change the tracks table schema
 // and need a force rescan to populate new fields. When applied, a marker file
 // is written so the next boot triggers rescanAll() instead of scanAll().
@@ -478,4 +519,5 @@ export const MIGRATIONS = [
   { version: 16, sql: SCHEMA_V16, rescanRequired: true },
   { version: 17, sql: SCHEMA_V17 },
   { version: 18, sql: SCHEMA_V18, rescanRequired: true },
+  { version: 19, sql: SCHEMA_V19, rescanRequired: true },
 ];
