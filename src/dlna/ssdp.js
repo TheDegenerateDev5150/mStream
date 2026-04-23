@@ -24,6 +24,14 @@ const CONFIG_ID = 1;
 let socket = null;
 let notifyTimer = null;
 
+// IPv4 addresses of interfaces we successfully joined the SSDP multicast
+// group on. Populated during bind(). `sendMessages()` rotates through
+// this list via setMulticastInterface() so NOTIFY / byebye announcements
+// go out on every interface, not just the default route's. Empty list
+// means "use whatever the socket's current default is" — matches
+// single-interface hosts and the pre-multi-NIC behaviour.
+let joinedInterfaces = [];
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 export function getLocalIp() {
@@ -132,11 +140,43 @@ function buildByebyeMessages() {
 
 function sendMessages(messages) {
   if (!socket) { return; }
-  for (const msg of messages) {
-    const buf = Buffer.from(msg, 'utf8');
-    socket.send(buf, 0, buf.length, SSDP_PORT, MULTICAST_ADDR, (err) => {
-      if (err) { winston.debug(`[dlna-ssdp] send error: ${err.message}`); }
-    });
+
+  // Single-interface / no interfaces enumerated: send once over the
+  // socket's default outbound interface. Preserves behaviour on hosts
+  // where the multi-NIC dance isn't needed (or impossible).
+  if (joinedInterfaces.length <= 1) {
+    for (const msg of messages) {
+      const buf = Buffer.from(msg, 'utf8');
+      socket.send(buf, 0, buf.length, SSDP_PORT, MULTICAST_ADDR, (err) => {
+        if (err) { winston.debug(`[dlna-ssdp] send error: ${err.message}`); }
+      });
+    }
+    return;
+  }
+
+  // Multi-NIC host: rotate through every interface we joined the group
+  // on. Without this, NOTIFY announcements leave only on the default
+  // route — a renderer sitting on a non-default interface (Docker
+  // bridge, secondary LAN, VPN) would never passively-discover us and
+  // would be stuck waiting for M-SEARCH cycles instead.
+  //
+  // setMulticastInterface() isn't atomic across sends — it mutates
+  // socket state and every queued send picks up the current value.
+  // We send one interface's batch synchronously before switching; any
+  // per-send error is logged at debug (same as the single-interface
+  // path) so a dead interface doesn't block the others.
+  for (const ifaceAddr of joinedInterfaces) {
+    try { socket.setMulticastInterface(ifaceAddr); }
+    catch (err) {
+      winston.debug(`[dlna-ssdp] setMulticastInterface(${ifaceAddr}): ${err.message}`);
+      continue;
+    }
+    for (const msg of messages) {
+      const buf = Buffer.from(msg, 'utf8');
+      socket.send(buf, 0, buf.length, SSDP_PORT, MULTICAST_ADDR, (err) => {
+        if (err) { winston.debug(`[dlna-ssdp] send error on ${ifaceAddr}: ${err.message}`); }
+      });
+    }
   }
 }
 
@@ -147,6 +187,18 @@ function sendAlive() {
 // ── M-SEARCH response ────────────────────────────────────────────────────────
 
 function handleSearch(msgStr, rinfo) {
+  // UPnP SSDP spec: an M-SEARCH MUST carry `MAN: "ssdp:discover"` (quoted).
+  // Responding to packets without it violates the spec and (more practically)
+  // means we'd reply to random multicast noise. Some enterprise network scanners
+  // fire bare M-SEARCH probes looking for any SSDP responder; they don't want
+  // or need our reply.
+  //
+  // We're liberal on the quoting (some sloppy clients omit it) but strict
+  // on the rest of the line — trailing garbage like `"ssdp:discoverexploit`
+  // must not match. `\s*$` with /m anchors to end-of-line.
+  const manMatch = msgStr.match(/^MAN:\s*"?ssdp:discover"?\s*$/im);
+  if (!manMatch) { return; }
+
   const stMatch = msgStr.match(/^ST:\s*(.+)$/im);
   if (!stMatch) { return; }
   const st = stMatch[1].trim();
@@ -209,7 +261,33 @@ export function start() {
     // Guard: if stop() was called before bind completed, don't proceed
     if (socket !== sock) { return; }
     try {
-      sock.addMembership(MULTICAST_ADDR);
+      // Join the multicast group on every non-internal IPv4 interface.
+      // Without explicit per-interface joins, Node binds the membership
+      // to the default route's interface only — on multi-NIC hosts
+      // (Docker bridge + LAN, VPN + LAN, two-NIC servers, WSL) renderers
+      // on non-default interfaces never see our NOTIFY/M-SEARCH traffic.
+      //
+      // Failure on any one interface is non-fatal (EADDRINUSE can happen
+      // when two processes share the group; some interface types don't
+      // support multicast). We log at debug and keep going. If zero joins
+      // succeed, fall back to the bare form — matches previous behaviour.
+      const ifaces = os.networkInterfaces();
+      joinedInterfaces = [];
+      for (const name of Object.keys(ifaces)) {
+        for (const iface of ifaces[name]) {
+          if (iface.family !== 'IPv4' || iface.internal) { continue; }
+          try {
+            sock.addMembership(MULTICAST_ADDR, iface.address);
+            joinedInterfaces.push(iface.address);
+          } catch (err) {
+            winston.debug(`[dlna-ssdp] addMembership(${iface.address}): ${err.message}`);
+          }
+        }
+      }
+      if (joinedInterfaces.length === 0) {
+        // Nothing enumerated or every per-interface join failed — last resort.
+        sock.addMembership(MULTICAST_ADDR);
+      }
       sock.setMulticastTTL(4);
     } catch (err) {
       winston.warn(`[dlna-ssdp] Multicast setup: ${err.message}`);
@@ -223,7 +301,7 @@ export function start() {
 
 export function stop() {
   if (notifyTimer) { clearInterval(notifyTimer); notifyTimer = null; }
-  if (!socket) { return; }
+  if (!socket) { joinedInterfaces = []; return; }
 
   const sock = socket;
   socket = null; // prevent any new sends from start() or timers
@@ -234,12 +312,24 @@ export function stop() {
   function closeWhenDone() {
     if (--remaining === 0) {
       try { sock.close(); } catch (_) {}
+      joinedInterfaces = [];
       winston.info('[dlna-ssdp] Stopped');
     }
   }
 
-  for (const msg of messages) {
-    const buf = Buffer.from(msg, 'utf8');
-    sock.send(buf, 0, buf.length, SSDP_PORT, MULTICAST_ADDR, () => closeWhenDone());
+  // Mirror sendMessages()'s interface fan-out for the byebye batch so
+  // renderers on every interface see us leave — otherwise stale entries
+  // linger in their UI until CACHE-CONTROL max-age expires.
+  const ifaces = joinedInterfaces.length > 1 ? joinedInterfaces : [null];
+  remaining = messages.length * ifaces.length;
+  for (const ifaceAddr of ifaces) {
+    if (ifaceAddr) {
+      try { sock.setMulticastInterface(ifaceAddr); }
+      catch (_) { /* fall through, still send on current default */ }
+    }
+    for (const msg of messages) {
+      const buf = Buffer.from(msg, 'utf8');
+      sock.send(buf, 0, buf.length, SSDP_PORT, MULTICAST_ADDR, () => closeWhenDone());
+    }
   }
 }
