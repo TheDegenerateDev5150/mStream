@@ -306,13 +306,23 @@ export function stop() {
   const sock = socket;
   socket = null; // prevent any new sends from start() or timers
 
+  // Snapshot the interface list and clear the module-level copy NOW
+  // — not inside the async closeWhenDone. Otherwise a start() running
+  // between stop() and the final byebye callback would populate
+  // joinedInterfaces for the new socket, only for the stale callback
+  // to wipe it a few ms later. The snapshot lets byebye sends fan out
+  // over the old socket's interfaces while start() independently
+  // rebuilds the list for the new one.
+  const ifaceSnapshot = joinedInterfaces;
+  joinedInterfaces = [];
+
   const messages = buildByebyeMessages();
-  let remaining = messages.length;
+  const ifaces = ifaceSnapshot.length > 1 ? ifaceSnapshot : [null];
+  let remaining = messages.length * ifaces.length;
 
   function closeWhenDone() {
     if (--remaining === 0) {
       try { sock.close(); } catch (_) {}
-      joinedInterfaces = [];
       winston.info('[dlna-ssdp] Stopped');
     }
   }
@@ -320,8 +330,6 @@ export function stop() {
   // Mirror sendMessages()'s interface fan-out for the byebye batch so
   // renderers on every interface see us leave — otherwise stale entries
   // linger in their UI until CACHE-CONTROL max-age expires.
-  const ifaces = joinedInterfaces.length > 1 ? joinedInterfaces : [null];
-  remaining = messages.length * ifaces.length;
   for (const ifaceAddr of ifaces) {
     if (ifaceAddr) {
       try { sock.setMulticastInterface(ifaceAddr); }
