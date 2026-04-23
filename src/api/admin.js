@@ -82,12 +82,9 @@ export function setup(mstream) {
       result[lib.name] = {
         root: lib.root_path,
         type: lib.type,
-        // V21: null = inherit scanOptions.followSymlinks; true/false
-        // = per-library override. UI needs all three states to
-        // render the tri-state toggle.
-        followSymlinks: lib.follow_symlinks == null
-          ? null
-          : lib.follow_symlinks === 1,
+        // V21: per-library boolean. Admin panel renders a simple
+        // on/off toggle; default false matches the Rust scanner.
+        followSymlinks: lib.follow_symlinks === 1,
       };
     }
     res.json(result);
@@ -114,15 +111,6 @@ export function setup(mstream) {
     joiValidate(schema, req.body);
 
     await admin.editSkipImg(req.body.skipImg);
-    res.json({});
-  });
-
-  mstream.post("/api/v1/admin/db/params/follow-symlinks", async (req, res) => {
-    const schema = Joi.object({
-      followSymlinks: Joi.boolean().required(),
-    });
-    const { value } = joiValidate(schema, req.body);
-    await admin.editFollowSymlinks(value.followSymlinks);
     res.json({});
   });
 
@@ -250,12 +238,12 @@ export function setup(mstream) {
     res.json({});
   });
 
-  // V21: per-library followSymlinks override. Passing `null` clears
-  // the override so the library reverts to the global default.
+  // V21: per-library followSymlinks flag. Takes effect on the next
+  // scan of this library.
   mstream.post('/api/v1/admin/directory/follow-symlinks', async (req, res) => {
     const schema = Joi.object({
       vpath: Joi.string().pattern(/[a-zA-Z0-9-]+/).required(),
-      followSymlinks: Joi.boolean().allow(null).required(),
+      followSymlinks: Joi.boolean().required(),
     });
     const { value } = joiValidate(schema, req.body || {});
     await admin.setLibraryFollowSymlinks(value.vpath, value.followSymlinks);

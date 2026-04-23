@@ -40,9 +40,10 @@ const schema = Joi.object({
   ).required(),
   scanCommitInterval: Joi.number().integer().min(1).default(25),
   forceRescan: Joi.boolean().default(false),
-  // See src/state/config.js scanOptions.followSymlinks. false =
-  // use lstatSync and skip symlink entries; true = use statSync
-  // (follows symlinks to their target, matching pre-v6.5 default).
+  // Per-library flag from the libraries row (V21). false (default)
+  // = use lstatSync and skip symlink entries; true = use statSync
+  // (follows symlinks to their target, matching pre-v6.5 JS-scanner
+  // behaviour). Resolved in task-queue.js from `library.follow_symlinks`.
   followSymlinks: Joi.boolean().default(false),
 });
 

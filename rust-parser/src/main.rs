@@ -51,12 +51,12 @@ struct ScanConfig {
     force_rescan: bool,
     #[serde(rename = "waveformCacheDir", default)]
     waveform_cache_dir: String,
-    // When true, the walker follows symlinks inside the library.
-    // When false (default), symlinks are treated as opaque entries
-    // and skipped. See src/state/config.js scanOptions.followSymlinks
-    // for the rationale. Default matches the legacy Rust behaviour
-    // (walkdir's follow_links flag defaults to false); the JS
-    // scanner's default changed to match in this release.
+    // Per-library flag from the libraries row (V21). When true,
+    // the walker follows symlinks inside the library. When false
+    // (default), symlinks are treated as opaque entries and skipped.
+    // Default matches the legacy Rust behaviour (walkdir's
+    // follow_links flag defaults to false); the JS scanner's default
+    // changed to match in this release.
     #[serde(rename = "followSymlinks", default)]
     follow_symlinks: bool,
 }

@@ -1,12 +1,12 @@
 /**
- * V21: `scanOptions.followSymlinks` + per-library override.
+ * V21: per-library `followSymlinks` flag (default false).
  *
  * Builds a tiny library with ONE real track and ONE symlink pointing
- * OUTSIDE the library root. Scans with follow=false (default), asserts
- * the symlink target is NOT indexed. Flips the global default via the
- * admin endpoint, triggers a rescan, asserts the symlink target IS
- * now indexed. Finally sets a per-library OVERRIDE of false on the
- * same library, rescans, asserts the outside-target is dropped again.
+ * OUTSIDE the library root. Scans with the library default (false),
+ * asserts the symlink target is NOT indexed. Flips the library's flag
+ * to true via the admin endpoint, triggers a rescan, asserts the
+ * symlink target IS now indexed. Flips it back to false, rescans,
+ * asserts the outside-target is dropped again.
  *
  * Windows hosts without developer-mode symlink permissions skip the
  * test gracefully (creating a symlink throws EPERM).
@@ -94,6 +94,15 @@ async function triggerRescan() {
   throw new Error('rescan did not finish within 20s');
 }
 
+async function setLibraryFollowSymlinks(value) {
+  const tk = await adminToken();
+  await fetch(`${server.baseUrl}/api/v1/admin/directory/follow-symlinks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-access-token': tk },
+    body: JSON.stringify({ vpath: 'symtest', followSymlinks: value }),
+  });
+}
+
 before(async () => {
   if (!fsSync.existsSync(FFMPEG)) {
     throw new Error(`bundled ffmpeg missing at ${FFMPEG}`);
@@ -125,8 +134,6 @@ before(async () => {
     dlnaMode: 'disabled',
     users: [{ ...ADMIN, admin: true }],
     extraFolders: { symtest: libDir },
-    // `followSymlinks` defaults to false — we want to verify that's
-    // what the scanner actually uses when nothing's overridden.
   });
 
   // Give admin access to both the default fixtures and our symtest
@@ -168,7 +175,7 @@ async function symtestTitles() {
   return hits.map(s => s.name.replace(/^.*? - /, '')).sort();
 }
 
-describe('V21 followSymlinks', () => {
+describe('V21 per-library followSymlinks', () => {
   test('default (follow=false): symlink target is NOT indexed', async (t) => {
     if (!symlinkWorks) { t.skip('symlink creation denied on this host'); return; }
     const titles = await symtestTitles();
@@ -177,48 +184,24 @@ describe('V21 followSymlinks', () => {
       `Outside Track must NOT be indexed with follow=false; got ${JSON.stringify(titles)}`);
   });
 
-  test('global default flipped to true: rescan picks up the symlink', async (t) => {
+  test('per-library flag=true: rescan picks up the symlink', async (t) => {
     if (!symlinkWorks) { t.skip('symlink creation denied on this host'); return; }
-    await fetch(`${server.baseUrl}/api/v1/admin/db/params/follow-symlinks`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-access-token': await adminToken() },
-      body: JSON.stringify({ followSymlinks: true }),
-    });
+    await setLibraryFollowSymlinks(true);
     await triggerRescan();
     const titles = await symtestTitles();
     assert.ok(titles.includes('Inside Track'));
     assert.ok(titles.includes('Outside Track'),
-      `Outside Track must be indexed after global=true; got ${JSON.stringify(titles)}`);
+      `Outside Track must be indexed after flag=true; got ${JSON.stringify(titles)}`);
   });
 
-  test('per-library override=false wins over global=true', async (t) => {
+  test('per-library flag=false: rescan drops the symlink target', async (t) => {
     if (!symlinkWorks) { t.skip('symlink creation denied on this host'); return; }
-    // Global is still true from the previous test. Set per-library
-    // override=false on symtest.
-    await fetch(`${server.baseUrl}/api/v1/admin/directory/follow-symlinks`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-access-token': await adminToken() },
-      body: JSON.stringify({ vpath: 'symtest', followSymlinks: false }),
-    });
+    await setLibraryFollowSymlinks(false);
     await triggerRescan();
     const titles = await symtestTitles();
     assert.ok(titles.includes('Inside Track'));
     assert.ok(!titles.includes('Outside Track'),
-      `Per-library false must override global true; got ${JSON.stringify(titles)}`);
-  });
-
-  test('per-library override=null reverts to inheriting global', async (t) => {
-    if (!symlinkWorks) { t.skip('symlink creation denied on this host'); return; }
-    await fetch(`${server.baseUrl}/api/v1/admin/directory/follow-symlinks`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-access-token': await adminToken() },
-      body: JSON.stringify({ vpath: 'symtest', followSymlinks: null }),
-    });
-    await triggerRescan();
-    // Global is still true → symlinks should be followed again.
-    const titles = await symtestTitles();
-    assert.ok(titles.includes('Outside Track'),
-      `Clearing per-library override should re-inherit global=true; got ${JSON.stringify(titles)}`);
+      `Outside Track must be dropped after flag=false; got ${JSON.stringify(titles)}`);
   });
 
   test('/api/v1/admin/directories surfaces the per-library state', async () => {
@@ -227,8 +210,8 @@ describe('V21 followSymlinks', () => {
     });
     const dirs = await r.json();
     assert.ok(dirs.symtest);
-    // After clearing, followSymlinks should be null (inherit) here.
-    assert.equal(dirs.symtest.followSymlinks, null,
-      `expected inherit (null), got ${JSON.stringify(dirs.symtest.followSymlinks)}`);
+    // After the previous test set it back to false.
+    assert.equal(dirs.symtest.followSymlinks, false,
+      `expected false, got ${JSON.stringify(dirs.symtest.followSymlinks)}`);
   });
 });

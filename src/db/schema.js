@@ -1,7 +1,7 @@
 // SQLite schema definitions and migration system for mStream.
 // Uses PRAGMA user_version for tracking which migrations have been applied.
 
-export const SCHEMA_VERSION = 21;
+export const SCHEMA_VERSION = 22;
 
 export const SCHEMA_V1 = `
   -- Users
@@ -498,17 +498,52 @@ export const SCHEMA_V19 = `
 `;
 
 export const SCHEMA_V21 = `
-  -- ── Per-library followSymlinks override ──────────────────────────
+  -- ── Per-library followSymlinks flag ──────────────────────────────
   --
-  -- NULL = inherit config.program.scanOptions.followSymlinks (global
-  -- default). 0/1 = override the global for just this library. Lets
-  -- an operator set "strict by default, follow symlinks only for
-  -- the /collaborations vpath".
+  -- 0 (default) = the scanner does NOT follow symlinks INSIDE this
+  -- library. Symlink entries are skipped so scanned content stays
+  -- strictly within the library's physical tree.
+  --
+  -- 1 = the scanner follows symlinks (a symlink entry is treated
+  -- as the file/directory it points at). Opt-in per library via
+  -- the admin panel because a symlink pointing at a huge directory
+  -- outside the library (e.g. /home) would otherwise silently pull
+  -- those files into mStream's index.
+  --
+  -- The library root itself is always followed (readdirSync
+  -- operates on the target of a root-level symlink); this flag
+  -- only governs nested entries.
+  --
+  -- Existing rows on pre-V21 databases get 0 on migrate, matching
+  -- the Rust scanner's historical behaviour. Operators who relied
+  -- on the old JS scanner's silent symlink-following must opt in
+  -- per library after upgrading.
   --
   -- Not rescanRequired — the value is consulted at scan-task launch,
-  -- so changing it takes effect on the next scheduled (or manual)
+  -- so flipping it takes effect on the next scheduled (or manual)
   -- scan of that vpath without rewriting existing track rows.
-  ALTER TABLE libraries ADD COLUMN follow_symlinks INTEGER;
+  ALTER TABLE libraries ADD COLUMN follow_symlinks INTEGER NOT NULL DEFAULT 0;
+`;
+
+export const SCHEMA_V22 = `
+  -- ── Backfill stray NULLs in libraries.follow_symlinks ────────────
+  --
+  -- An earlier V21 variant (shipped only on this pre-release branch,
+  -- never in a release) declared the column as plain \`INTEGER\` (no
+  -- DEFAULT, nullable). Hosts that applied that variant have
+  -- user_version = 21 and would skip the rewritten V21 on upgrade,
+  -- leaving existing rows + any rows inserted before the code in
+  -- src/util/admin.js started writing 0 explicitly with NULL values.
+  --
+  -- SQLite can't retroactively add a NOT NULL constraint without
+  -- rebuilding the table, and it isn't worth the rebuild churn here:
+  -- the reader (task-queue.js) treats NULL as false via \`=== 1\`, and
+  -- every code path that writes the column now writes 0 or 1. A
+  -- one-shot UPDATE to normalise the visible data is sufficient.
+  --
+  -- No-op on fresh databases (where V21 already wrote 0 into every
+  -- row). Not rescanRequired.
+  UPDATE libraries SET follow_symlinks = 0 WHERE follow_symlinks IS NULL;
 `;
 
 export const SCHEMA_V20 = `
@@ -580,10 +615,14 @@ export const MIGRATIONS = [
   // /rest/getLyricsBySongId or /api/v1/lyrics hit against a track
   // with no embedded/sidecar lyrics.
   { version: 20, sql: SCHEMA_V20 },
-  // V21 adds per-library `follow_symlinks` override. Nullable —
-  // NULL means "inherit the global scanOptions.followSymlinks
-  // default". true/false override the global per library. No
-  // rescan required; the column defaults to NULL on existing rows
-  // so existing libraries keep the global behaviour they had before.
+  // V21 adds per-library `follow_symlinks` flag. NOT NULL DEFAULT 0
+  // — existing libraries default to "don't follow" (matching the
+  // Rust scanner's historical behaviour). Operators toggle it per
+  // library via the admin panel. No rescan required; the value is
+  // consulted at scan-task launch.
   { version: 21, sql: SCHEMA_V21 },
+  // V22 backfills any NULL follow_symlinks rows left behind by an
+  // earlier nullable V21 variant that only ever existed on this
+  // branch. See SCHEMA_V22 comments — no-op on fresh databases.
+  { version: 22, sql: SCHEMA_V22 },
 ];

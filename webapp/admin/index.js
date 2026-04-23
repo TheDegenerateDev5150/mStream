@@ -578,7 +578,7 @@ const foldersView = Vue.component('folders-view', {
               <tr>
                 <th>{{ t('admin.folders.vPathHeader') }}</th>
                 <th>{{ t('admin.folders.directoryHeader') }}</th>
-                <th title="Whether the scanner follows symlinks inside this library. `inherit` = use the global scanner default.">Follow symlinks</th>
+                <th title="When 'on', the scanner follows symlinks INSIDE this library. Default is 'off' to keep scanned content strictly within the library's physical tree.">Follow symlinks</th>
                 <th>{{ t('admin.folders.actionsHeader') }}</th>
               </tr>
             </thead>
@@ -587,11 +587,11 @@ const foldersView = Vue.component('folders-view', {
                 <td>{{k}}</td>
                 <td>{{v.root}}</td>
                 <td>
-                  <select :value="symState(v)" v-on:change="setFollowSymlinks(k, $event.target.value)"
+                  <select :value="v.followSymlinks ? 'true' : 'false'"
+                          v-on:change="setFollowSymlinks(k, $event.target.value === 'true')"
                           style="margin:0;display:inline-block;width:auto;height:28px;font-size:13px">
-                    <option value="inherit">inherit</option>
-                    <option value="true">on</option>
                     <option value="false">off</option>
+                    <option value="true">on</option>
                   </select>
                 </td>
                 <td>[<a v-on:click="removeFolder(k, v.root)">{{ t('admin.folders.remove') }}</a>]</td>
@@ -610,19 +610,10 @@ const foldersView = Vue.component('folders-view', {
       }
     },
     methods: {
-      // V21: per-library followSymlinks override. Three states:
-      //   null  → inherit global scanOptions.followSymlinks
-      //   true  → override ON
-      //   false → override OFF
-      // Rendered via a <select> with 'inherit' / 'on' / 'off'.
-      symState: function(folder) {
-        if (folder.followSymlinks == null) { return 'inherit'; }
-        return folder.followSymlinks ? 'true' : 'false';
-      },
-      setFollowSymlinks: async function(vpath, newState) {
-        const value = newState === 'inherit' ? null
-                    : newState === 'true'    ? true
-                    : false;
+      // V21: per-library followSymlinks flag. Default false —
+      // operators opt in per library when they want the scanner to
+      // traverse symlinks inside that vpath.
+      setFollowSymlinks: async function(vpath, value) {
         try {
           await API.axios({
             method: 'POST',
@@ -1525,20 +1516,6 @@ const dbView = Vue.component('db-view', {
                       </td>
                     </tr>
                     <tr>
-                      <td>
-                        <b>Follow symlinks (default)</b> {{dbParams.followSymlinks}}
-                        <br><small style="color:#777">
-                          Per-library overrides live on each folder in the Directories page.
-                          Default <code>false</code> matches the Rust scanner; flip to
-                          <code>true</code> to follow symlinks inside libraries (legacy JS
-                          scanner behaviour). Can pull in content OUTSIDE the library root.
-                        </small>
-                      </td>
-                      <td>
-                        [<a v-on:click="toggleFollowSymlinks()">{{ t('admin.settings.edit') }}</a>]
-                      </td>
-                    </tr>
-                    <tr>
                       <td><b>{{ t('admin.db.compressImages') }}</b> {{dbParams.compressImage}}</td>
                       <td>
                         [<a v-on:click="recompressImages()">{{ t('admin.db.recompress') }}</a>]
@@ -1925,22 +1902,6 @@ const dbView = Vue.component('db-view', {
           }],
         ]
       });
-    },
-    toggleFollowSymlinks: async function() {
-      const next = !this.dbParams.followSymlinks;
-      try {
-        await API.axios({
-          method: 'POST',
-          url: `${API.url()}/api/v1/admin/db/params/follow-symlinks`,
-          data: { followSymlinks: next },
-        });
-        Vue.set(ADMINDATA.dbParams, 'followSymlinks', next);
-        iziToast.success({ title: `followSymlinks default = ${next}`,
-          position: 'topCenter', timeout: 2500 });
-      } catch (_err) {
-        iziToast.error({ title: 'Failed to update',
-          position: 'topCenter', timeout: 3000 });
-      }
     },
     toggleSkipImg: function() {
       iziToast.question({

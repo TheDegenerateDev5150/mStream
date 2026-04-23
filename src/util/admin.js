@@ -37,8 +37,13 @@ export async function addDirectory(directory, vpath, autoAccess, isAudioBooks, m
 
   const d = db.getDB();
   const type = isAudioBooks ? 'audio-books' : 'music';
+  // follow_symlinks is explicitly set to 0 here rather than relying
+  // on the column default: dev hosts that ran an earlier V21 variant
+  // (nullable column, no DEFAULT) would otherwise get NULL on new
+  // INSERTs. Reader code in task-queue.js is null-safe (`=== 1`) but
+  // we'd rather not leave dangling NULLs in the table.
   const result = d.prepare(
-    'INSERT INTO libraries (name, root_path, type) VALUES (?, ?, ?)'
+    'INSERT INTO libraries (name, root_path, type, follow_symlinks) VALUES (?, ?, ?, 0)'
   ).run(vpath, directory, type);
   const libraryId = Number(result.lastInsertRowid);
 
@@ -57,12 +62,10 @@ export async function addDirectory(directory, vpath, autoAccess, isAudioBooks, m
 }
 
 /**
- * Set the per-library followSymlinks override.
+ * Set the per-library followSymlinks flag.
  *
- *   followSymlinks === true   → override ON for this library
- *   followSymlinks === false  → override OFF
- *   followSymlinks === null   → clear override; inherit global
- *                               `scanOptions.followSymlinks`
+ *   followSymlinks === true   → scanner follows symlinks in this library
+ *   followSymlinks === false  → scanner skips symlink entries (default)
  *
  * Takes effect on the next scan of this library. Does NOT trigger
  * a rescan on its own — the operator should click "Rescan" manually
@@ -73,10 +76,9 @@ export async function addDirectory(directory, vpath, autoAccess, isAudioBooks, m
 export async function setLibraryFollowSymlinks(vpath, followSymlinks) {
   const library = db.getLibraryByName(vpath);
   if (!library) { throw new Error(`'${vpath}' not found`); }
-  const value = followSymlinks === null ? null : (followSymlinks ? 1 : 0);
   db.getDB().prepare(
     'UPDATE libraries SET follow_symlinks = ? WHERE id = ?'
-  ).run(value, library.id);
+  ).run(followSymlinks ? 1 : 0, library.id);
   db.invalidateCache();
 }
 
@@ -271,19 +273,6 @@ export async function editSkipImg(val) {
   loadConfig.scanOptions.skipImg = val;
   await saveFile(loadConfig, config.configFile);
   config.program.scanOptions.skipImg = val;
-}
-
-/**
- * Update the GLOBAL followSymlinks default. Libraries with an
- * explicit per-library override (via setLibraryFollowSymlinks) keep
- * their override and are unaffected.
- */
-export async function editFollowSymlinks(val) {
-  const loadConfig = await loadFile(config.configFile);
-  if (!loadConfig.scanOptions) { loadConfig.scanOptions = {}; }
-  loadConfig.scanOptions.followSymlinks = val;
-  await saveFile(loadConfig, config.configFile);
-  config.program.scanOptions.followSymlinks = val;
 }
 
 export async function editBootScanDelay(val) {
