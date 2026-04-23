@@ -56,6 +56,30 @@ export async function addDirectory(directory, vpath, autoAccess, isAudioBooks, m
   mstream.use(`/media/${vpath}/`, express.static(directory));
 }
 
+/**
+ * Set the per-library followSymlinks override.
+ *
+ *   followSymlinks === true   → override ON for this library
+ *   followSymlinks === false  → override OFF
+ *   followSymlinks === null   → clear override; inherit global
+ *                               `scanOptions.followSymlinks`
+ *
+ * Takes effect on the next scan of this library. Does NOT trigger
+ * a rescan on its own — the operator should click "Rescan" manually
+ * if they want existing tracks re-evaluated under the new rule.
+ * (Running an auto-rescan would be surprising for libraries that
+ * don't actually contain any symlinks.)
+ */
+export async function setLibraryFollowSymlinks(vpath, followSymlinks) {
+  const library = db.getLibraryByName(vpath);
+  if (!library) { throw new Error(`'${vpath}' not found`); }
+  const value = followSymlinks === null ? null : (followSymlinks ? 1 : 0);
+  db.getDB().prepare(
+    'UPDATE libraries SET follow_symlinks = ? WHERE id = ?'
+  ).run(value, library.id);
+  db.invalidateCache();
+}
+
 export async function removeDirectory(vpath) {
   const library = db.getLibraryByName(vpath);
   if (!library) { throw new Error(`'${vpath}' not found`); }
@@ -247,6 +271,19 @@ export async function editSkipImg(val) {
   loadConfig.scanOptions.skipImg = val;
   await saveFile(loadConfig, config.configFile);
   config.program.scanOptions.skipImg = val;
+}
+
+/**
+ * Update the GLOBAL followSymlinks default. Libraries with an
+ * explicit per-library override (via setLibraryFollowSymlinks) keep
+ * their override and are unaffected.
+ */
+export async function editFollowSymlinks(val) {
+  const loadConfig = await loadFile(config.configFile);
+  if (!loadConfig.scanOptions) { loadConfig.scanOptions = {}; }
+  loadConfig.scanOptions.followSymlinks = val;
+  await saveFile(loadConfig, config.configFile);
+  config.program.scanOptions.followSymlinks = val;
 }
 
 export async function editBootScanDelay(val) {

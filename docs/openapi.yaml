@@ -4256,6 +4256,64 @@ paths:
                 items: { type: string, example: "C:\\" }
         "405": { $ref: "#/components/responses/AdminLocked" }
 
+  /api/v1/admin/db/params/follow-symlinks:
+    post:
+      tags: [Admin - Scanner]
+      summary: Set the GLOBAL followSymlinks default (V21)
+      description: |
+        When true, the scanner follows symbolic links found INSIDE a
+        library (a symlink entry is treated as the file/directory it
+        points at). When false (default), nested symlinks are skipped.
+        The library root itself is always followed.
+
+        Changes take effect on the next scheduled or manual scan — this
+        endpoint does NOT trigger a rescan. Per-library overrides
+        (see `/api/v1/admin/directory/follow-symlinks`) win over this
+        global.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [followSymlinks]
+              properties:
+                followSymlinks: { type: boolean }
+      responses:
+        "200": { description: Global default updated. }
+        "403": { description: Validation error. }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
+  /api/v1/admin/directory/follow-symlinks:
+    post:
+      tags: [Admin - Libraries]
+      summary: Set the per-library followSymlinks override (V21)
+      description: |
+        `true` / `false` sets an explicit override for this library.
+        `null` clears the override so the library inherits the global
+        `scanOptions.followSymlinks` default. Takes effect on the next
+        scan of this library.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [vpath, followSymlinks]
+              properties:
+                vpath:
+                  type: string
+                  pattern: "[a-zA-Z0-9-]+"
+                followSymlinks:
+                  type: boolean
+                  nullable: true
+                  description: null = inherit, true/false = override.
+      responses:
+        "200": { description: Override updated. }
+        "403": { description: Validation error. }
+        "404": { description: Library not found. }
+        "405": { $ref: "#/components/responses/AdminLocked" }
+
   # ── Admin - Subsonic ────────────────────────────────────────────────────
 
   /api/v1/admin/subsonic:

@@ -30,7 +30,29 @@ const scanOptions = Joi.object({
   albumArtWriteToFile: Joi.boolean().default(false),
   albumArtServices: Joi.array().items(
     Joi.string().valid('musicbrainz', 'itunes', 'deezer')
-  ).default(['musicbrainz', 'itunes', 'deezer'])
+  ).default(['musicbrainz', 'itunes', 'deezer']),
+  // When true, the scanner follows symlinks INSIDE the library (a
+  // symlink entry is treated as the file/directory it points at).
+  // When false (default), nested symlinks are skipped — scanned
+  // content stays strictly within the library's physical tree.
+  //
+  // Default changed to false in this release for two reasons:
+  //   1. Scanner parity — the Rust scanner has never followed
+  //      symlinks (walkdir::follow_links(false)); the JS scanner
+  //      silently DID follow them (statSync follows by default),
+  //      which produced different library shapes depending on
+  //      which scanner served the user.
+  //   2. Safety — a symlink pointing at a huge directory outside
+  //      the library (e.g. /home) would silently pull those files
+  //      into mStream's index. Opt-in is safer.
+  //
+  // Users who RELY on intra-library symlinks (uncommon) can flip
+  // this to true in the admin panel.
+  //
+  // The library root itself IS always followed — operators often
+  // configure `/music` as a symlink to `/mnt/storage/music` or
+  // similar. This flag only governs nested symlinks.
+  followSymlinks: Joi.boolean().default(false),
 });
 
 const dbOptions = Joi.object({
@@ -166,6 +188,13 @@ const schema = Joi.object({
     Joi.object({
       root: Joi.string().required(),
       type: Joi.string().valid('music', 'audio-books').default('music'),
+      // Per-folder override for scanOptions.followSymlinks. When
+      // unset, the folder inherits the global default. Useful when
+      // you have one library that deliberately uses intra-library
+      // symlinks (e.g. a "collaborations" library that links into
+      // artists' main folders) and another that should stay strict.
+      // Null/absent = inherit; true/false = override.
+      followSymlinks: Joi.boolean().optional(),
     })
   ).default({}),
   users: Joi.object().pattern(

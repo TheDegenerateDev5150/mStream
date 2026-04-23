@@ -51,6 +51,14 @@ struct ScanConfig {
     force_rescan: bool,
     #[serde(rename = "waveformCacheDir", default)]
     waveform_cache_dir: String,
+    // When true, the walker follows symlinks inside the library.
+    // When false (default), symlinks are treated as opaque entries
+    // and skipped. See src/state/config.js scanOptions.followSymlinks
+    // for the rationale. Default matches the legacy Rust behaviour
+    // (walkdir's follow_links flag defaults to false); the JS
+    // scanner's default changed to match in this release.
+    #[serde(rename = "followSymlinks", default)]
+    follow_symlinks: bool,
 }
 
 fn default_commit_interval() -> u64 { 25 }
@@ -183,7 +191,7 @@ fn run_scan(config: &ScanConfig) -> Result<(), Box<dyn std::error::Error>> {
     println!("Scanning {}...", config.directory);
 
     let entries: Vec<walkdir::DirEntry> = WalkDir::new(&config.directory)
-        .follow_links(false)
+        .follow_links(config.follow_symlinks)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())

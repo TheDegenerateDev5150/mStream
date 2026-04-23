@@ -1,7 +1,7 @@
 // SQLite schema definitions and migration system for mStream.
 // Uses PRAGMA user_version for tracking which migrations have been applied.
 
-export const SCHEMA_VERSION = 20;
+export const SCHEMA_VERSION = 21;
 
 export const SCHEMA_V1 = `
   -- Users
@@ -497,6 +497,20 @@ export const SCHEMA_V19 = `
   ALTER TABLE tracks ADD COLUMN lyrics_sidecar_mtime INTEGER;
 `;
 
+export const SCHEMA_V21 = `
+  -- ── Per-library followSymlinks override ──────────────────────────
+  --
+  -- NULL = inherit config.program.scanOptions.followSymlinks (global
+  -- default). 0/1 = override the global for just this library. Lets
+  -- an operator set "strict by default, follow symlinks only for
+  -- the /collaborations vpath".
+  --
+  -- Not rescanRequired — the value is consulted at scan-task launch,
+  -- so changing it takes effect on the next scheduled (or manual)
+  -- scan of that vpath without rewriting existing track rows.
+  ALTER TABLE libraries ADD COLUMN follow_symlinks INTEGER;
+`;
+
 export const SCHEMA_V20 = `
   -- ── LRCLib external-lookup cache ─────────────────────────────────
   --
@@ -566,4 +580,10 @@ export const MIGRATIONS = [
   // /rest/getLyricsBySongId or /api/v1/lyrics hit against a track
   // with no embedded/sidecar lyrics.
   { version: 20, sql: SCHEMA_V20 },
+  // V21 adds per-library `follow_symlinks` override. Nullable —
+  // NULL means "inherit the global scanOptions.followSymlinks
+  // default". true/false override the global per library. No
+  // rescan required; the column defaults to NULL on existing rows
+  // so existing libraries keep the global behaviour they had before.
+  { version: 21, sql: SCHEMA_V21 },
 ];

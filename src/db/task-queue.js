@@ -227,6 +227,15 @@ function runScan(scanObj) {
     supportedFiles: config.program.supportedAudioFiles,
     scanCommitInterval: config.program.scanOptions.scanCommitInterval || 25,
     forceRescan: scanObj.forceRescan || false,
+    // Per-library override for followSymlinks: the library row's
+    // follow_symlinks column (V21) wins when set, otherwise fall
+    // back to the global config default. Resolved here at scan-task
+    // launch time so a user toggling the per-library flag via the
+    // admin panel takes effect on the next scan without the scanner
+    // process needing to know how to resolve the fallback chain.
+    followSymlinks: library.follow_symlinks == null
+      ? !!config.program.scanOptions.followSymlinks
+      : library.follow_symlinks === 1,
     // The Rust scanner generates waveform .bin files inline via symphonia
     // and writes them here (keyed by audio_hash, falling back to file_hash).
     // The JS fallback scanner doesn't generate waveforms — for those users,

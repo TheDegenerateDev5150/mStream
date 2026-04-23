@@ -39,7 +39,11 @@ const schema = Joi.object({
     Joi.string(), Joi.boolean()
   ).required(),
   scanCommitInterval: Joi.number().integer().min(1).default(25),
-  forceRescan: Joi.boolean().default(false)
+  forceRescan: Joi.boolean().default(false),
+  // See src/state/config.js scanOptions.followSymlinks. false =
+  // use lstatSync and skip symlink entries; true = use statSync
+  // (follows symlinks to their target, matching pre-v6.5 default).
+  followSymlinks: Joi.boolean().default(false),
 });
 
 const { error: validationError } = schema.validate(loadJson);
@@ -462,6 +466,15 @@ const COMMIT_INTERVAL = loadJson.scanCommitInterval || 25;
 
 // ── Fast file counter (no metadata parsing) ────────────────────────────────
 
+// When `followSymlinks` is false (default), use lstatSync so symlink
+// entries are seen AS symlinks (isFile/isDirectory both false) and
+// skipped. When true, use statSync to follow symlinks to their target.
+// Library root is always followed (readdirSync operates on the target
+// of a root-level symlink); this only governs nested entries.
+const statForWalk = loadJson.followSymlinks
+  ? fs.statSync
+  : fs.lstatSync;
+
 function countSupportedFiles(dir) {
   let count = 0;
   let files;
@@ -469,7 +482,7 @@ function countSupportedFiles(dir) {
   for (const file of files) {
     try {
       const fp = path.join(dir, file);
-      const stat = fs.statSync(fp);
+      const stat = statForWalk(fp);
       if (stat.isDirectory()) {
         count += countSupportedFiles(fp);
       } else if (stat.isFile() && loadJson.supportedFiles[getFileType(file).toLowerCase()]) {
@@ -501,7 +514,12 @@ async function recursiveScan(dir) {
   for (const file of files) {
     const filepath = path.join(dir, file);
     let stat;
-    try { stat = fs.statSync(filepath); } catch (_e) { continue; }
+    // statForWalk picks between statSync (follows symlinks) and
+    // lstatSync (doesn't) per the `followSymlinks` config flag. A
+    // symlink entry under lstatSync has isFile()=false AND
+    // isDirectory()=false, so it falls through both branches below
+    // and is silently skipped — no-follow by default.
+    try { stat = statForWalk(filepath); } catch (_e) { continue; }
 
     if (stat.isDirectory()) {
       await recursiveScan(filepath);
