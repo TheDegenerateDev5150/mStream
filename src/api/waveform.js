@@ -4,6 +4,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import winston from 'winston';
 import * as config from '../state/config.js';
 import * as db from '../db/manager.js';
 import { ffmpegBin, getResolvedSource } from '../util/ffmpeg-bootstrap.js';
@@ -32,6 +33,24 @@ function ensureCacheDir() {
   const dir = cacheDir();
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
+  }
+  // Probe write access. Both the on-demand endpoint and the Rust scanner
+  // treat write failures as best-effort (the cache is advisory — a miss
+  // just regenerates), so without this a directory the server can't write
+  // to stays silently empty across every scan. Most commonly this is a
+  // Docker PUID/PGID mismatch on linuxserver/mstream, where the install
+  // tree is chowned to the build-time uid and user-supplied PUIDs get
+  // EACCES at runtime.
+  const probe = path.join(dir, '.mstream-write-probe');
+  try {
+    fs.writeFileSync(probe, '');
+    fs.unlinkSync(probe);
+  } catch (err) {
+    winston.warn(
+      `[waveform] cache dir '${dir}' is not writable (${err.code || err.message}); ` +
+      `waveforms will regenerate every request. Point storage.waveformCacheDirectory ` +
+      `at a writable path (typically alongside dbDirectory) or fix ownership/perms.`
+    );
   }
 }
 

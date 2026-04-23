@@ -13,9 +13,12 @@ const storageJoi = Joi.object({
   dbDirectory: Joi.string().default(path.join(__dirname, '../../save/db')),
   logsDirectory: Joi.string().default(path.join(__dirname, '../../save/logs')),
   syncConfigDirectory:  Joi.string().default(path.join(__dirname, '../../save/sync')),
-  // Persistent by default — lives under save/ so Docker users who only mount
-  // save/ keep their cache across restarts instead of regenerating every scan.
-  waveformCacheDirectory: Joi.string().default(path.join(__dirname, '../../save/waveforms')),
+  // No static default — resolved in setup() to sit next to dbDirectory. That
+  // way Docker users who route their DB to /config/db (e.g. the linuxserver
+  // image's default config.json) get waveform persistence for free under
+  // /config/waveforms, rather than defaulting into the image's install tree
+  // where writes fail with EACCES when PUID/PGID differ from build time.
+  waveformCacheDirectory: Joi.string().allow(null).default(null),
 });
 
 const scanOptions = Joi.object({
@@ -231,6 +234,18 @@ export async function setup(configFileArg) {
   }
 
   program = await schema.validateAsync(programData, { allowUnknown: true });
+
+  // Place the waveform cache next to dbDirectory when the user didn't pick a
+  // location explicitly. Follows dbDirectory so Docker deployments that mount
+  // /config (and route dbDirectory to /config/db) persist waveforms alongside
+  // the DB without needing a separate volume mount or write access to the
+  // image's install tree.
+  if (!program.storage.waveformCacheDirectory) {
+    program.storage.waveformCacheDirectory = path.join(
+      path.dirname(program.storage.dbDirectory),
+      'waveforms'
+    );
+  }
 
   // Enforce the `ui=subsonic` <-> Subsonic same-port constraint: the
   // bundled Airsonic Refix SPA is configured to talk to the SAME origin
