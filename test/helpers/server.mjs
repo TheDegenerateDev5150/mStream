@@ -98,6 +98,15 @@ export async function startServer(opts = {}) {
     // affects the `/` HTML + SPA-fallback routing — all API tests
     // ignore this knob.
     ui            = 'default',
+    // Optional extra process-env overrides passed to the spawned
+    // mStream process. Used by the lyrics-cache test to point the
+    // LRCLib fetcher at a local mock HTTP server instead of the real
+    // lrclib.net.
+    env           = {},
+    // Extra top-level config keys merged into the generated config.json.
+    // Keeps `startServer` honest as new config surfaces show up
+    // (lyrics settings, etc.) without growing the options list.
+    extraConfig   = {},
   } = opts;
 
   const musicDir = await ensureFixtures();
@@ -135,6 +144,7 @@ export async function startServer(opts = {}) {
       logsDirectory:       path.join(tmpDir, 'logs'),
       syncConfigDirectory: path.join(tmpDir, 'sync'),
     },
+    ...extraConfig,
   };
 
   const configPath = path.join(tmpDir, 'config.json');
@@ -151,7 +161,7 @@ export async function startServer(opts = {}) {
     {
       cwd: REPO_ROOT,
       stdio: captureLogs ? 'inherit' : ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, NODE_ENV: 'test' },
+      env: { ...process.env, NODE_ENV: 'test', ...env },
     },
   );
 

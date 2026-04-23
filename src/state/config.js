@@ -83,6 +83,47 @@ const subsonicOptions = Joi.object({
   port: Joi.number().integer().min(1).max(65535).default(3012),
 });
 
+// External lyrics lookup via LRCLib (https://lrclib.net). Opt-in
+// because it sends `{artist, title, duration}` for every cache-miss
+// track over the public internet — operators who run mStream for
+// privacy reasons want that off by default. When `lrclib=false` the
+// cache table stays empty; handlers serve only embedded + sidecar
+// lyrics (Phase 2 behaviour).
+//
+// TTLs are how long a cached row is considered fresh. After the TTL
+// elapses, the next request re-enqueues a fetch (the stale row
+// continues to be served in the meantime so we never regress from
+// "had lyrics" to "empty" on a single network blip).
+//   cacheTtlHitsMs   — successful fetches. 7 days: LRCLib corrections
+//                      eventually propagate; long enough to be quiet.
+//   cacheTtlMissesMs — "no lyrics found" responses. 1 day: new tracks
+//                      get indexed on LRCLib over weeks, so a same-
+//                      day re-check isn't useful.
+//   cacheTtlErrorsMs — network/timeout/5xx. 1 hour: transient failures
+//                      shouldn't burn a full day of no-retry.
+//   concurrency      — in-flight fetches cap. LRCLib is generous but
+//                      a fresh-scan burst shouldn't spam them.
+const lyricsOptions = Joi.object({
+  lrclib:           Joi.boolean().default(false),
+  cacheTtlHitsMs:   Joi.number().integer().min(0).default(7 * 24 * 60 * 60 * 1000),
+  cacheTtlMissesMs: Joi.number().integer().min(0).default(    24 * 60 * 60 * 1000),
+  cacheTtlErrorsMs: Joi.number().integer().min(0).default(         60 * 60 * 1000),
+  concurrency:      Joi.number().integer().min(1).max(16).default(2),
+  // When true, successful LRCLib fetches ALSO write a sibling
+  // `<basename>.lrc` (or `.txt` for plain-only hits) next to the
+  // audio file. Default off: the SQLite cache already serves lyrics
+  // instantly, and operators running off read-only storage (cloud
+  // shares, Docker volumes with ro mounts) can't write sidecars.
+  //
+  // Safety: never clobbers an existing `.lrc` / `.txt` sibling — user
+  // curation always wins. Silently skipped if the audio file moved
+  // or the parent dir isn't writable. A future scan picks up the
+  // written sidecar and populates tracks.lyrics_synced_lrc naturally,
+  // at which point the cache entry becomes redundant (still free to
+  // serve either side).
+  writeSidecar:     Joi.boolean().default(false),
+});
+
 const schema = Joi.object({
   address: Joi.string().ip({ cidr: 'forbidden' }).default('::'),
   port: Joi.number().default(3000),
@@ -112,6 +153,7 @@ const schema = Joi.object({
   webAppDirectory: Joi.string().default(path.join(__dirname, '../../webapp')),
   rpn: rpnOptions.default(rpnOptions.validate({}).value),
   transcode: transcodeOptions.default(transcodeOptions.validate({}).value),
+  lyrics: lyricsOptions.default(lyricsOptions.validate({}).value),
   secret: Joi.string().optional(),
   maxRequestSize: Joi.string().pattern(/[0-9]+(KB|MB)/i).default('1MB'),
   db: dbOptions.default(dbOptions.validate({}).value),

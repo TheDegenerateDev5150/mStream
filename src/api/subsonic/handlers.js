@@ -30,6 +30,7 @@ import * as serverPlayback from '../server-playback.js';
 import { sendOk, sendError, SubErr } from './response.js';
 import * as nowPlaying from './now-playing.js';
 import { parseLrc, linesToPlainText, plainTextToLines } from './lrc-parser.js';
+import * as lrclib from '../lyrics-lrclib.js';
 import { identiconFor } from './identicon.js';
 
 // ── Common helpers ──────────────────────────────────────────────────────────
@@ -2344,18 +2345,28 @@ function lyricsRowByArtistTitle(req, artist, title) {
   // display string — tolerate a substring match on either side so
   // `"The Beatles"` finds `"the beatles"`, and `"Yesterday"` finds
   // `"Yesterday (Remastered 2009)"`.
+  // The AND-on-local-lyrics filter was removed in V20: rows can now
+  // gain lyrics via the LRCLib cache AFTER the initial row resolves,
+  // so we accept any artist+title match and let `resolveLyrics()`
+  // decide between local, cached, and enqueue-a-fetch. Without this
+  // change `getLyrics` could never warm the cache — the WHERE would
+  // skip tracks that have no local lyrics yet.
   return db.getDB().prepare(`
-    SELECT t.id, t.title, t.lyrics_embedded, t.lyrics_synced_lrc, t.lyrics_lang,
+    SELECT t.id, t.title, t.duration, t.audio_hash, t.file_hash,
+           t.lyrics_embedded, t.lyrics_synced_lrc, t.lyrics_lang,
            a.name AS artist_name
     FROM tracks t
     LEFT JOIN artists a ON a.id = t.artist_id
     WHERE ${clause}
-      AND LOWER(a.name)  LIKE '%' || LOWER(?) || '%'
-      AND LOWER(t.title) LIKE '%' || LOWER(?) || '%'
-      AND (t.lyrics_embedded IS NOT NULL OR t.lyrics_synced_lrc IS NOT NULL)
+      AND LOWER(COALESCE(a.name, '')) LIKE '%' || LOWER(?) || '%'
+      AND LOWER(t.title)              LIKE '%' || LOWER(?) || '%'
     ORDER BY
       CASE WHEN LOWER(a.name)  = LOWER(?) THEN 0 ELSE 1 END,
       CASE WHEN LOWER(t.title) = LOWER(?) THEN 0 ELSE 1 END,
+      -- Tracks that already have lyrics sort ahead of those that don't,
+      -- so a query matching five titles picks the one we can serve now.
+      CASE WHEN t.lyrics_embedded IS NOT NULL
+             OR t.lyrics_synced_lrc IS NOT NULL THEN 0 ELSE 1 END,
       t.id
     LIMIT 1
   `).get(...params, artist, title, artist, title);
@@ -2364,7 +2375,8 @@ function lyricsRowByArtistTitle(req, artist, title) {
 function lyricsRowById(req, trackId) {
   const { clause, params } = libraryScope(req);
   return db.getDB().prepare(`
-    SELECT t.id, t.title, t.lyrics_embedded, t.lyrics_synced_lrc, t.lyrics_lang,
+    SELECT t.id, t.title, t.duration, t.audio_hash, t.file_hash,
+           t.lyrics_embedded, t.lyrics_synced_lrc, t.lyrics_lang,
            a.name AS artist_name
     FROM tracks t
     LEFT JOIN artists a ON a.id = t.artist_id
@@ -2372,39 +2384,101 @@ function lyricsRowById(req, trackId) {
   `).get(trackId, ...params);
 }
 
-// Build a Subsonic-spec `structuredLyrics` entry from our stored
-// columns. `variant` picks which side to emit:
-//   'synced' → parse LRC, emit one `<line start="ms">` per line
-//   'plain'  → split on \n, emit one `<line>` per line, no start attr
-// When the requested variant isn't available, returns null.
-function structuredLyricsFromRow(row, variant) {
-  if (!row) { return null; }
-  if (variant === 'synced') {
-    if (!row.lyrics_synced_lrc) { return null; }
-    const parsed = parseLrc(row.lyrics_synced_lrc);
-    if (!parsed.lines.length) { return null; }
+// Resolve the lyrics strings actually served to the client for a
+// given tracks row. Precedence:
+//   1. Local lyrics (embedded tag / sidecar) — always wins when
+//      present. Operators who curate their library trust the tagger.
+//   2. LRCLib cache row with status='hit' — even if stale, we serve
+//      it; a stale re-fetch happens in the background and silently
+//      replaces the row for the NEXT request.
+//   3. Nothing to serve AND LRCLib is enabled AND the row has enough
+//      identity to look up → enqueue an async fetch and return empty.
+//
+// Returns { plain, syncedLrc, lang, fromCache: bool }. `syncedLrc`
+// and `plain` may both be non-null (hit had both variants) or both
+// null (first-time fetch or unqueriable track).
+export function resolveLyricsForTrack(row) {
+  if (!row) { return { plain: null, syncedLrc: null, lang: null, fromCache: false }; }
+
+  // Step 1: local.
+  const hasLocal = row.lyrics_embedded || row.lyrics_synced_lrc;
+  if (hasLocal) {
     return {
-      lang:          row.lyrics_lang || 'xxx',  // OpenSubsonic "unspecified"
-      synced:        true,
-      displayArtist: row.artist_name || undefined,
-      displayTitle:  row.title       || undefined,
-      offset:        parsed.offsetMs || undefined,
-      // `start` is the spec's ms offset; omit on instrumental-break
-      // blanks so clients can choose to hide or show them.
-      line: parsed.lines.map(l => ({
-        start: l.time_ms,
-        value: l.text || '',
-      })),
+      plain:     row.lyrics_embedded   || null,
+      syncedLrc: row.lyrics_synced_lrc || null,
+      lang:      row.lyrics_lang       || null,
+      fromCache: false,
     };
   }
-  // plain
-  if (!row.lyrics_embedded) { return null; }
-  const plain = plainTextToLines(row.lyrics_embedded);
+
+  // Step 2: cache.
+  const canonHash = row.audio_hash || row.file_hash || null;
+  const cached = canonHash ? lrclib.getCached(canonHash) : null;
+
+  // Serve cached hits immediately. Stale-but-still-hit continues to
+  // serve the old data while we enqueue a background refresh — no
+  // request regresses from "had lyrics" to "empty" on a single blip.
+  if (cached && cached.status === 'hit') {
+    if (!cached.isFresh) {
+      maybeRefetch(row);
+    }
+    return {
+      plain:     cached.plain      || null,
+      syncedLrc: cached.synced_lrc || null,
+      lang:      cached.lang       || row.lyrics_lang || null,
+      fromCache: true,
+    };
+  }
+
+  // Step 3: fresh miss/error → respect the TTL, serve empty without
+  // re-enqueueing. Negative cache does its job.
+  if (cached && (cached.status === 'miss' || cached.status === 'error') && cached.isFresh) {
+    return { plain: null, syncedLrc: null, lang: null, fromCache: false };
+  }
+
+  // Step 4: no usable cache. Kick off a fetch (idempotent — dedups
+  // in the queue) and serve empty now.
+  maybeRefetch(row);
+  return { plain: null, syncedLrc: null, lang: null, fromCache: false };
+}
+
+function maybeRefetch(row) {
+  const canonHash = row.audio_hash || row.file_hash || null;
+  if (!canonHash) { return; }
+  lrclib.maybeEnqueueFetch({
+    audioHash: canonHash,
+    artist:    row.artist_name || '',
+    title:     row.title       || '',
+    duration:  row.duration    || 0,
+  });
+}
+
+// Build a Subsonic-spec `structuredLyrics` entry from the resolver's
+// output. `variant` picks which side to emit:
+//   'synced' → parse LRC, emit one `<line start="ms">` per line
+//   'plain'  → split on \n, emit one `<line>` per line, no start attr
+// Returns null when the requested variant isn't available.
+function buildStructuredLyrics(row, resolved, variant) {
+  if (variant === 'synced') {
+    if (!resolved.syncedLrc) { return null; }
+    const parsed = parseLrc(resolved.syncedLrc);
+    if (!parsed.lines.length) { return null; }
+    return {
+      lang:          resolved.lang || row?.lyrics_lang || 'xxx',
+      synced:        true,
+      displayArtist: row?.artist_name || undefined,
+      displayTitle:  row?.title       || undefined,
+      offset:        parsed.offsetMs || undefined,
+      line: parsed.lines.map(l => ({ start: l.time_ms, value: l.text || '' })),
+    };
+  }
+  if (!resolved.plain) { return null; }
+  const plain = plainTextToLines(resolved.plain);
   return {
-    lang:          row.lyrics_lang || 'xxx',
+    lang:          resolved.lang || row?.lyrics_lang || 'xxx',
     synced:        false,
-    displayArtist: row.artist_name || undefined,
-    displayTitle:  row.title       || undefined,
+    displayArtist: row?.artist_name || undefined,
+    displayTitle:  row?.title       || undefined,
     line: plain.lines.map(l => ({ value: l.text })),
   };
 }
@@ -2419,24 +2493,20 @@ export function getLyrics(req, res) {
   const row = lyricsRowByArtistTitle(req, artist, title);
   // Spec: return an empty `<lyrics/>` element if the lookup fails —
   // clients interpret that as "no lyrics available" rather than an
-  // error. Matches Airsonic/Navidrome behaviour.
+  // error. Matches Airsonic/Navidrome behaviour. When LRCLib is
+  // enabled and there's a tracks row we can identify, resolveLyrics
+  // also transparently consults the cache + enqueues a fetch.
+  const resolved = resolveLyricsForTrack(row);
   let value = '';
-  let resolvedArtist = artist;
-  let resolvedTitle  = title;
-  if (row) {
-    resolvedArtist = row.artist_name || artist;
-    resolvedTitle  = row.title       || title;
-    if (row.lyrics_embedded) {
-      value = row.lyrics_embedded;
-    } else if (row.lyrics_synced_lrc) {
-      const parsed = parseLrc(row.lyrics_synced_lrc);
-      value = linesToPlainText(parsed.lines);
-    }
+  if (resolved.plain) {
+    value = resolved.plain;
+  } else if (resolved.syncedLrc) {
+    value = linesToPlainText(parseLrc(resolved.syncedLrc).lines);
   }
   sendOk(req, res, {
     lyrics: {
-      artist: resolvedArtist || undefined,
-      title:  resolvedTitle  || undefined,
+      artist: (row?.artist_name || artist) || undefined,
+      title:  (row?.title       || title)  || undefined,
       value,
     },
   });
@@ -2444,17 +2514,22 @@ export function getLyrics(req, res) {
 
 // OpenSubsonic getLyricsBySongId. Returns zero, one, or two
 // structuredLyrics entries — one synced, one plain — in preference
-// order (synced first). Clients pick whichever they can render.
+// order (synced first). Clients pick whichever they can render. The
+// resolver may enqueue a background LRCLib fetch for this track if
+// local lyrics aren't present — the fetch completes AFTER this
+// response returns, so the second call for the same track will see
+// results (assuming LRCLib had anything for it).
 export function getLyricsBySongId(req, res) {
   const parsed = decodeId(req.query.id, 'song');
   if (!parsed) { return SubErr.MISSING_PARAM(req, res, 'id'); }
   const row = lyricsRowById(req, parsed.id);
   if (!row) { return SubErr.NOT_FOUND(req, res, 'Song'); }
 
+  const resolved = resolveLyricsForTrack(row);
   const entries = [];
-  const synced = structuredLyricsFromRow(row, 'synced');
+  const synced = buildStructuredLyrics(row, resolved, 'synced');
   if (synced) { entries.push(synced); }
-  const plain = structuredLyricsFromRow(row, 'plain');
+  const plain = buildStructuredLyrics(row, resolved, 'plain');
   if (plain)  { entries.push(plain); }
 
   sendOk(req, res, { lyricsList: { structuredLyrics: entries } });

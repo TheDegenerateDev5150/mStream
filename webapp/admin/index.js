@@ -2936,6 +2936,8 @@ const subsonicView = Vue.component('subsonic-view', {
       testResult:         null,
       testPending:        false,
       showMethodList:     false,
+      // Transient success message shown next to the purge buttons.
+      lyricsCachePurgeMsg: null,
       // One-time display for admin-minted-on-behalf-of keys. Mirrors
       // `lastMintedKey` but carries the target username too.
       adminMintedForUser: { val: null, name: null, username: null },
@@ -3097,6 +3099,70 @@ const subsonicView = Vue.component('subsonic-view', {
                   </tr>
                 </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Lyrics cache (LRCLib fallback, V20) -->
+      <div v-if="params.mode !== 'disabled' && stats.lyrics" class="row">
+        <div class="col s12">
+          <div class="card">
+            <div class="card-content">
+              <span class="card-title">Lyrics Lookup (LRCLib)</span>
+              <p>
+                When a track has no embedded lyrics and no sibling <code>.lrc</code> / <code>.txt</code> sidecar,
+                mStream can fetch from
+                <a href="https://lrclib.net" target="_blank" rel="noopener">lrclib.net</a> and cache the result.
+              </p>
+              <p style="color:#b26500;background:#fff3e0;padding:8px;border-radius:4px;margin:8px 0">
+                <small><b>Privacy:</b> enabling this sends <code>{artist, title, duration}</code>
+                over HTTPS to lrclib.net for every track that has no local lyrics.
+                No user identity is included. Disable if your server is meant to be fully offline.</small>
+              </p>
+              <p style="margin:12px 0">
+                <span class="chip" :class="stats.lyrics.lrclibEnabled ? 'green lighten-4' : 'grey lighten-3'">
+                  {{stats.lyrics.lrclibEnabled ? 'Enabled' : 'Disabled'}}
+                </span>
+                <a v-on:click="toggleLrclib()" class="btn-flat waves-effect" style="padding:0 8px">
+                  {{stats.lyrics.lrclibEnabled ? 'Disable' : 'Enable'}}
+                </a>
+              </p>
+              <p v-if="stats.lyrics.lrclibEnabled" style="margin:8px 0;padding:8px;background:#f9f9f9;border-radius:4px">
+                <label>
+                  <input type="checkbox" class="filled-in"
+                         :checked="stats.lyrics.writeSidecarEnabled"
+                         v-on:change="toggleWriteSidecar($event.target.checked)" />
+                  <span>
+                    <b>Also write <code>.lrc</code> / <code>.txt</code> sidecar next to the audio file</b><br>
+                    <small style="color:#777">
+                      Default off. When on, a successful LRCLib fetch also drops a sibling sidecar
+                      file so the lyrics travel with the track if it's copied elsewhere.
+                      Never overwrites an existing sidecar; silently skipped on read-only storage.
+                    </small>
+                  </span>
+                </label>
+              </p>
+              <table v-if="stats.lyrics.cache" style="max-width:400px">
+                <tbody>
+                  <tr><td><b>Cached hits</b></td>  <td>{{stats.lyrics.cache.hit}}</td></tr>
+                  <tr><td><b>Cached misses</b></td><td>{{stats.lyrics.cache.miss}}</td></tr>
+                  <tr><td><b>Errors</b></td>       <td>{{stats.lyrics.cache.error}}</td></tr>
+                  <tr><td><b>Pending</b></td>      <td>{{stats.lyrics.cache.pending}}</td></tr>
+                  <tr><td><b>Total rows</b></td>   <td>{{stats.lyrics.cache.total}}</td></tr>
+                </tbody>
+              </table>
+              <p style="margin-top:12px">
+                <a v-on:click="purgeLyricsCache('retry')" class="btn-flat waves-effect" style="padding:0 8px">
+                  Retry errors
+                </a>
+                <a v-on:click="purgeLyricsCache('full')" class="btn-flat waves-effect red-text" style="padding:0 8px">
+                  Purge all
+                </a>
+                <span v-if="lyricsCachePurgeMsg" style="margin-left:12px;color:#5cb85c">
+                  {{lyricsCachePurgeMsg}}
+                </span>
+              </p>
             </div>
           </div>
         </div>
@@ -3266,6 +3332,51 @@ const subsonicView = Vue.component('subsonic-view', {
         this.testResult = { ok: false, reason: err.message };
       } finally {
         this.testPending = false;
+      }
+    },
+    // V20: LRCLib lyrics-cache controls. Toggle flips the config flag;
+    // purge wipes rows (mode='full' for all, 'retry' for error/pending).
+    // Each call refreshes the stats so the UI counters stay accurate.
+    toggleLrclib: async function() {
+      const enabled = !this.stats.lyrics?.lrclibEnabled;
+      try {
+        await API.axios({
+          method: 'POST',
+          url: `${API.url()}/api/v1/admin/subsonic/lyrics-cache/enabled`,
+          data: { enabled },
+        });
+        await ADMINDATA.getSubsonicStats();
+      } catch (err) {
+        iziToast.error({ title: `Failed to ${enabled ? 'enable' : 'disable'}: ${err.message || '?'}`,
+          position: 'topCenter', timeout: 3000 });
+      }
+    },
+    toggleWriteSidecar: async function(enabled) {
+      try {
+        await API.axios({
+          method: 'POST',
+          url: `${API.url()}/api/v1/admin/subsonic/lyrics-cache/write-sidecar`,
+          data: { enabled },
+        });
+        await ADMINDATA.getSubsonicStats();
+      } catch (err) {
+        iziToast.error({ title: `Sidecar toggle failed: ${err.message || '?'}`,
+          position: 'topCenter', timeout: 3000 });
+      }
+    },
+    purgeLyricsCache: async function(mode) {
+      try {
+        const r = await API.axios({
+          method: 'POST',
+          url: `${API.url()}/api/v1/admin/subsonic/lyrics-cache/purge`,
+          data: { mode },
+        });
+        this.lyricsCachePurgeMsg = `Removed ${r.data.removed} row(s).`;
+        setTimeout(() => { this.lyricsCachePurgeMsg = null; }, 4000);
+        await ADMINDATA.getSubsonicStats();
+      } catch (err) {
+        iziToast.error({ title: `Purge failed: ${err.message || '?'}`,
+          position: 'topCenter', timeout: 3000 });
       }
     },
     mintForUser: async function(username) {

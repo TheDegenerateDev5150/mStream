@@ -34,6 +34,7 @@
 
 import * as db from '../db/manager.js';
 import { parseLrc, plainTextToLines } from './subsonic/lrc-parser.js';
+import * as lrclib from './lyrics-lrclib.js';
 
 function libraryScopeClause(req) {
   const vpaths = req.user?.vpaths || [];
@@ -55,7 +56,8 @@ function lookupByFilepath(req, filepath) {
   const stored = filepath.replace(/^\/+/, '');
   const alt = stored.includes('/') ? stored.slice(stored.indexOf('/') + 1) : stored;
   return db.getDB().prepare(`
-    SELECT t.id, t.title, t.lyrics_embedded, t.lyrics_synced_lrc, t.lyrics_lang,
+    SELECT t.id, t.title, t.duration, t.audio_hash, t.file_hash,
+           t.lyrics_embedded, t.lyrics_synced_lrc, t.lyrics_lang,
            a.name AS artist_name
     FROM tracks t
     LEFT JOIN artists a ON a.id = t.artist_id
@@ -68,32 +70,84 @@ function lookupByFilepath(req, filepath) {
 function lookupByArtistTitle(req, artist, title) {
   if (!artist && !title) { return null; }
   const { clause, params } = libraryScopeClause(req);
-  // Same precedence as the Subsonic `getLyrics` helper: prefer an
-  // exact (case-insensitive) match, then fall back to substring.
+  // With V20 we no longer require a local-lyrics match here — a
+  // track with empty lyrics columns is still queryable so the
+  // LRCLib cache can warm on first request. Tracks that DO have
+  // local lyrics sort first so repeated calls are stable.
   return db.getDB().prepare(`
-    SELECT t.id, t.title, t.lyrics_embedded, t.lyrics_synced_lrc, t.lyrics_lang,
+    SELECT t.id, t.title, t.duration, t.audio_hash, t.file_hash,
+           t.lyrics_embedded, t.lyrics_synced_lrc, t.lyrics_lang,
            a.name AS artist_name
     FROM tracks t
     LEFT JOIN artists a ON a.id = t.artist_id
     WHERE ${clause}
-      AND (t.lyrics_embedded IS NOT NULL OR t.lyrics_synced_lrc IS NOT NULL)
       AND LOWER(COALESCE(a.name, '')) LIKE '%' || LOWER(?) || '%'
       AND LOWER(t.title)              LIKE '%' || LOWER(?) || '%'
     ORDER BY
       CASE WHEN LOWER(a.name)  = LOWER(?) THEN 0 ELSE 1 END,
       CASE WHEN LOWER(t.title) = LOWER(?) THEN 0 ELSE 1 END,
+      CASE WHEN t.lyrics_embedded IS NOT NULL
+             OR t.lyrics_synced_lrc IS NOT NULL THEN 0 ELSE 1 END,
       t.id
     LIMIT 1
   `).get(...params, artist || '', title || '', artist || '', title || '');
 }
 
-// Build the Velvet-shaped response from a tracks row. Returns
-// `{notFound: true}` when the row has no lyrics of either variant.
-function buildResponse(row) {
-  if (!row) { return { notFound: true }; }
+// Same resolution precedence as the Subsonic path: local → cache →
+// enqueue-and-return-empty. Kept inline here (not imported from
+// handlers.js) because the Velvet response shape is different
+// enough that sharing the build step adds more indirection than
+// it removes.
+function resolve(row) {
+  if (!row) { return { plain: null, syncedLrc: null, lang: null }; }
+  const hasLocal = row.lyrics_embedded || row.lyrics_synced_lrc;
+  if (hasLocal) {
+    return {
+      plain:     row.lyrics_embedded   || null,
+      syncedLrc: row.lyrics_synced_lrc || null,
+      lang:      row.lyrics_lang       || null,
+    };
+  }
 
-  if (row.lyrics_synced_lrc) {
-    const parsed = parseLrc(row.lyrics_synced_lrc);
+  const canonHash = row.audio_hash || row.file_hash || null;
+  const cached = canonHash ? lrclib.getCached(canonHash) : null;
+
+  if (cached && cached.status === 'hit') {
+    if (!cached.isFresh) { enqueueIfPossible(row); }
+    return {
+      plain:     cached.plain      || null,
+      syncedLrc: cached.synced_lrc || null,
+      lang:      cached.lang       || row.lyrics_lang || null,
+    };
+  }
+  if (cached && (cached.status === 'miss' || cached.status === 'error') && cached.isFresh) {
+    return { plain: null, syncedLrc: null, lang: null };
+  }
+
+  enqueueIfPossible(row);
+  return { plain: null, syncedLrc: null, lang: null };
+}
+
+function enqueueIfPossible(row) {
+  const canonHash = row.audio_hash || row.file_hash || null;
+  if (!canonHash) { return; }
+  lrclib.maybeEnqueueFetch({
+    audioHash: canonHash,
+    artist:    row.artist_name || '',
+    title:     row.title       || '',
+    duration:  row.duration    || 0,
+  });
+}
+
+// Build the Velvet-shaped response from a tracks row + its resolved
+// lyrics. Returns `{notFound: true}` when neither local nor cached
+// lyrics are available (which also fires the background fetch for
+// next time).
+function buildResponse(row) {
+  const resolved = resolve(row);
+
+  if (resolved.syncedLrc) {
+    const parsed = parseLrc(resolved.syncedLrc);
     if (parsed.lines.length && parsed.synced) {
       return {
         synced: true,
@@ -105,11 +159,9 @@ function buildResponse(row) {
         })),
       };
     }
-    // LRC-looking text with no timestamps actually parsed — fall
-    // through to treating it as plain text.
   }
 
-  const text = row.lyrics_embedded || row.lyrics_synced_lrc;
+  const text = resolved.plain || resolved.syncedLrc;
   if (text && text.trim()) {
     const plain = plainTextToLines(text);
     return {

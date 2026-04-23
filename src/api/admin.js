@@ -14,6 +14,7 @@ import * as db from '../db/manager.js';
 import { joiValidate } from '../util/validation.js';
 import { bootRustPlayer, killRustPlayer, proxyToRust, getActiveBackend, getDetectedCliPlayers, refreshDetectedCliPlayers } from './server-playback.js';
 import { listImplementedMethods, methodStatusTable } from './subsonic/index.js';
+import * as lyricsLrclib from './lyrics-lrclib.js';
 import { listTokenAuthAttempts, clearTokenAuthAttempts, generateApiKey } from './subsonic/auth.js';
 import * as nowPlaying from './subsonic/now-playing.js';
 
@@ -683,6 +684,12 @@ export function setup(mstream) {
         sinceMs:    Date.now() - s.since,
       };
     });
+    // V20: lyrics cache stats (LRCLib fallback). Always emitted so
+    // older admin UIs see it; shown only when config.lyrics.lrclib
+    // is true (UI gates the render).
+    const lyricsCfg   = config.program.lyrics || {};
+    const lyricsCache = lyricsLrclib.cacheStats();
+
     res.json({
       methodsImplemented: methods.length,
       methods,
@@ -693,7 +700,55 @@ export function setup(mstream) {
       fullCount,
       stubCount,
       nowPlaying: byUserTrack,
+      lyrics: {
+        lrclibEnabled:       !!lyricsCfg.lrclib,
+        writeSidecarEnabled: !!lyricsCfg.writeSidecar,
+        cache:               lyricsCache,
+      },
     });
+  });
+
+  // V20: lyrics-cache management. Admin-only (guarded by the /admin/*
+  // middleware). Two purge modes:
+  //   - full  → drop every row (useful after disabling LRCLib or
+  //             after a big tag-cleanup pass)
+  //   - retry → drop just 'error' + 'pending' rows (shakes loose a
+  //             network-outage window without losing hits)
+  mstream.post('/api/v1/admin/subsonic/lyrics-cache/purge', (req, res) => {
+    const mode = String(req.body?.mode || 'full').toLowerCase();
+    let removed = 0;
+    if (mode === 'retry') {
+      removed = lyricsLrclib.purgeTransient();
+    } else {
+      removed = lyricsLrclib.purgeAll();
+    }
+    res.json({ removed, mode });
+  });
+
+  // V20: toggle the LRCLib fallback. Persists to the config file so
+  // the change survives a restart. Does NOT purge the cache — a
+  // previous hit stays valid whether or not fetching is enabled; the
+  // toggle only gates NEW fetches.
+  mstream.post('/api/v1/admin/subsonic/lyrics-cache/enabled', async (req, res) => {
+    const enabled = !!req.body?.enabled;
+    const loadConfig = await admin.loadFile(config.configFile);
+    loadConfig.lyrics = { ...(loadConfig.lyrics || {}), lrclib: enabled };
+    await admin.saveFile(loadConfig, config.configFile);
+    config.program.lyrics = { ...(config.program.lyrics || {}), lrclib: enabled };
+    res.json({ enabled });
+  });
+
+  // Toggle the writeSidecar option. Mirrors the lrclib toggle above —
+  // persisted to config.json, flipped in-memory immediately. Has no
+  // effect on already-cached rows (they live in SQLite either way);
+  // only gates future write-through to the filesystem.
+  mstream.post('/api/v1/admin/subsonic/lyrics-cache/write-sidecar', async (req, res) => {
+    const enabled = !!req.body?.enabled;
+    const loadConfig = await admin.loadFile(config.configFile);
+    loadConfig.lyrics = { ...(loadConfig.lyrics || {}), writeSidecar: enabled };
+    await admin.saveFile(loadConfig, config.configFile);
+    config.program.lyrics = { ...(config.program.lyrics || {}), writeSidecar: enabled };
+    res.json({ writeSidecar: enabled });
   });
 
   // Ping-the-Subsonic-endpoint probe for the "test connection" button.

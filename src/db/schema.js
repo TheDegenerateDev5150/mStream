@@ -1,7 +1,7 @@
 // SQLite schema definitions and migration system for mStream.
 // Uses PRAGMA user_version for tracking which migrations have been applied.
 
-export const SCHEMA_VERSION = 19;
+export const SCHEMA_VERSION = 20;
 
 export const SCHEMA_V1 = `
   -- Users
@@ -497,6 +497,47 @@ export const SCHEMA_V19 = `
   ALTER TABLE tracks ADD COLUMN lyrics_sidecar_mtime INTEGER;
 `;
 
+export const SCHEMA_V20 = `
+  -- ── LRCLib external-lookup cache ─────────────────────────────────
+  --
+  -- Opt-in (config.lyrics.lrclib = true). When a track has no local
+  -- lyrics (no embedded tag, no .lrc/.txt sidecar) the handler
+  -- consults this table; cache miss triggers an async fetch from
+  -- lrclib.net. The fetch NEVER blocks the HTTP response — request
+  -- returns an empty envelope immediately, cache warms for next call.
+  --
+  -- Keyed on audio_hash so a cache hit survives tag rewrites and
+  -- ReplayGain updates (same stability story as user_metadata). Rows
+  -- for tracks that get deleted stick around until the admin "purge"
+  -- button runs — dangling rows cost ~2KB each and the next fetch
+  -- for the same audio_hash reuses them. No FK here precisely to
+  -- allow that reuse across library shuffles (a track leaves library
+  -- A and reappears in library B with the same bytes: cache warm).
+  --
+  --   status = 'hit'   — fetched successfully, synced/plain populated
+  --          = 'miss'  — LRCLib returned 404 or empty body
+  --          = 'error' — network/timeout/parse failure; retry after
+  --                      a short TTL so a blip doesn't stick
+  --          = 'pending' — async fetch queued (never served; acts as
+  --                        a dedup flag so concurrent requests for
+  --                        the same track don't enqueue twice)
+  --
+  -- fetched_at is ms epoch. TTL logic lives in the handler
+  -- (src/api/lyrics-lrclib.js) not here — the table just records
+  -- "when" and the code decides "how stale".
+  CREATE TABLE IF NOT EXISTS lyrics_cache (
+    audio_hash  TEXT PRIMARY KEY,
+    status      TEXT NOT NULL,
+    synced_lrc  TEXT,
+    plain       TEXT,
+    lang        TEXT,
+    source      TEXT,       -- 'lrclib' for now; room for future providers
+    fetched_at  INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_lyrics_cache_status ON lyrics_cache(status);
+  CREATE INDEX IF NOT EXISTS idx_lyrics_cache_fetched ON lyrics_cache(fetched_at);
+`;
+
 // rescanRequired: true — marks migrations that change the tracks table schema
 // and need a force rescan to populate new fields. When applied, a marker file
 // is written so the next boot triggers rescanAll() instead of scanAll().
@@ -520,4 +561,9 @@ export const MIGRATIONS = [
   { version: 17, sql: SCHEMA_V17 },
   { version: 18, sql: SCHEMA_V18, rescanRequired: true },
   { version: 19, sql: SCHEMA_V19, rescanRequired: true },
+  // V20 adds the lyrics_cache table for the LRCLib fallback. Starts
+  // empty; no rescan needed. Cache warms lazily per-track on first
+  // /rest/getLyricsBySongId or /api/v1/lyrics hit against a track
+  // with no embedded/sidecar lyrics.
+  { version: 20, sql: SCHEMA_V20 },
 ];
