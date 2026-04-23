@@ -90,13 +90,70 @@ export function timeSeekMiddleware(req, res, next) {
   const duration = row?.duration;
   if (duration && start >= duration) { return res.status(416).end(); }
 
+  // Pick the output profile.
+  //
+  // MP3 inputs use `-c:a copy` — every MP3 frame is independently
+  // decodable and the MP3 "muxer" is a passthrough, so `-ss` before
+  // `-i` delivers a frame-aligned seek that preserves the original
+  // bitstream byte-for-byte. Significant CPU + quality win for the
+  // common case.
+  //
+  // FLAC intentionally stays on the transcode-to-MP3 path even though
+  // FLAC frames are also independently decodable. Empirical test
+  // (ffprobe on `-ss 10 -i 30s.flac -c:a copy -f flac -`): the FLAC
+  // muxer writes STREAMINFO with the *original* file's
+  // duration_ts/total_samples (30 s), but the actual content is only
+  // 20 s post-seek. Strict FLAC decoders that trust STREAMINFO will
+  // report wrong durations and some may pre-allocate buffers based
+  // on the stale total_samples. No ffmpeg flag observed
+  // (`-map_metadata -1`, `-fflags +bitexact`, `-ss` after `-i`) fixes
+  // this — the muxer derives the header from the demuxer's reported
+  // duration before seek-copied packets arrive. Re-encoding to FLAC
+  // would solve it but defeats the point of codec-copy, so we just
+  // stay on the MP3 transcode path for FLAC.
+  //
+  // Everything else (OGG/Opus/AAC/M4A/WAV) transcodes to MP3 at
+  // 192k the way the original path did: MP3 is the DLNA lowest
+  // common denominator every client speaks.
+  const ext = path.extname(resolved).toLowerCase();
+  let ffArgs;
+  let contentType;
+  if (ext === '.mp3') {
+    contentType = 'audio/mpeg';
+    ffArgs = [
+      '-nostdin',
+      '-ss', String(start),
+      '-i', resolved,
+      '-vn',
+      '-c:a', 'copy',
+      '-f', 'mp3',
+      '-loglevel', 'error',
+      '-',
+    ];
+  } else {
+    contentType = 'audio/mpeg';
+    ffArgs = [
+      '-nostdin',
+      '-ss', String(start),
+      '-i', resolved,
+      '-vn',
+      '-c:a', 'libmp3lame',
+      '-b:a', '192k',
+      '-f', 'mp3',
+      '-loglevel', 'error',
+      '-',
+    ];
+  }
+
   // HEAD: clients probe duration via HEAD + TimeSeekRange. Respond with
-  // headers only, no body — ffmpeg would be wasted work.
+  // headers only, no body — ffmpeg would be wasted work. Content-Type
+  // must match what the GET path will emit so picky clients (Sony,
+  // Marantz) accept the subsequent GET.
   if (req.method === 'HEAD') {
     const end = duration ? formatNpt(duration) : '';
     const durStr = duration ? formatNpt(duration) : '';
     res.status(200).set({
-      'Content-Type': 'audio/mpeg',
+      'Content-Type': contentType,
       'TimeSeekRange.dlna.org': `npt=${formatNpt(start)}-${end}/${durStr}`,
       'X-Seek-By-Time-Range': 'true',
       'transferMode.dlna.org': 'Streaming',
@@ -105,20 +162,6 @@ export function timeSeekMiddleware(req, res, next) {
     return;
   }
 
-  // Transcode to MP3 from the seek point. MP3 is universally supported by
-  // DLNA renderers; choosing it avoids per-format codec-copy edge cases.
-  const args = [
-    '-nostdin',
-    '-ss', String(start),
-    '-i', resolved,
-    '-vn',
-    '-c:a', 'libmp3lame',
-    '-b:a', '192k',
-    '-f', 'mp3',
-    '-loglevel', 'error',
-    '-',
-  ];
-
   if (!getResolvedSource()) {
     winston.warn('[dlna time-seek] ffmpeg unavailable, refusing seek request');
     return res.status(503).end();
@@ -126,7 +169,7 @@ export function timeSeekMiddleware(req, res, next) {
 
   let ff;
   try {
-    ff = spawn(ffmpegBin(), args);
+    ff = spawn(ffmpegBin(), ffArgs);
   } catch (err) {
     winston.error(`[dlna time-seek] ffmpeg spawn failed: ${err.message}`);
     return res.status(500).end();
@@ -149,7 +192,7 @@ export function timeSeekMiddleware(req, res, next) {
   });
 
   res.status(200).set({
-    'Content-Type': 'audio/mpeg',
+    'Content-Type': contentType,
     'TimeSeekRange.dlna.org': `npt=${formatNpt(start)}-${end}/${durStr}`,
     'X-Seek-By-Time-Range': 'true',
     'transferMode.dlna.org': 'Streaming',
