@@ -526,14 +526,23 @@ async function recursiveScan(dir) {
           // File unchanged — just update the scan ID
           stmts.updateScanId.run(loadJson.scanId, existing.id);
         } else {
-          // New or modified file — parse and insert
+          // New or modified file — parse and insert.
+          //
+          // NOTE: we intentionally do NOT DELETE the old tracks row
+          // before calling parseMyFile. If the parse throws (malformed
+          // tags, disk error, locked file), the old row stays intact
+          // and the user's user_metadata / bookmarks / play-queue
+          // entries keyed off the old hash are preserved. The INSERT
+          // below uses `INSERT OR REPLACE`, which atomically drops the
+          // old row (cascading track_artists/track_genres) and inserts
+          // the new one only after parseMyFile has returned a complete
+          // songInfo. Earlier revisions pre-DELETEd here; inside the
+          // scanner's batch transaction a mid-parse throw would commit
+          // the DELETE without a matching INSERT on the next 25-file
+          // flush, orphaning user state on the next scan.
           const oldFileHash  = existing ? existing.file_hash  : null;
           const oldAudioHash = existing ? existing.audio_hash : null;
           const oldAlbumId   = existing ? existing.album_id   : null;
-          if (existing) {
-            // Delete old record (will be re-inserted with fresh metadata)
-            db.prepare('DELETE FROM tracks WHERE id = ?').run(existing.id);
-          }
           const songInfo = await parseMyFile(filepath, stat.mtime.getTime());
           const { albumId: newAlbumId } = insertTrack(songInfo);
           // User-facing tables key on canonical hash — audio_hash when we

@@ -332,6 +332,14 @@ fn process_one(
     // the stored mtime and what's on disk triggers a re-read.
     let current_sidecar_mtime = sidecar_mtime(filepath);
 
+    // NOTE: we intentionally do NOT DELETE the old tracks row before
+    // tag parsing. A mid-parse failure used to leave the DELETE
+    // committed without a matching INSERT on the next batch flush,
+    // orphaning user_metadata / bookmarks / play-queue rows keyed off
+    // the old hash. The INSERT OR REPLACE below handles the row swap
+    // atomically — the old row (and its cascaded track_artists /
+    // track_genres) only disappears when the new one is ready to take
+    // its place.
     let (old_hash, old_audio_hash, old_album_id): (Option<String>, Option<String>, Option<i64>) =
         if let Some((id, existing_mod, old_file, old_audio, old_album, old_sidecar_mtime)) = &existing {
             let audio_unchanged = *existing_mod == mod_time;
@@ -342,7 +350,6 @@ fn process_one(
                     rusqlite::params![config.scan_id, id])?;
                 return Ok(false);
             }
-            conn.execute("DELETE FROM tracks WHERE id = ?", rusqlite::params![id])?;
             (
                 if old_file.is_empty()  { None } else { Some(old_file.clone())  },
                 if old_audio.is_empty() { None } else { Some(old_audio.clone()) },
