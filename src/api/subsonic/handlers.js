@@ -2430,7 +2430,16 @@ export function resolveLyricsForTrack(row) {
     };
   }
 
-  // Step 3: fresh miss/error → respect the TTL, serve empty without
+  // Step 3a: a prior job is mid-flight or was interrupted — serve
+  // empty WITHOUT re-enqueueing. If the previous process crashed
+  // between UPSERT('pending') and the real result, the boot hook
+  // demotes it to 'error' at next startup; a live 'pending' means
+  // another request is working on it right now, so we just wait.
+  if (cached && cached.status === 'pending') {
+    return { plain: null, syncedLrc: null, lang: null, fromCache: false };
+  }
+
+  // Step 3b: fresh miss/error → respect the TTL, serve empty without
   // re-enqueueing. Negative cache does its job.
   if (cached && (cached.status === 'miss' || cached.status === 'error') && cached.isFresh) {
     return { plain: null, syncedLrc: null, lang: null, fromCache: false };

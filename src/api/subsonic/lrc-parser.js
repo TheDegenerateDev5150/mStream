@@ -156,15 +156,13 @@ export function plainTextToLines(text) {
     return { synced: false, lines: [] };
   }
   const clean = text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text;
-  const lines = clean.split(/\r?\n/)
-    .map(s => s.trimEnd())           // preserve intentional leading indent
-    .filter((_, i, arr) => {
-      // Collapse runs of >1 empty line at start/end but keep internal
-      // single blanks as instrumental-break markers.
-      return true;
-    });
-  // Trim leading/trailing empty lines.
-  while (lines.length && !lines[0])        { lines.shift(); }
+  const lines = clean.split(/\r?\n/).map(s => s.trimEnd());
+  // Trim leading/trailing empty lines but keep INTERNAL blanks as
+  // instrumental-break markers. Clients that render a scrolling-text
+  // pane often draw blank lines as visual spacing; callers that
+  // iterate for a karaoke-style display can ignore `time_ms === 0 &&
+  // text === ''` entries.
+  while (lines.length && !lines[0])                 { lines.shift(); }
   while (lines.length && !lines[lines.length - 1]) { lines.pop(); }
   return {
     synced: false,

@@ -37,42 +37,74 @@
 
 import https from 'node:https';
 import http  from 'node:http';
+import zlib  from 'node:zlib';
 import fs   from 'node:fs';
 import path from 'node:path';
 import winston from 'winston';
 import * as db from '../db/manager.js';
 import * as config from '../state/config.js';
 
+// Maximum redirects any single fetch will follow. Protects against
+// A→B→A loops (malicious or misconfigured proxy) that would otherwise
+// recurse until the stack blows.
+const MAX_REDIRECTS = 5;
+
 // Default HTTP GET implementation. Returns `{status, body}` where body
 // is parsed JSON (or null for non-200). Overridable for tests. Follows
-// redirects; dispatches to `https` or `http` based on scheme so the
-// test harness can point us at a local plain-http mock.
+// redirects up to MAX_REDIRECTS; dispatches to `https` or `http` based
+// on scheme so the test harness can point us at a local plain-http
+// mock. Accepts gzip/deflate from the origin and inflates transparently
+// — LRCLib serves gzipped JSON, so identity-only would pay bandwidth
+// for no reason.
 function defaultHttpGet(url, timeoutMs) {
   return new Promise((resolve, reject) => {
+    let redirectCount = 0;
     const follow = (u) => {
       const mod = u.startsWith('https:') ? https : http;
       const req = mod.get(u, {
         headers: {
           'User-Agent':       'mStream/lrclib-fetch (+https://mstream.io)',
           'Accept':           'application/json',
-          'Accept-Encoding':  'identity',
+          'Accept-Encoding':  'gzip, deflate',
         },
       }, res => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           res.resume();
+          if (++redirectCount > MAX_REDIRECTS) {
+            return reject(new Error(`lrclib redirect limit exceeded (${MAX_REDIRECTS})`));
+          }
           return follow(res.headers.location);
         }
-        let data = '';
-        res.on('data', c => { data += c; });
-        res.on('end', () => {
+        // Pipe through gunzip/inflate if the origin said it compressed.
+        // Identity responses flow through as-is. A malformed gzipped body
+        // emits 'error' on the decompressor; we reject via the stream
+        // error handler below.
+        const enc = String(res.headers['content-encoding'] || '').toLowerCase();
+        let stream = res;
+        if (enc === 'gzip')    { stream = res.pipe(zlib.createGunzip()); }
+        else if (enc === 'deflate') { stream = res.pipe(zlib.createInflate()); }
+
+        const chunks = [];
+        stream.on('data', c => { chunks.push(c); });
+        stream.on('end', () => {
           if (res.statusCode !== 200) { return resolve({ status: res.statusCode, body: null }); }
-          try { resolve({ status: 200, body: JSON.parse(data) }); }
-          catch { resolve({ status: 200, body: null }); }
+          try {
+            const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            resolve({ status: 200, body });
+          } catch { resolve({ status: 200, body: null }); }
         });
-        res.on('error', reject);
+        stream.on('error', err => reject(err));
       });
       req.on('error', reject);
-      req.setTimeout(timeoutMs, () => { req.destroy(new Error('lrclib timeout')); });
+      req.setTimeout(timeoutMs, () => {
+        // Log explicitly — without this, a silent timeout-then-reject
+        // path just writes status='error' with no breadcrumb in logs,
+        // which makes "lrclib suddenly stopped working" hard to
+        // diagnose. winston.warn keeps noise low while still showing
+        // up in the daily rotation.
+        winston.warn(`[lyrics-lrclib] timeout after ${timeoutMs}ms fetching ${u}`);
+        req.destroy(new Error('lrclib timeout'));
+      });
     };
     follow(url);
   });
@@ -84,14 +116,78 @@ export function _setHttpClient(fn) { httpGet = fn || defaultHttpGet; }
 
 // Default endpoint; overridable via env for internal testing.
 const LRCLIB_BASE = process.env.MSTREAM_LRCLIB_BASE || 'https://lrclib.net';
-const FETCH_TIMEOUT_MS = 8000;
+
+// Per-call fetch timeout. Default 8s (matches the Velvet fork and is
+// well inside LRCLib's typical latency at the 99th percentile). Read
+// on every call so the admin can tune without restarting.
+function fetchTimeoutMs() {
+  const l = config.program.lyrics || {};
+  return l.fetchTimeoutMs ?? 8000;
+}
+
+// ── Boot hook ───────────────────────────────────────────────────────────────
+
+/**
+ * Called once at server boot (wired in server.js right after the db is
+ * initialised). Cleans up 'pending' rows left behind by a previous
+ * process that crashed mid-fetch — without this, those rows would be
+ * served as "empty, never retry" indefinitely because their TTL is
+ * Infinity and `queued` dedups new fetches only while the in-process
+ * Set has the entry.
+ *
+ * Stale pending rows are demoted to 'error' with `fetched_at=0` so
+ * the TTL (1 hour) starts counting from the next real observation
+ * rather than from whenever the crashed process queued them.
+ */
+export function onBoot() {
+  try {
+    const r = db.getDB().prepare(
+      "UPDATE lyrics_cache SET status = 'error', fetched_at = 0 WHERE status = 'pending'"
+    ).run();
+    if (r.changes > 0) {
+      winston.info(`[lyrics-lrclib] demoted ${r.changes} stale pending row(s) left by a previous run`);
+    }
+  } catch (err) {
+    // lyrics_cache may not exist yet on a fresh DB before migrations
+    // ran — boot is called after migrations, so this is a genuine
+    // error and worth logging. Don't throw: lyrics are non-critical
+    // and the server should come up regardless.
+    winston.warn(`[lyrics-lrclib] boot cleanup skipped: ${err.message}`);
+  }
+
+  // Immediate orphan sweep, plus a daily repeat. Cheap enough that
+  // we don't guard on isEnabled — even a disabled deployment might
+  // have leftover rows from a previous enabled-era that the admin
+  // never purged.
+  purgeOrphans();
+  if (_orphanTimer) { clearInterval(_orphanTimer); }
+  _orphanTimer = setInterval(() => {
+    try { purgeOrphans(); } catch (_) { /* already logged */ }
+  }, 24 * 60 * 60 * 1000);
+  // In Node 16+, unref() makes the timer not keep the process alive —
+  // exactly what we want for a background housekeeping tick. Test
+  // harnesses that spin up/tear down the server repeatedly rely on
+  // this to exit cleanly.
+  if (typeof _orphanTimer.unref === 'function') { _orphanTimer.unref(); }
+}
 
 // ── Cache access ────────────────────────────────────────────────────────────
 
 function now() { return Date.now(); }
 
-// Fetch a cache row. Returns null if no row, or the row with an
-// `isFresh` flag computed against the current TTLs.
+// Fetch a cache row. Returns null if there's no row for this audio_hash.
+//
+// Intentionally NOT gated on isEnabled(): disabling LRCLib stops new
+// fetches (see maybeEnqueueFetch) but previously-cached hits keep
+// serving. A "don't use what I already have" action is what the
+// admin Purge button is for. This way, an operator who toggles the
+// feature off to stop network traffic doesn't lose the lyrics they
+// already fetched — their clients keep rendering text from the
+// local SQLite cache, only new-track fetches are gated.
+//
+// Side-effect: an operator who wants to pretend LRCLib never
+// happened must disable AND purge. The admin UI shows both
+// actions together so this is discoverable.
 export function getCached(audioHash) {
   if (!audioHash) { return null; }
   const row = db.getDB().prepare(
@@ -136,6 +232,14 @@ const queued = new Set();    // audio_hashes currently queued OR in-flight
 let inFlight = 0;
 const pendingJobs = [];
 
+// Bumped on every `purgeAll()` / `purgeTransient()` call. Each job
+// captures the generation at start and skips its writeCacheRow if the
+// generation moved — that's how an in-flight fetch avoids resurrecting
+// a row right after the admin wiped the table. No explicit "wait for
+// inFlight=0 before DELETE" — that'd block the admin request for up
+// to the 8s fetch timeout, which feels wrong for a purge button.
+let purgeGeneration = 0;
+
 /**
  * If configured + not already cached-fresh + not already queued,
  * enqueue an async fetch for this track. Returns true when enqueued.
@@ -149,12 +253,31 @@ export function maybeEnqueueFetch({ audioHash, artist, title, duration }) {
   if (!artist || !title)    { return false; }
   if (queued.has(audioHash)) { return false; }
 
-  // Write a 'pending' row so concurrent requests see it and skip
-  // enqueueing. We also use this as the serialisation point: the
-  // worker clears/overwrites it when the fetch resolves.
-  writeCacheRow(audioHash, { status: 'pending' });
+  // Stale-hit case: the cache already has a 'hit' row whose fetched_at
+  // is outside the TTL. Re-fetching is fine; flipping the row straight
+  // to 'pending' would hide the stale content from resolveLyrics until
+  // the refresh completes (which is exactly the "no regression on blip"
+  // failure mode we're trying to avoid). Skip the pending-row write in
+  // that case — the job still queues, the Set guards against duplicate
+  // enqueueing, and stale content continues to serve.
+  const existing = db.getDB().prepare(
+    "SELECT status FROM lyrics_cache WHERE audio_hash = ?"
+  ).get(audioHash);
+  const isStaleHitRefresh = existing && existing.status === 'hit';
+
+  if (!isStaleHitRefresh) {
+    // Fresh enqueue: write a 'pending' row so concurrent requests
+    // see it and skip enqueueing. (Also serves as a crash breadcrumb —
+    // the boot hook demotes stuck pending rows to 'error' so a
+    // dead-process-midway never wedges a track forever.)
+    writeCacheRow(audioHash, { status: 'pending' });
+  }
   queued.add(audioHash);
-  pendingJobs.push({ audioHash, artist, title, duration: duration || 0 });
+  pendingJobs.push({
+    audioHash, artist, title,
+    duration: duration || 0,
+    generation: purgeGeneration,
+  });
   drain();
   return true;
 }
@@ -184,6 +307,11 @@ function drain() {
 async function runJob(job) {
   try {
     const data = await fetchFromLrclib(job.artist, job.title, job.duration);
+    // Admin wiped the cache while we were mid-fetch — respect the
+    // admin's intent and drop this write instead of resurrecting the
+    // row. Next request for this track re-enqueues cleanly.
+    if (job.generation !== purgeGeneration) { return; }
+
     if (!data || (!data.syncedLyrics && !data.plainLyrics)) {
       writeCacheRow(job.audioHash, { status: 'miss' });
       return;
@@ -205,6 +333,7 @@ async function runJob(job) {
       writeSidecarIfPossible(job.audioHash, data);
     }
   } catch (err) {
+    if (job.generation !== purgeGeneration) { return; }
     // Network / parse / timeout. Status='error' has a short TTL so a
     // transient blip doesn't stick — next request retries in ~1hr.
     writeCacheRow(job.audioHash, { status: 'error' });
@@ -246,7 +375,20 @@ export function writeSidecarIfPossible(audioHash, data) {
     `).get(audioHash, audioHash);
     if (!row || !row.filepath || !row.root_path) { return false; }
 
-    const absolute = path.resolve(row.root_path, row.filepath);
+    // Defense in depth: compute the absolute path and confirm it
+    // actually resolves inside the library's root directory. The
+    // scanner writes well-formed relative paths; this guard would
+    // only trip if tracks.filepath were poisoned (e.g. by a future
+    // import tool that forgot to sanitise) or if the user planted
+    // a symlink inside the library pointing outward. Both would
+    // let us write an LRCLib payload to /etc/hostname.lrc without
+    // this check.
+    const rootReal = path.resolve(row.root_path);
+    const absolute = path.resolve(rootReal, row.filepath);
+    if (absolute !== rootReal && !absolute.startsWith(rootReal + path.sep)) {
+      winston.warn(`[lyrics-lrclib] refusing to write sidecar outside library root: ${absolute}`);
+      return false;
+    }
     if (!fs.existsSync(absolute)) { return false; }
 
     // Compute sibling base. `<base>.lrc` preferred for synced content,
@@ -296,7 +438,7 @@ async function fetchFromLrclib(artist, title, duration) {
     const params = new URLSearchParams({ artist_name: artist, track_name: title });
     if (dur > 0) { params.set('duration', String(Math.round(dur))); }
     const url = `${LRCLIB_BASE}/api/get?${params}`;
-    const { status, body } = await httpGet(url, FETCH_TIMEOUT_MS);
+    const { status, body } = await httpGet(url, fetchTimeoutMs());
     if (status === 404) { return null; }              // authoritative miss
     if (status !== 200)  { throw new Error(`lrclib ${status}`); }  // transient
     if (!body)           { throw new Error('lrclib parse error'); }
@@ -321,9 +463,17 @@ export function cacheStats() {
   const rows = db.getDB().prepare(
     'SELECT status, COUNT(*) AS n FROM lyrics_cache GROUP BY status'
   ).all();
-  const out = { hit: 0, miss: 0, error: 0, pending: 0, total: 0 };
+  // `other` catches any status we don't recognise so `total` always
+  // equals the sum of the named buckets. Future status values (e.g.
+  // a `'stale'` variant) become visible in the admin panel without
+  // silently inflating `total`.
+  const out = { hit: 0, miss: 0, error: 0, pending: 0, other: 0, total: 0 };
   for (const r of rows) {
-    if (r.status in out) { out[r.status] = r.n; }
+    if (r.status in out && r.status !== 'total' && r.status !== 'other') {
+      out[r.status] = r.n;
+    } else {
+      out.other += r.n;
+    }
     out.total += r.n;
   }
   return out;
@@ -332,30 +482,82 @@ export function cacheStats() {
 /**
  * Drop every cache row. Called by the admin "purge all" button.
  * Returns the number of rows deleted.
+ *
+ * Race handling: bumps `purgeGeneration` so any in-flight fetch
+ * whose job captured the old generation will skip its writeCacheRow
+ * rather than resurrect a row right after the admin cleared the
+ * table. Jobs already in the `pendingJobs` queue are cleared here
+ * too — they'd write rows for data the admin just asked to forget.
+ * In-flight jobs DO continue their HTTP call (we can't safely cancel
+ * a partial fetch); the generation check is what makes the result
+ * a no-op.
  */
 export function purgeAll() {
   const r = db.getDB().prepare('DELETE FROM lyrics_cache').run();
-  // Also flush the in-memory queue/set — a purge while jobs are
-  // mid-flight would otherwise race with those jobs writing fresh
-  // rows in as the admin expects a clean slate.
-  queued.clear();
+  purgeGeneration++;
   pendingJobs.length = 0;
+  // Leave `queued` alone: an entry there means "a fetch is in-flight
+  // for this hash right now". Dropping it would allow a duplicate
+  // enqueue for the same track before the in-flight one notices the
+  // generation bump. The in-flight worker's `.finally` cleans up the
+  // Set entry when it's actually done.
   return r.changes;
 }
+
+/**
+ * Delete cache rows whose audio_hash no longer appears in the tracks
+ * table (neither audio_hash nor file_hash matches). Called periodically
+ * so we don't accumulate dead rows for tracks the user removed from
+ * the library.
+ *
+ * Not in a hot path — runs once at boot and on a daily timer. The
+ * query is a single NOT EXISTS subquery; even at 100k cache rows vs
+ * 100k tracks it completes in tens of ms on a warm DB.
+ *
+ * Returns the number of orphans deleted.
+ */
+export function purgeOrphans() {
+  try {
+    const r = db.getDB().prepare(`
+      DELETE FROM lyrics_cache
+      WHERE audio_hash NOT IN (
+        SELECT audio_hash FROM tracks WHERE audio_hash IS NOT NULL
+        UNION
+        SELECT file_hash  FROM tracks WHERE file_hash  IS NOT NULL
+      )
+    `).run();
+    if (r.changes > 0) {
+      winston.info(`[lyrics-lrclib] swept ${r.changes} orphan cache row(s)`);
+    }
+    return r.changes;
+  } catch (err) {
+    winston.warn(`[lyrics-lrclib] orphan sweep failed: ${err.message}`);
+    return 0;
+  }
+}
+
+// Daily sweep timer. Bookkept so `reset()` (used in tests) can stop it.
+let _orphanTimer = null;
 
 /**
  * Wipe just the error + pending rows so those tracks get retried on
  * next request. Used by the admin "retry errors" button to shake
  * loose a network-outage window without dropping successful hits.
+ *
+ * Does NOT bump `purgeGeneration` — we want in-flight fetches to
+ * complete and write their real result. Only pre-existing rows
+ * (from a prior run or a cancelled scan) are wiped.
  */
 export function purgeTransient() {
   const r = db.getDB().prepare(
     "DELETE FROM lyrics_cache WHERE status IN ('error', 'pending')"
   ).run();
-  // Clear the dedup set for the rows we just removed. Cheap — re-
-  // derive from the new DB state rather than tracking which set
-  // entries correspond to 'error' vs 'hit' rows.
-  queued.clear();
+  // Intentionally do NOT touch `queued`/`pendingJobs`:
+  //   - `queued` reflects in-memory in-flight work; draining it
+  //     would just let duplicate enqueues fire for the same track.
+  //   - `pendingJobs` may contain brand-new queued jobs that are
+  //     not yet represented by any row — dropping them would lose
+  //     requests the admin didn't intend to cancel.
   return r.changes;
 }
 
@@ -382,4 +584,9 @@ export function _resetForTests() {
   queued.clear();
   pendingJobs.length = 0;
   inFlight = 0;
+  purgeGeneration = 0;
+  if (_orphanTimer) {
+    clearInterval(_orphanTimer);
+    _orphanTimer = null;
+  }
 }

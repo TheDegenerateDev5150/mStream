@@ -120,6 +120,12 @@ function resolve(row) {
       lang:      cached.lang       || row.lyrics_lang || null,
     };
   }
+  // Mid-flight fetch for this track — serve empty without re-
+  // enqueueing. Boot hook cleans up stuck 'pending' rows from
+  // a crashed previous process.
+  if (cached && cached.status === 'pending') {
+    return { plain: null, syncedLrc: null, lang: null };
+  }
   if (cached && (cached.status === 'miss' || cached.status === 'error') && cached.isFresh) {
     return { plain: null, syncedLrc: null, lang: null };
   }

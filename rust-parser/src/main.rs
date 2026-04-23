@@ -84,6 +84,43 @@ fn main() {
         }
     }
 
+    // Hidden developer/test subcommand: `rust-parser --extract-lyrics <path>`
+    // prints the four lyrics column values as JSON on stdout. Used by
+    // test/lyrics-parity.test.mjs to confirm the JS extractor
+    // (src/db/lyrics-extraction.js) and the Rust extractor below
+    // produce byte-identical results for the same input. Any drift
+    // means a track scanned by one scanner looks different from a
+    // track scanned by the other — silent divergence on libraries
+    // that mix-and-match (dev + prebuilt binary, different versions).
+    if args.len() == 3 && args[1] == "--extract-lyrics" {
+        let p = Path::new(&args[2]);
+        match extract_lyrics_for_cli(p) {
+            Ok((embedded, synced, lang, sidecar_mtime)) => {
+                // Manual JSON serialisation (same reason as --audio-hash:
+                // one-line output, no serde dance). All four fields emit
+                // as `null` when absent so the consumer can JSON.parse
+                // and compare with ===.
+                let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"")
+                    .replace('\n', "\\n").replace('\r', "\\r");
+                let j = |v: &Option<String>| match v {
+                    Some(s) => format!("\"{}\"", esc(s)),
+                    None    => "null".to_string(),
+                };
+                let mtime_json = match sidecar_mtime {
+                    Some(n) => format!("{}", n),
+                    None    => "null".to_string(),
+                };
+                println!("{{\"lyricsEmbedded\":{},\"lyricsSyncedLrc\":{},\"lyricsLang\":{},\"lyricsSidecarMtime\":{}}}",
+                    j(&embedded), j(&synced), j(&lang), mtime_json);
+                return;
+            }
+            Err(e) => {
+                eprintln!("extract_lyrics failed: {}", e);
+                std::process::exit(2);
+            }
+        }
+    }
+
     // Hidden developer/test subcommand: `rust-parser --waveform <path>`
     // prints `{"bars":"<hex of 800 bytes>"}` on success or `{"bars":null}`
     // when no waveform can be produced (e.g. .opus, where symphonia 0.5
@@ -939,6 +976,59 @@ fn read_txt_sidecar(audio_path: &Path) -> Option<String> {
         if !clean.trim().is_empty() { return Some(clean); }
     }
     None
+}
+
+// Standalone re-implementation of the scanner's lyrics extraction
+// path, used by the `--extract-lyrics` CLI subcommand for the
+// JS↔Rust parity test. Returns the four column values without
+// touching a DB. MUST stay byte-identical with the scan-path logic
+// above; any change to ordering or precedence belongs in both places.
+fn extract_lyrics_for_cli(audio_path: &Path)
+    -> Result<(Option<String>, Option<String>, Option<String>, Option<i64>), Box<dyn std::error::Error>>
+{
+    let mut embedded: Option<String> = None;
+    let mut synced:   Option<String> = None;
+    let mut lang:     Option<String> = None;
+
+    // Pass 1: embedded tags (mirror of the in-scan block). Uses the
+    // same lofty ItemKey values so USLT / Vorbis LYRICS / MP4 ©lyr /
+    // APE Lyrics all normalise. Relaxed parse so partial-broken tags
+    // don't drop the whole file.
+    let parse_opts = ParseOptions::new().parsing_mode(ParsingMode::Relaxed);
+    if let Ok(tagged) = Probe::open(audio_path).and_then(|p| p.options(parse_opts).read()) {
+        if let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) {
+            if let Some(t) = tag.get_string(&ItemKey::Lyrics) {
+                let s = t.trim();
+                if !s.is_empty() {
+                    if looks_like_lrc(s) { synced   = Some(s.to_string()); }
+                    else                 { embedded = Some(s.to_string()); }
+                }
+            }
+            if let Some(l) = tag.get_string(&ItemKey::Language) {
+                lang = normalise_lang(l);
+            }
+        }
+    }
+
+    // Pass 2: sidecars — probe only when we don't already have the
+    // better variant. Same precedence as the in-scan block.
+    let mtime = sidecar_mtime(audio_path);
+    if synced.is_none() {
+        if let Some((text, suffix_lang)) = read_lrc_sidecar(audio_path) {
+            synced = Some(text);
+            if lang.is_none() {
+                lang = suffix_lang.and_then(|l| normalise_lang(&l));
+            }
+        }
+    }
+    if synced.is_none() && embedded.is_none() {
+        if let Some(text) = read_txt_sidecar(audio_path) {
+            if looks_like_lrc(&text) { synced   = Some(text); }
+            else                      { embedded = Some(text); }
+        }
+    }
+
+    Ok((embedded, synced, lang, mtime))
 }
 
 // ── Genre helpers ────────────────────────────────────────────────────────────

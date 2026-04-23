@@ -36,6 +36,7 @@ import * as serverPlaybackApi from './api/server-playback.js';
 import * as albumArtApi from './api/album-art.js';
 import * as waveformApi from './api/waveform.js';
 import * as lyricsApi from './api/lyrics.js';
+import * as lyricsLrclib from './api/lyrics-lrclib.js';
 // Velvet UI modules — dynamically imported only when ui='velvet' is active
 import WebError from './util/web-error.js';
 
@@ -249,6 +250,11 @@ export async function serveIt(configFile) {
   albumArtApi.setup(mstream);
   waveformApi.setup(mstream);
   lyricsApi.setup(mstream);
+  // V20 housekeeping: clean up 'pending' lyrics_cache rows from any
+  // previous process that crashed mid-fetch, and start the periodic
+  // orphan sweep. Both are opt-in-cheap (single UPDATE / DELETE on
+  // a table that starts empty and is usually tiny).
+  lyricsLrclib.onBoot();
   serverPlaybackApi.setup(mstream);
   userApiKeysApi.setup(mstream);
 

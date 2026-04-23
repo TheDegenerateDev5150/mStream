@@ -715,14 +715,17 @@ export function setup(mstream) {
   //   - retry → drop just 'error' + 'pending' rows (shakes loose a
   //             network-outage window without losing hits)
   mstream.post('/api/v1/admin/subsonic/lyrics-cache/purge', (req, res) => {
-    const mode = String(req.body?.mode || 'full').toLowerCase();
-    let removed = 0;
-    if (mode === 'retry') {
-      removed = lyricsLrclib.purgeTransient();
-    } else {
-      removed = lyricsLrclib.purgeAll();
-    }
-    res.json({ removed, mode });
+    // Match the Joi validation style the rest of /admin uses — a
+    // malformed body (extra keys, wrong `mode` string) throws to the
+    // 403 handler rather than silently proceeding with defaults.
+    const schema = Joi.object({
+      mode: Joi.string().valid('full', 'retry').default('full'),
+    });
+    const { value } = joiValidate(schema, req.body || {});
+    const removed = value.mode === 'retry'
+      ? lyricsLrclib.purgeTransient()
+      : lyricsLrclib.purgeAll();
+    res.json({ removed, mode: value.mode });
   });
 
   // V20: toggle the LRCLib fallback. Persists to the config file so
@@ -730,12 +733,13 @@ export function setup(mstream) {
   // previous hit stays valid whether or not fetching is enabled; the
   // toggle only gates NEW fetches.
   mstream.post('/api/v1/admin/subsonic/lyrics-cache/enabled', async (req, res) => {
-    const enabled = !!req.body?.enabled;
+    const schema = Joi.object({ enabled: Joi.boolean().required() });
+    const { value } = joiValidate(schema, req.body || {});
     const loadConfig = await admin.loadFile(config.configFile);
-    loadConfig.lyrics = { ...(loadConfig.lyrics || {}), lrclib: enabled };
+    loadConfig.lyrics = { ...(loadConfig.lyrics || {}), lrclib: value.enabled };
     await admin.saveFile(loadConfig, config.configFile);
-    config.program.lyrics = { ...(config.program.lyrics || {}), lrclib: enabled };
-    res.json({ enabled });
+    config.program.lyrics = { ...(config.program.lyrics || {}), lrclib: value.enabled };
+    res.json({ enabled: value.enabled });
   });
 
   // Toggle the writeSidecar option. Mirrors the lrclib toggle above —
@@ -743,12 +747,13 @@ export function setup(mstream) {
   // effect on already-cached rows (they live in SQLite either way);
   // only gates future write-through to the filesystem.
   mstream.post('/api/v1/admin/subsonic/lyrics-cache/write-sidecar', async (req, res) => {
-    const enabled = !!req.body?.enabled;
+    const schema = Joi.object({ enabled: Joi.boolean().required() });
+    const { value } = joiValidate(schema, req.body || {});
     const loadConfig = await admin.loadFile(config.configFile);
-    loadConfig.lyrics = { ...(loadConfig.lyrics || {}), writeSidecar: enabled };
+    loadConfig.lyrics = { ...(loadConfig.lyrics || {}), writeSidecar: value.enabled };
     await admin.saveFile(loadConfig, config.configFile);
-    config.program.lyrics = { ...(config.program.lyrics || {}), writeSidecar: enabled };
-    res.json({ writeSidecar: enabled });
+    config.program.lyrics = { ...(config.program.lyrics || {}), writeSidecar: value.enabled };
+    res.json({ writeSidecar: value.enabled });
   });
 
   // Ping-the-Subsonic-endpoint probe for the "test connection" button.

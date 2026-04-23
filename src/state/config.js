@@ -109,6 +109,10 @@ const lyricsOptions = Joi.object({
   cacheTtlMissesMs: Joi.number().integer().min(0).default(    24 * 60 * 60 * 1000),
   cacheTtlErrorsMs: Joi.number().integer().min(0).default(         60 * 60 * 1000),
   concurrency:      Joi.number().integer().min(1).max(16).default(2),
+  // Per-call fetch timeout in ms. Read fresh on each fetch so admins
+  // can tune without restarting. Raise if you're on a satellite
+  // connection; lower if you want LRCLib failures to surface faster.
+  fetchTimeoutMs:   Joi.number().integer().min(500).max(60000).default(8000),
   // When true, successful LRCLib fetches ALSO write a sibling
   // `<basename>.lrc` (or `.txt` for plain-only hits) next to the
   // audio file. Default off: the SQLite cache already serves lyrics
