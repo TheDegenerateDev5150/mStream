@@ -33,6 +33,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { startServer } from './helpers/server.mjs';
 import { parseLrc, plainTextToLines } from '../src/api/subsonic/lrc-parser.js';
+import { extractLyrics } from '../src/db/lyrics-extraction.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -427,6 +428,40 @@ describe('/api/v1/lyrics (Velvet UI)', () => {
 });
 
 // ── plainTextToLines (unit) ─────────────────────────────────────────────────
+
+// ── Round-2 regression: extractLyrics reads sidecars even when the
+// tag-parse path gave us nothing. scanner.mjs' catch block used to
+// populate `songInfo.lyricsInfo` with all-null defaults, which made
+// the "run extractLyrics as a fallback" branch unreachable — a FLAC
+// with corrupt tag frames + a sibling .lrc would silently have no
+// lyrics. The extractor itself has always tolerated a null/empty
+// common; the unit test here pins that so a future refactor can't
+// quietly break the tag-parse-error fallback path.
+describe('extractLyrics (unit) — null-common sidecar fallback', () => {
+  test('null common + on-disk .lrc sibling → lyrics come from sidecar', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'mstream-lyrics-fallback-'));
+    try {
+      const audioPath = path.join(tmp, 'song.flac');
+      const lrcPath   = path.join(tmp, 'song.lrc');
+      // We don't need a real audio file — extractLyrics only looks
+      // at `absPath` to compute the sibling directory.
+      await fs.writeFile(audioPath, '');
+      await fs.writeFile(lrcPath, '[00:01.00]Recovered from tag-parse error', 'utf8');
+
+      // Mimic what parseMyFile passes when music-metadata threw —
+      // a barebones object with no `.lyrics` array.
+      const nothing = extractLyrics(null, audioPath);
+      assert.match(nothing.lyricsSyncedLrc, /Recovered from tag-parse error/);
+
+      // Same result passing an empty `common` (matches the shape
+      // scanner.mjs synthesises on its error path).
+      const empty = extractLyrics({ lyrics: undefined }, audioPath);
+      assert.match(empty.lyricsSyncedLrc, /Recovered from tag-parse error/);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
 
 describe('plainTextToLines (unit)', () => {
   test('trims leading/trailing empty lines but keeps internal blanks', () => {

@@ -3104,8 +3104,11 @@ const subsonicView = Vue.component('subsonic-view', {
         </div>
       </div>
 
-      <!-- Lyrics cache (LRCLib fallback, V20) -->
-      <div v-if="params.mode !== 'disabled' && stats.lyrics" class="row">
+      <!-- Lyrics cache (LRCLib fallback, V20). Visible regardless of
+           Subsonic mode because /api/v1/lyrics works through the main
+           mStream auth wall (Velvet UI uses that path), so an operator
+           running Subsonic=disabled but Velvet=on still benefits. -->
+      <div v-if="stats.lyrics" class="row">
         <div class="col s12">
           <div class="card">
             <div class="card-content">

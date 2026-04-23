@@ -291,6 +291,21 @@ function concurrencyCap() {
 }
 
 function drain() {
+  // Admin-flipped-to-disabled case: purge whatever was queued so
+  // jobs don't fire fetches AFTER the operator asked us to stop.
+  // maybeEnqueueFetch already blocks NEW entries via isEnabled();
+  // this catches the ones that landed before the toggle flipped.
+  // In-flight jobs continue (their HTTP call is already out) —
+  // we accept one more request to LRCLib in exchange for not having
+  // to plumb AbortSignal through the whole stack.
+  if (!isEnabled()) {
+    if (pendingJobs.length) {
+      pendingJobs.length = 0;
+      // Don't clear `queued` — any entry there is in-flight; we
+      // still want its .finally to decrement inFlight cleanly.
+    }
+    return;
+  }
   while (inFlight < concurrencyCap() && pendingJobs.length) {
     const job = pendingJobs.shift();
     inFlight++;
@@ -458,6 +473,34 @@ async function fetchFromLrclib(artist, title, duration) {
 }
 
 // ── Admin helpers (purge / stats) ───────────────────────────────────────────
+
+/**
+ * Called by the admin /enabled toggle on transition to disabled.
+ * Drops queued-but-not-yet-running jobs so we don't fire HTTP calls
+ * against a service the operator just asked us to stop talking to.
+ * In-flight jobs are left alone — their HTTP call is already out and
+ * aborting a partial fetch buys us nothing. Also flips the
+ * corresponding lyrics_cache 'pending' rows to 'miss' so readers
+ * don't wait on a job that'll never run.
+ */
+export function cancelQueuedJobs() {
+  if (!pendingJobs.length) { return 0; }
+  const cancelled = pendingJobs.length;
+  const hashes = pendingJobs.map(j => j.audioHash);
+  pendingJobs.length = 0;
+  // Demote the 'pending' rows we wrote in maybeEnqueueFetch so
+  // requests see 'miss' and fall into the negative-cache branch
+  // instead of the "let the in-flight fetch finish" branch.
+  const stmt = db.getDB().prepare(
+    "UPDATE lyrics_cache SET status = 'miss', fetched_at = ? WHERE audio_hash = ? AND status = 'pending'"
+  );
+  const ts = now();
+  for (const h of hashes) { stmt.run(ts, h); }
+  // Clear queued entries for cancelled jobs too. In-flight ones are
+  // still in `queued` and their .finally will clean up.
+  for (const h of hashes) { queued.delete(h); }
+  return cancelled;
+}
 
 export function cacheStats() {
   const rows = db.getDB().prepare(

@@ -318,14 +318,18 @@ async function parseMyFile(absolutePath, modified) {
     songInfo = { track: { no: null, of: null }, disk: { no: null, of: null }, duration: null,
                  sampleRate: null, channels: null, bitDepth: null,
                  artistInfo: { trackArtists: [], albumArtists: [], isCompilation: false,
-                               trackArtistDisplay: '', albumArtistDisplay: null },
-                 lyricsInfo: { lyricsEmbedded: null, lyricsSyncedLrc: null,
-                               lyricsLang: null, lyricsSidecarMtime: null } };
+                               trackArtistDisplay: '', albumArtistDisplay: null } };
+    // Intentionally do NOT set lyricsInfo on the error path — the
+    // fallback below re-runs the extractor so a `.lrc` sidecar still
+    // gets picked up even when the audio file's tag frames are too
+    // broken for music-metadata to read. Setting it to an all-null
+    // default here (as an earlier revision did) made the fallback
+    // unreachable.
   }
-  // Even if the tag parse failed we may still have a usable sidecar —
-  // the extractor tolerates a null `common` gracefully, so run it
-  // again on the error path so `foo.flac` + `foo.lrc` still surfaces
-  // lyrics when the flac itself has corrupt tag frames.
+  // Run extractLyrics if we didn't already get a result above. The
+  // extractor tolerates a null/empty `common` gracefully — it'll
+  // skip pass 1 (embedded tags) and fall through to the sidecar
+  // probe, so `foo.flac` with corrupt tags + `foo.lrc` still works.
   if (!songInfo.lyricsInfo) {
     songInfo.lyricsInfo = extractLyrics(songInfo, absolutePath);
   }

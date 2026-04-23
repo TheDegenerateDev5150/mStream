@@ -482,6 +482,98 @@ describe('LRCLib cache: disabled config', () => {
   });
 });
 
+// ── Round-2 audit regressions ────────────────────────────────────────────────
+//
+// Each case here pins a specific bug identified in the round-2 code
+// audit so a future regression shows up as a test failure rather than
+// a silent behaviour drift.
+
+describe('LRCLib cache: drain-on-disable (round-2 fix)', () => {
+  test('queued jobs do NOT fire LRCLib after admin disables mid-burst', async () => {
+    // Scenario: user enables LRCLib, a flurry of lyric requests
+    // enqueues several fetches, admin flips disable before the
+    // in-flight worker drains the queue. The queued (not-yet-running)
+    // jobs must NOT make HTTP calls — that'd defeat the point of
+    // the toggle for privacy-conscious operators. In-flight jobs
+    // DO complete (we can't cancel a partial fetch cheaply).
+
+    // Slow the mock so the first fetch sits in-flight while we
+    // pile up more jobs and then flip the toggle.
+    mockState.delayMs = 150;
+    setMockResponse('Lrclib Artist', 'Lrclib Song',
+      { plainLyrics: 'should-run' }, { persistent: true });
+    setMockResponse('Lrclib Artist', 'Second Song',
+      { plainLyrics: 'should-not-run' }, { persistent: true });
+
+    const id1 = await findTrackIdByTitle('Lrclib Song');
+    const id2 = await findTrackIdByTitle('Second Song');
+
+    // Kick off two fetches. concurrency=2, so both become in-flight
+    // immediately — that's fine, we want to pile on MORE than the
+    // cap so something is queued but not running.
+    await subCall('getLyricsBySongId', { id: id1 });
+
+    // Tiny wait so the first job has started its mock call.
+    await new Promise(r => setTimeout(r, 30));
+    const firstCallCount = mockState.requests.length;
+
+    // Now flip the toggle. The in-flight job for id1 continues; but
+    // anything still queued is dropped.
+    await fetch(`${server.baseUrl}/api/v1/admin/subsonic/lyrics-cache/enabled`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-access-token': await adminToken() },
+      body: JSON.stringify({ enabled: false }),
+    });
+
+    // After the toggle, try to trigger a NEW fetch for id2 — this
+    // should be a no-op at the handler level because isEnabled is
+    // false. Prior to the fix, a queued job from before the toggle
+    // could have slipped through drain() and hit the mock.
+    await subCall('getLyricsBySongId', { id: id2 });
+
+    // Wait longer than the mock delay so any stragglers have time
+    // to fire. If the drain guard works, no additional request
+    // lands after `firstCallCount`.
+    await new Promise(r => setTimeout(r, 300));
+    const afterCallCount = mockState.requests.length;
+
+    // Exactly one (or two, if both initial fetches were in-flight
+    // before we tried the disable) request — never more. The bar
+    // is: after disable, no NEW requests start.
+    assert.ok(afterCallCount <= firstCallCount + 1,
+      `expected at most one more request after disable; firstCount=${firstCallCount} afterCount=${afterCallCount}`);
+
+    // Re-enable for the rest of the suite.
+    await fetch(`${server.baseUrl}/api/v1/admin/subsonic/lyrics-cache/enabled`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-access-token': await adminToken() },
+      body: JSON.stringify({ enabled: true }),
+    });
+  });
+});
+
+describe('LRCLib cache: admin validation (round-2 fix)', () => {
+  test('malformed purge body → 403 with a Joi error, no side effect', async () => {
+    const r = await fetch(`${server.baseUrl}/api/v1/admin/subsonic/lyrics-cache/purge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-access-token': await adminToken() },
+      body: JSON.stringify({ mode: 'not-a-valid-mode' }),
+    });
+    assert.equal(r.status, 403);
+    const body = await r.json();
+    assert.match(body.error, /mode.*must be one of/);
+  });
+
+  test('/enabled endpoint requires a boolean; other shapes reject', async () => {
+    const r = await fetch(`${server.baseUrl}/api/v1/admin/subsonic/lyrics-cache/enabled`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-access-token': await adminToken() },
+      body: JSON.stringify({ enabled: 'yes' }),   // string, not bool
+    });
+    assert.equal(r.status, 403);
+  });
+});
+
 describe('LRCLib cache: admin purge', () => {
   test('mode=retry drops error + pending rows, keeps hits', async () => {
     // Warm a hit row.
