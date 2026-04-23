@@ -437,7 +437,10 @@ const usersView = Vue.component('users-view', {
       makeAdmin: Object.keys(ADMINDATA.users).length === 0 ? true : false,
       allowMkdir: true,
       allowUpload: true,
-      allowServerAudio: true,
+      // Opt-in per user. Admins bypass the gate anyway; everyone else
+      // starts without /api/v1/server-playback access and gets it only
+      // when the operator ticks the box explicitly.
+      allowServerAudio: false,
       submitPending: false,
       selectInstance: null
     };

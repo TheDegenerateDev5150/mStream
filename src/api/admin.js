@@ -258,7 +258,10 @@ export function setup(mstream) {
       admin: Joi.boolean().optional().default(false),
       allowMkdir: Joi.boolean().optional().default(true),
       allowUpload: Joi.boolean().optional().default(true),
-      allowServerAudio: Joi.boolean().optional().default(true)
+      // Server-audio access is opt-in per user — admins always bypass
+      // the gate in server-playback.js, everyone else must be granted
+      // explicitly via the admin panel.
+      allowServerAudio: Joi.boolean().optional().default(false)
     });
     const input = joiValidate(schema, req.body);
 
@@ -345,7 +348,10 @@ export function setup(mstream) {
       allowMkdir: Joi.boolean().required(),
       allowUpload: Joi.boolean().required(),
       allowFileModify: Joi.boolean().optional().default(true),
-      allowServerAudio: Joi.boolean().optional().default(true)
+      // Opt-in per user. A PATCH that doesn't name allowServerAudio
+      // leaves the user without access — clients that want to update
+      // only one field must read the current value first and echo it.
+      allowServerAudio: Joi.boolean().optional().default(false)
     });
     joiValidate(schema, req.body);
 

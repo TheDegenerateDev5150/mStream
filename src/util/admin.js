@@ -108,7 +108,7 @@ export async function removeDirectory(vpath) {
 
 // ── User management (now in SQLite) ─────────────────────────────────────────
 
-export async function addUser(username, password, admin, vpaths, allowMkdir, allowUpload, allowServerAudio = true) {
+export async function addUser(username, password, admin, vpaths, allowMkdir, allowUpload, allowServerAudio = false) {
   const existing = db.getUserByUsername(username);
   if (existing) { throw new Error(`'${username}' already exists`); }
 
@@ -173,7 +173,7 @@ export async function editUserVPaths(username, vpaths) {
   db.invalidateCache();
 }
 
-export async function editUserAccess(username, admin, allowMkdir, allowUpload, allowFileModify = true, allowServerAudio = true) {
+export async function editUserAccess(username, admin, allowMkdir, allowUpload, allowFileModify = true, allowServerAudio = false) {
   const user = db.getUserByUsername(username);
   if (!user) { throw new Error(`'${username}' does not exist`); }
 

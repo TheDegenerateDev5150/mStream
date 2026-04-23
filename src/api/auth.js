@@ -64,7 +64,12 @@ export function setup(mstream) {
         allow_upload: adminLocked ? 0 : 1,
         allow_mkdir: adminLocked ? 0 : 1,
         allow_file_modify: adminLocked ? 0 : 1,
-        allow_server_audio: 1
+        // Mirrors the other permission flags: when the admin API is
+        // locked, the single implicit user is demoted and loses the
+        // write permissions AND server-audio access. When unlocked,
+        // they're effectively admin, so the gate is bypassed anyway —
+        // the value here only matters in the locked case.
+        allow_server_audio: adminLocked ? 0 : 1
       };
       return next();
     }

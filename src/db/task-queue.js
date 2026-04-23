@@ -20,6 +20,15 @@ let scanIntervalTimer = null;
 // in a batch — skipped on fully-unchanged rescans so control points aren't
 // poked for nothing.
 let anyScansChanged = false;
+// True between runAfterBoot noticing a `.rescan-pending` migration marker
+// and the resulting rescanAll() draining the queue. The marker is only
+// unlinked once this flag is set AND the queue empties — if the process
+// crashes partway through the rescan, the marker survives and the next
+// boot re-runs the rescan. Without this, an interrupted boot rescan left
+// the DB stuck on pre-rescan row shapes (e.g. V18 compilations still
+// fragmented) with no surfacing signal.
+let bootRescanInFlight = false;
+let bootRescanMarkerPath = null;
 
 // ── Rust parser binary detection ────────────────────────────────────────────
 
@@ -189,12 +198,37 @@ function onScanClose(forkedScan, scanObj, code) {
 
   nextTask();
 
+  const queueDrained = runningTasks.size === 0 && taskQueue.length === 0;
+
   // When all scans are done, bump DLNA's SystemUpdateID so control points
   // refresh their caches — but only if some scan actually changed the DB.
   // Safe to call whether or not DLNA is enabled.
-  if (runningTasks.size === 0 && taskQueue.length === 0 && anyScansChanged) {
+  if (queueDrained && anyScansChanged) {
     anyScansChanged = false;
     dlnaApi.bumpSystemUpdateID();
+  }
+
+  // Clear the migration rescan marker only after every queued library
+  // has finished. If the process dies before this point, the marker
+  // survives on disk and the next boot re-triggers rescanAll() — the
+  // alternative (unlinking up-front at boot) silently strands the DB
+  // on pre-rescan row shapes when the scan crashes partway through.
+  if (queueDrained && bootRescanInFlight) {
+    bootRescanInFlight = false;
+    if (bootRescanMarkerPath) {
+      try {
+        fs.unlinkSync(bootRescanMarkerPath);
+        winston.info('Migration rescan complete — cleared .rescan-pending marker');
+      } catch (err) {
+        // ENOENT is fine (another code path cleared it, or marker already absent);
+        // anything else means the marker might live on and re-trigger next boot.
+        // Logging at warn so operators can notice a stuck marker.
+        if (err.code !== 'ENOENT') {
+          winston.warn(`Could not clear .rescan-pending marker at ${bootRescanMarkerPath}: ${err.message}`);
+        }
+      }
+      bootRescanMarkerPath = null;
+    }
   }
 }
 
@@ -291,13 +325,17 @@ export function runAfterBoot() {
   // Clear any stale scan progress rows left from a previous crash
   try { db.getDB()?.prepare('DELETE FROM scan_progress').run(); } catch (_) {}
 
-  // Check if a migration flagged a force rescan
+  // Check if a migration flagged a force rescan. We DO NOT unlink the
+  // marker here — it stays on disk until onScanClose sees the queue
+  // drain. If the process crashes during the rescan, the marker
+  // survives and the next boot re-triggers the rescan automatically.
   const markerPath = path.join(config.program.storage.dbDirectory, '.rescan-pending');
   let pendingRescan = false;
   try {
     if (fs.existsSync(markerPath)) {
       pendingRescan = true;
-      fs.unlinkSync(markerPath);
+      bootRescanInFlight = true;
+      bootRescanMarkerPath = markerPath;
       winston.info('Force rescan pending from migration — will rescan all libraries');
     }
   } catch (_) {}

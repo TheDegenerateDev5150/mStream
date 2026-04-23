@@ -1,7 +1,7 @@
 // SQLite schema definitions and migration system for mStream.
 // Uses PRAGMA user_version for tracking which migrations have been applied.
 
-export const SCHEMA_VERSION = 22;
+export const SCHEMA_VERSION = 23;
 
 export const SCHEMA_V1 = `
   -- Users
@@ -360,9 +360,12 @@ export const SCHEMA_V16 = `
 
 export const SCHEMA_V17 = `
   -- Per-user server-audio access flag. Gates /api/v1/server-playback/* and
-  -- the /server-remote page; admins always pass. Defaults to 1 so existing
-  -- users keep their access on upgrade.
-  ALTER TABLE users ADD COLUMN allow_server_audio INTEGER NOT NULL DEFAULT 1;
+  -- the /server-remote page; admins always bypass the gate (server-playback.js
+  -- checks user.admin first). Defaults to 0 — operators must opt users in
+  -- explicitly via the admin panel rather than inheriting blanket access on
+  -- upgrade. V23 normalises any rows populated under the earlier (default=1)
+  -- variant of this migration.
+  ALTER TABLE users ADD COLUMN allow_server_audio INTEGER NOT NULL DEFAULT 0;
 `;
 
 export const SCHEMA_V18 = `
@@ -546,6 +549,34 @@ export const SCHEMA_V22 = `
   UPDATE libraries SET follow_symlinks = 0 WHERE follow_symlinks IS NULL;
 `;
 
+export const SCHEMA_V23 = `
+  -- ── Revoke allow_server_audio from non-admin users ───────────────
+  --
+  -- V17's original variant defaulted allow_server_audio to 1 so
+  -- existing users kept access on upgrade. That created a silent
+  -- permissiveness regression for operators migrating from pre-V17
+  -- mStream (or from the Loki-based stack, which never had this
+  -- flag at all): every user — including guest / anonymous shared-
+  -- link accounts — could reach /api/v1/server-playback/* without
+  -- an explicit opt-in.
+  --
+  -- V17 now defaults to 0 going forward. This migration forces
+  -- every non-admin user to 0 so branch-trackers, Loki-migrated
+  -- hosts, and anyone upgrading across V17 converge on the same
+  -- "admin approves per-user" posture. Admins are exempt — they
+  -- bypass the gate anyway (see userCanUseServerAudio() in
+  -- server-playback.js), so clearing their flag is harmless but
+  -- leaving it intact keeps the "admins can everything" invariant
+  -- visible at a glance in the users table.
+  --
+  -- Operators who WANT broad server-audio access can run one
+  -- UPDATE after upgrading, or flip each user through the admin
+  -- panel. The revocation is loud in the release notes.
+  --
+  -- Not rescanRequired.
+  UPDATE users SET allow_server_audio = 0 WHERE is_admin = 0;
+`;
+
 export const SCHEMA_V20 = `
   -- ── LRCLib external-lookup cache ─────────────────────────────────
   --
@@ -625,4 +656,9 @@ export const MIGRATIONS = [
   // earlier nullable V21 variant that only ever existed on this
   // branch. See SCHEMA_V22 comments — no-op on fresh databases.
   { version: 22, sql: SCHEMA_V22 },
+  // V23 revokes allow_server_audio for all non-admin users. V17's
+  // default flipped from 1 to 0 in this release; V23 normalises
+  // existing rows so branch-trackers / Loki-migrated hosts don't
+  // silently keep blanket access. See SCHEMA_V23 comments.
+  { version: 23, sql: SCHEMA_V23 },
 ];
