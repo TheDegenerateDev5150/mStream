@@ -574,6 +574,27 @@ describe('LRCLib cache: admin validation (round-2 fix)', () => {
   });
 });
 
+describe('LRCLib cache: stats bucket accounting (round-3 fix)', () => {
+  test('cacheStats `total` equals sum of named buckets including `other`', async () => {
+    // Warm a hit row.
+    setMockResponse('Lrclib Artist', 'Lrclib Song',
+      { plainLyrics: 'stats-test' }, { persistent: true });
+    const id = await findTrackIdByTitle('Lrclib Song');
+    await subCall('getLyricsBySongId', { id });
+    await waitForCacheSettle(id);
+
+    const stats = await cacheStats();
+    // Each named bucket must exist (round-3 fix added `other` so
+    // future unknown statuses don't silently inflate `total`). The
+    // sum of named buckets must equal `total` — otherwise a new
+    // status-string drift would go unnoticed.
+    const sum = stats.hit + stats.miss + stats.error + stats.pending + stats.other;
+    assert.equal(sum, stats.total,
+      `buckets must sum to total: hit=${stats.hit} miss=${stats.miss} error=${stats.error} pending=${stats.pending} other=${stats.other} total=${stats.total}`);
+    assert.ok(stats.hit >= 1, 'precondition: at least one cached hit');
+  });
+});
+
 describe('LRCLib cache: admin purge', () => {
   test('mode=retry drops error + pending rows, keeps hits', async () => {
     // Warm a hit row.

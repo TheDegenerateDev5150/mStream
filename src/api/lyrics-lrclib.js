@@ -309,13 +309,23 @@ function drain() {
   while (inFlight < concurrencyCap() && pendingJobs.length) {
     const job = pendingJobs.shift();
     inFlight++;
-    runJob(job).finally(() => {
-      inFlight--;
-      queued.delete(job.audioHash);
-      // Kick the queue again — a pile-up could have landed during the
-      // await and we don't want to stall until the next external call.
-      if (pendingJobs.length) { drain(); }
-    });
+    // Defensive .catch on top of runJob's own try/catch: if the DB
+    // write inside runJob's error path itself throws (DB closed
+    // during shutdown, corrupt, or ENOSPC on WAL), the promise
+    // would reject into .finally-without-a-catch and surface as
+    // an `unhandledRejection` event. Node 20+ exits on that by
+    // default under strict runtime modes, so we swallow it here
+    // after a log — lyrics are non-critical, the server should
+    // survive a dead cache writer.
+    runJob(job)
+      .catch(err => winston.warn(`[lyrics-lrclib] runJob crashed: ${err.message}`))
+      .finally(() => {
+        inFlight--;
+        queued.delete(job.audioHash);
+        // Kick the queue again — a pile-up could have landed during the
+        // await and we don't want to stall until the next external call.
+        if (pendingJobs.length) { drain(); }
+      });
   }
 }
 
