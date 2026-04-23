@@ -52,90 +52,10 @@ describe('Bundled Subsonic UI (Airsonic Refix)', () => {
     assert.match(r.body, /<title>Airsonic \(refix\)<\/title>/);
   });
 
-  test('GET /login hands off to Refix (Refix owns its own /login route)', async () => {
-    // Refix has a client-side /login route. A server-side hit on
-    // /login must return the SPA shell so Refix's router can render
-    // the login form. mStream's own login page lives at
-    // /mstream-login instead so the two don't collide.
-    const r = await fetch(server.baseUrl + '/login', { redirect: 'follow' });
-    assert.equal(r.status, 200);
-    assert.match(r.headers.get('content-type') || '', /text\/html/);
-    // The bundled index.html identifies itself as "Airsonic (refix)".
-    assert.match(await r.text(), /<title>Airsonic \(refix\)<\/title>/);
-  });
-
-  test('GET /mstream-login serves the default login page (admin flow)', async () => {
-    // The /admin → /mstream-login → (auth) → /admin round-trip needs
-    // a login URL that doesn't collide with Refix's own /login route.
-    const r = await fetch(server.baseUrl + '/mstream-login', { redirect: 'follow' });
-    assert.equal(r.status, 200);
-    assert.match(r.headers.get('content-type') || '', /text\/html/);
-    assert.match(await r.text(), /<title>Login<\/title>/);
-  });
-
-  test('GET /admin redirects unauth traffic to /mstream-login (admin loop-break)', async () => {
-    // The redirect target is namespaced (/mstream-login, not /login)
-    // so it works regardless of UI without stealing Refix's /login.
-    const r = await fetch(server.baseUrl + '/admin', { redirect: 'manual' });
+  test('GET /login redirects back to / (SPA owns auth UI)', async () => {
+    const r = await fetch(server.baseUrl + '/login', { redirect: 'manual' });
     assert.equal(r.status, 302);
-    assert.equal(r.headers.get('location'), '/mstream-login');
-  });
-
-  test('GET /shared-assets/js/lib/vue2.js serves the core vendor bundle', async () => {
-    // The admin + login + shared pages load vendor libs (Vue, axios,
-    // iziToast, materialize) via absolute /shared-assets/ URLs. Under
-    // ui=subsonic, the UI root mount serves webapp/subsonic/assets/
-    // (Airsonic Refix's Vue 3 bundle) at /assets/ — a name collision
-    // that would break the admin page if it still referenced
-    // /assets/. /shared-assets/ is unambiguous: it points at
-    // webapp/assets/ regardless of which UI is active.
-    const r = await head('/shared-assets/js/lib/vue2.js');
-    assert.equal(r.status, 200);
-    assert.match(r.body, /Vue/);
-  });
-
-  test('GET /locales/en.json serves the core i18n dictionary', async () => {
-    // Same rationale as /shared-assets — the admin + login pages set
-    // <meta name="i18n-base" content="/"> so i18n.js fetches
-    // /locales/<lang>.json, which must resolve to webapp/locales/
-    // regardless of which UI root is active.
-    const r = await head('/locales/en.json');
-    assert.equal(r.status, 200);
-    // en.json is a JSON object with at least one key.
-    const parsed = JSON.parse(r.body);
-    assert.equal(typeof parsed, 'object');
-    assert.ok(Object.keys(parsed).length > 0);
-  });
-
-  test('Refix shell references the mStream admin-link overlay', async () => {
-    // webapp/subsonic/mstream-admin-link.js is loaded from Refix's
-    // index.html to inject an "mStream Admin" link into Refix's left
-    // nav. Without it operators would have to type /admin into the URL
-    // bar by hand.
-    const shell = await head('/');
-    assert.match(shell.body, /mstream-admin-link\.js/);
-    const js = await head('/mstream-admin-link.js');
-    assert.equal(js.status, 200);
-    assert.match(js.headers?.get?.('content-type') || js.ct || '', /javascript/);
-    assert.match(js.body, /sidebar-container/, 'script should target Refix sidebar');
-    assert.match(js.body, /mStream Admin/, 'script should inject mStream Admin link text');
-    assert.match(js.body, /href\s*=\s*['"]\/admin['"]|link\.href\s*=\s*['"]\/admin['"]/, 'script should point at /admin');
-  });
-
-  test('GET /admin/index.html 200s (serves the default admin HTML)', async () => {
-    // The gate at /admin (no slash) redirects unauth traffic to /login;
-    // /admin/index.html is the direct request the login page eventually
-    // sends the operator to after auth. Its Accept header claims HTML
-    // so the SPA fallback mustn't swallow it.
-    const r = await head('/admin/index.html');
-    assert.equal(r.status, 200);
-    assert.match(r.body, /<title>mStream Admin<\/title>/);
-    // Crucial: the loaded HTML must reference /shared-assets/ for its
-    // deps, not the old ../assets/ (which would resolve into Refix's
-    // bundle under ui=subsonic and leave the page broken).
-    assert.match(r.body, /\/shared-assets\//);
-    assert.ok(!/\.\.\/assets\//.test(r.body),
-      'admin HTML should no longer reference ../assets/ (would resolve into Refix bundle under ui=subsonic)');
+    assert.equal(r.headers.get('location'), '/');
   });
 
   test('GET /env.js serves the SERVER_URL config shim', async () => {

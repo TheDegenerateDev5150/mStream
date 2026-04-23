@@ -755,15 +755,9 @@ const advancedView = Vue.component('advanced-view', {
                       </td>
                     </tr>
                     <tr>
-                      <td><b>Frontend:</b></td>
+                      <td><b>Frontend:</b> {{params.ui === 'velvet' ? 'Velvet' : 'Default'}}</td>
                       <td>
-                        <select :value="params.ui"
-                                v-on:change="switchUI($event.target.value, $event.target)"
-                                style="margin:0;display:inline-block;width:auto;height:32px;font-size:13px">
-                          <option value="default">Default</option>
-                          <option value="velvet">Velvet</option>
-                          <option value="subsonic">Subsonic UI</option>
-                        </select>
+                        [<a v-on:click="switchUI()">switch to {{params.ui === 'velvet' ? 'Default' : 'Velvet'}}</a>]
                       </td>
                     </tr>
                   </tbody>
@@ -830,24 +824,9 @@ const advancedView = Vue.component('advanced-view', {
       modVM.currentViewModal = modalView;
       M.Modal.getInstance(document.getElementById('admin-modal')).open();
     },
-    // Lookup: internal UI id → user-visible label. The Subsonic option
-    // serves Airsonic Refix (webapp/subsonic/), which talks to mStream's
-    // own /rest/* endpoints — users log in with their mStream creds.
-    // Mirrors the default admin panel's helpers so the three UIs stay
-    // in sync across admin surfaces.
-    uiLabel: function(id) {
-      return ({ default: 'Default', velvet: 'Velvet', subsonic: 'Subsonic UI' })[id] || id;
-    },
-    // Called from the <select> @change. `newUI` is the option value the
-    // operator picked; `selectEl` is the DOM node so we can revert it
-    // if they cancel out of the confirm dialog (otherwise the dropdown
-    // would display a UI the server isn't actually running).
-    switchUI: function(newUI, selectEl) {
-      if (newUI === this.params.ui) { return; }
-      const label = this.uiLabel(newUI);
-      const current = this.params.ui;
-      const revert = () => { if (selectEl) { selectEl.value = current; } };
-      let confirmed = false;
+    switchUI: function() {
+      const newUI = this.params.ui === 'velvet' ? 'default' : 'velvet';
+      const label = newUI === 'velvet' ? 'Velvet' : 'Default';
       iziToast.question({
         timeout: 20000,
         close: false,
@@ -861,14 +840,8 @@ const advancedView = Vue.component('advanced-view', {
         title: `<b>Switch to ${label} frontend?</b>`,
         message: 'The server will restart to apply the change.',
         position: 'center',
-        // onClosing fires for overlay-click / ESC / timeout as well as
-        // the button paths; `confirmed` tells us which it was.
-        onClosing: function(_instance, _toast, _closedBy) {
-          if (!confirmed) { revert(); }
-        },
         buttons: [
           [`<button><b>Switch to ${label}</b></button>`, (instance, toast) => {
-            confirmed = true;
             instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
             API.axios({
               method: 'POST',
@@ -882,7 +855,6 @@ const advancedView = Vue.component('advanced-view', {
                 timeout: 3500
               });
             }).catch(() => {
-              revert();
               iziToast.error({
                 title: 'Error',
                 position: 'topCenter',
