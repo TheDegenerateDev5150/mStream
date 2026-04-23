@@ -1173,15 +1173,23 @@ const advancedView = Vue.component('advanced-view', {
       modVM.currentViewModal = modalView;
       M.Modal.getInstance(document.getElementById('admin-modal')).open();
     },
-    // Lookup: internal UI id → user-visible label. The Subsonic option
-    // serves Airsonic Refix (webapp/subsonic/), which talks to mStream's
-    // own /rest/* endpoints — users log in with their mStream creds.
+    // Lookup: internal UI id → user-visible label. The `subsonic`
+    // value (Airsonic Refix — webapp/subsonic/) is still valid in
+    // the Joi validator and can be set by hand-editing config.json,
+    // but it is intentionally NOT listed in the switcher rotation
+    // below. The admin panel + shared pages don't yet render cleanly
+    // under the Subsonic UI; until that's sorted out we don't want
+    // to let operators trap themselves in a broken state by flipping
+    // to it from here. `uiLabel` still knows the Subsonic label so
+    // an operator who set it via config.json sees the correct name
+    // rendered instead of a raw 'subsonic' string.
     uiLabel: function(id) {
       return ({ default: 'Default', velvet: 'Velvet', subsonic: 'Subsonic UI' })[id] || id;
     },
-    // Rotate through the three supported UIs on each click.
+    // Rotate through the switcher-exposed UIs on each click.
+    // Subsonic is deliberately omitted — see uiLabel comment.
     nextUI: function(id) {
-      const order = ['default', 'velvet', 'subsonic'];
+      const order = ['default', 'velvet'];
       const i = order.indexOf(id);
       return order[(i < 0 ? 0 : i + 1) % order.length];
     },
