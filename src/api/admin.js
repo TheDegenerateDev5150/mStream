@@ -645,6 +645,19 @@ export function setup(mstream) {
     const input = joiValidate(schema, req.body);
 
     if (subsonicDebouncer === true) { throw new Error('Debouncer Enabled'); }
+
+    // Guard against breaking the bundled Subsonic UI: if the operator
+    // runs ui='subsonic' and tries to move Subsonic off same-port,
+    // the Refix SPA can no longer reach /rest/*. Return a clear 403
+    // instead of silently breaking the UI — the admin can either
+    // switch the UI first or pick same-port.
+    if (config.program.ui === 'subsonic' && input.value.mode !== 'same-port') {
+      return res.status(403).json({
+        error: "Cannot change Subsonic mode while ui='subsonic': the bundled Refix client " +
+               "requires Subsonic on the same origin. Switch `ui` to 'default' or 'velvet' first.",
+      });
+    }
+
     await admin.enableSubsonic(input.value.mode, input.value.port);
 
     subsonicDebouncer = true;

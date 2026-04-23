@@ -232,6 +232,24 @@ export async function setup(configFileArg) {
 
   program = await schema.validateAsync(programData, { allowUnknown: true });
 
+  // Enforce the `ui=subsonic` <-> Subsonic same-port constraint: the
+  // bundled Airsonic Refix SPA is configured to talk to the SAME origin
+  // it was served from (env.js SERVER_URL=""). If Subsonic is disabled
+  // or on a separate port, the SPA loads fine but every /rest/* call
+  // 404s and the user sees a "no server" splash with no indication why.
+  // Auto-coerce to same-port + log a loud warning so the operator sees
+  // what we did.
+  if (program.ui === 'subsonic') {
+    if (program.subsonic.mode !== 'same-port') {
+      winston.warn(
+        `[config] ui='subsonic' requires subsonic.mode='same-port' (had '${program.subsonic.mode}'); ` +
+        `forcing same-port so the bundled Refix client can reach the /rest/* API it was built against. ` +
+        `Set ui='default' or ui='velvet' if you need Subsonic disabled/separate-port.`
+      );
+      program.subsonic.mode = 'same-port';
+    }
+  }
+
   // Persist a stable DLNA UUID so renderers recognise the server across reboots
   if (!program.dlna.uuid) {
     program.dlna.uuid = crypto.randomUUID();

@@ -128,3 +128,75 @@ describe('Bundled Subsonic UI (Airsonic Refix)', () => {
     assert.doesNotMatch(r.headers.get('content-type') || '', /text\/html/);
   });
 });
+
+// ── Round-4: ui='subsonic' requires subsonic=same-port ───────────────────
+//
+// The bundled Refix SPA is configured (env.js SERVER_URL="") to talk
+// to its own origin. If Subsonic is disabled or on a separate port,
+// every /rest/* call from the SPA 404s silently. Config validation
+// must auto-correct this at boot, and the admin endpoint that
+// changes Subsonic mode must refuse to break it while ui=subsonic.
+
+describe('ui=subsonic auto-enables same-port Subsonic', () => {
+  test('GET /rest/ping still reaches the Subsonic handler (mode was auto-coerced)', async () => {
+    // The harness set subsonicMode='same-port' so this is a green
+    // path. The NEXT test covers the auto-coerce edge case.
+    const r = await fetch(server.baseUrl + '/rest/ping?f=json&u=' + USER.username + '&p=' + USER.password);
+    assert.equal(r.status, 200);
+    const j = await r.json();
+    assert.equal(j['subsonic-response'].status, 'ok');
+  });
+
+  test('admin /api/v1/admin/subsonic/mode refuses to break the Refix UI', async () => {
+    // Get an admin token.
+    const login = await fetch(`${server.baseUrl}/api/v1/auth/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(USER),
+    });
+    const { token } = await login.json();
+
+    // Try to flip Subsonic to 'disabled' while ui='subsonic'. Must
+    // be rejected with a clear 403 so the operator doesn't silently
+    // break their own UI.
+    const r = await fetch(`${server.baseUrl}/api/v1/admin/subsonic/mode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-access-token': token },
+      body: JSON.stringify({ mode: 'disabled' }),
+    });
+    assert.ok([403, 400].includes(r.status),
+      `expected 403 for ui-breaking mode change, got ${r.status}`);
+    const body = await r.json();
+    assert.match(body.error || '', /ui.*subsonic|Refix/i,
+      `error message should mention the UI constraint, got: ${body.error}`);
+  });
+});
+
+// A dedicated mini-harness that boots with subsonicMode='disabled'
+// and verifies the config validator auto-flips it to same-port when
+// ui='subsonic'. If we skipped that coercion the boot would succeed
+// but the UI would be broken. Separate `describe` with its own server
+// because we need a different config shape than the main harness.
+
+import { startServer as startServer2 } from './helpers/server.mjs';
+
+describe('ui=subsonic auto-coerces subsonic.mode at boot', () => {
+  let coercedServer;
+  before(async () => {
+    coercedServer = await startServer2({
+      ui:           'subsonic',
+      dlnaMode:     'disabled',
+      subsonicMode: 'disabled',      // intentionally broken — validator must fix this
+      users:        [{ username: 'boot-coerce', password: 'pw-boot', admin: true }],
+    });
+  });
+  after(async () => { if (coercedServer) { await coercedServer.stop(); } });
+
+  test('/rest/ping works even though the config said mode=disabled', async () => {
+    // If coercion worked, Subsonic is on same-port and ping answers.
+    // If not, the URL 404s or the SPA fallback intercepts.
+    const r = await fetch(`${coercedServer.baseUrl}/rest/ping?f=json&u=boot-coerce&p=pw-boot`);
+    assert.equal(r.status, 200);
+    const j = await r.json();
+    assert.equal(j['subsonic-response'].status, 'ok');
+  });
+});

@@ -946,6 +946,30 @@ fn sidecar_mtime(audio_path: &Path) -> Option<i64> {
     newest
 }
 
+// Max sidecar size we're willing to read + store. Mirrors the JS
+// helper (src/db/lyrics-extraction.js SIDECAR_MAX_BYTES). Real .lrc
+// files are under 10KB; oversized sidecars are treated as "no
+// sidecar" with a warning.
+const SIDECAR_MAX_BYTES: u64 = 256 * 1024;
+
+// Read a file at `path`, bailing on oversized content or read errors
+// the same way the JS helper does. Returns the file contents (BOM-
+// stripped) or None.
+fn read_sidecar(path: &Path) -> Option<String> {
+    let meta = fs::metadata(path).ok()?;
+    if !meta.is_file() { return None; }
+    if meta.len() > SIDECAR_MAX_BYTES {
+        eprintln!(
+            "Warning: ignoring oversized lyrics sidecar ({} bytes, max {}): {}",
+            meta.len(), SIDECAR_MAX_BYTES, path.display(),
+        );
+        return None;
+    }
+    let text = fs::read_to_string(path).ok()?;
+    let clean = if text.starts_with('\u{FEFF}') { text[3..].to_string() } else { text };
+    Some(clean)
+}
+
 // Return (contents, inferred-language) for the first matching sidecar.
 // BOM is stripped — Windows LRC editors add one and it breaks the first
 // line's timestamp parse.
@@ -958,8 +982,7 @@ fn read_lrc_sidecar(audio_path: &Path) -> Option<(String, Option<String>)> {
         } else {
             (format!("{}.{}.lrc", base, suffix), Some((*suffix).to_string()))
         };
-        if let Ok(text) = fs::read_to_string(dir.join(&name)) {
-            let clean = if text.starts_with('\u{FEFF}') { text[3..].to_string() } else { text };
+        if let Some(clean) = read_sidecar(&dir.join(&name)) {
             if !clean.trim().is_empty() {
                 return Some((clean, lang));
             }
@@ -971,8 +994,7 @@ fn read_lrc_sidecar(audio_path: &Path) -> Option<(String, Option<String>)> {
 fn read_txt_sidecar(audio_path: &Path) -> Option<String> {
     let dir = audio_path.parent()?;
     let base = audio_path.file_stem()?.to_string_lossy().to_string();
-    if let Ok(text) = fs::read_to_string(dir.join(format!("{}.txt", base))) {
-        let clean = if text.starts_with('\u{FEFF}') { text[3..].to_string() } else { text };
+    if let Some(clean) = read_sidecar(&dir.join(format!("{}.txt", base))) {
         if !clean.trim().is_empty() { return Some(clean); }
     }
     None

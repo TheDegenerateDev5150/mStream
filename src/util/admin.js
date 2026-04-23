@@ -164,6 +164,19 @@ export async function editUI(ui) {
   if (config.program.ui === ui) { return; }
   const loadConfig = await loadFile(config.configFile);
   loadConfig.ui = ui;
+  // When switching TO ui='subsonic', auto-enable Subsonic same-port if
+  // it's currently disabled / separate-port. The bundled Refix SPA
+  // only works with same-port (its env.js SERVER_URL="" resolves to
+  // the current origin). Leaving the admin to manually fix subsonic
+  // mode after a UI switch produces a broken client with a silent
+  // failure mode — they see Refix's "couldn't reach server" error
+  // with no guidance. Flip it for them and log.
+  if (ui === 'subsonic') {
+    if (!loadConfig.subsonic) { loadConfig.subsonic = {}; }
+    if (loadConfig.subsonic.mode !== 'same-port') {
+      loadConfig.subsonic.mode = 'same-port';
+    }
+  }
   await saveFile(loadConfig, config.configFile);
   mStreamServer.reboot();
 }

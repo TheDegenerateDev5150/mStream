@@ -82,6 +82,13 @@ export function looksLikeLrc(text) {
   return /^[ \t]*\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]/m.test(text);
 }
 
+// Max sidecar size we're willing to read into memory + store in the
+// DB column. Real-world .lrc files are under 10KB; this caps
+// accidentally-dropped (or pathologically-crafted) multi-MB files
+// from blowing up the scan + bloating SQLite. Oversized sidecars are
+// treated as "no sidecar" with a warning log.
+const SIDECAR_MAX_BYTES = 256 * 1024;  // 256 KB
+
 // Read a file if it exists; return `{ text, mtimeMs }` or null.
 // Used by both sidecar probes — any file I/O error short-circuits to
 // "no sidecar" rather than escalating; the track just has no lyrics.
@@ -89,6 +96,14 @@ function readIfExists(filePath) {
   try {
     const stat = fs.statSync(filePath);
     if (!stat.isFile()) { return null; }
+    if (stat.size > SIDECAR_MAX_BYTES) {
+      // We don't have winston here (this runs inside the scanner
+      // subprocess for the JS path; the Rust path has its own) — log
+      // to stderr which the scan log pipeline already captures.
+      // eslint-disable-next-line no-console
+      console.error(`Warning: ignoring oversized lyrics sidecar (${stat.size} bytes, max ${SIDECAR_MAX_BYTES}): ${filePath}`);
+      return null;
+    }
     const text = fs.readFileSync(filePath, 'utf8');
     // Strip BOM — Windows LRC editors love to add one and it breaks
     // the first-line timestamp parse.

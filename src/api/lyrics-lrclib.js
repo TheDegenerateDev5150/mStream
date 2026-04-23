@@ -401,20 +401,25 @@ export function writeSidecarIfPossible(audioHash, data) {
     if (!row || !row.filepath || !row.root_path) { return false; }
 
     // Defense in depth: compute the absolute path and confirm it
-    // actually resolves inside the library's root directory. The
-    // scanner writes well-formed relative paths; this guard would
-    // only trip if tracks.filepath were poisoned (e.g. by a future
-    // import tool that forgot to sanitise) or if the user planted
-    // a symlink inside the library pointing outward. Both would
-    // let us write an LRCLib payload to /etc/hostname.lrc without
-    // this check.
-    const rootReal = path.resolve(row.root_path);
-    const absolute = path.resolve(rootReal, row.filepath);
+    // actually resolves inside the library's root directory. Uses
+    // realpath to follow symlinks — `path.resolve` alone would let
+    // `/music/outward-link` (a symlink pointing to /etc) pass the
+    // prefix check even though the file it points at lives outside
+    // the library. The scanner writes well-formed relative paths so
+    // the non-symlink case is always fine; this guard protects the
+    // "someone planted a symlink inside the library" edge case from
+    // turning a lyrics fetch into an arbitrary-file write.
+    const rootReal = fs.realpathSync(path.resolve(row.root_path));
+    const candidate = path.resolve(rootReal, row.filepath);
+    if (!fs.existsSync(candidate)) { return false; }
+    // realpath the CANDIDATE too so we follow a symlink that might
+    // exist on the audio file. `realpathSync` throws on missing
+    // files; we've already existsSync'd.
+    const absolute = fs.realpathSync(candidate);
     if (absolute !== rootReal && !absolute.startsWith(rootReal + path.sep)) {
       winston.warn(`[lyrics-lrclib] refusing to write sidecar outside library root: ${absolute}`);
       return false;
     }
-    if (!fs.existsSync(absolute)) { return false; }
 
     // Compute sibling base. `<base>.lrc` preferred for synced content,
     // `<base>.txt` for plain. Both probed for existence; if either
