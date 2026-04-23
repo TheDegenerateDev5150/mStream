@@ -148,12 +148,26 @@ body.top-bar-hidden #content {
   z-index: 2;
   display: none;
 }
+/* `wf-enabled` applies when the operator has the waveform-bar setting
+   turned on, regardless of whether the data for this track has loaded
+   yet. It reserves the full 28px-tall strip up front so the bar
+   doesn't grow/shift the moment waveform data arrives for the track
+   (previously the plain progress bar sat short, then jumped taller
+   when `wf-active` kicked in — a visible layout shake every song).
+   The plain orange `.determinate` fill continues to render inside the
+   tall strip while data loads. */
+.progress.wf-enabled {
+  padding-top: 28px;
+  margin-top: 12px;
+}
+/* `wf-active` is the narrower "data is actually loaded, show the
+   canvas" state. Hides the plain determinate fill and swaps in the
+   waveform overlay. Layers on top of `wf-enabled` so the tall
+   strip stays put. */
 .progress.wf-active .waveform-canvas { display: block; }
 .progress.wf-active .determinate { visibility: hidden; }
 .progress.wf-active {
   background-color: transparent !important;
-  padding-top: 28px;
-  margin-top: 12px;
 }
 /* Keep time indicators above the waveform */
 .progress-wrapper .left,

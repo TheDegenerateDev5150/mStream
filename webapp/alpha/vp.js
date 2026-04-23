@@ -636,6 +636,16 @@ const VUEPLAYERCORE = (() => {
       }
     }
 
+    // Warm the waveform cache in the background so the moment this track
+    // starts playing, the waveform renders from localStorage instead of
+    // a fresh HTTP round-trip (~100-500ms lag otherwise). Concurrency-
+    // capped inside _prefetchWaveform so adding a full album doesn't
+    // hammer the server. Only runs when the setting is actually on —
+    // otherwise the waveform would never render and the fetch is wasted.
+    if (mstreamModule.altLayout.waveformBar) {
+      mstreamModule.prefetchWaveform(rawFilepath);
+    }
+
     // perform lookup
     if (lookupMetadata === true) {
       const response = await MSTREAMAPI.lookupMetadata(rawFilepath);
@@ -762,6 +772,74 @@ const VUEPLAYERCORE = (() => {
       }
     } catch (_e) { /* waveform unavailable — plain bar stays */ }
   }
+
+  // ── WAVEFORM PREFETCH ──────────────────────────────────────────────────────
+  // Called from addSongWizard when a track is added to the queue. Loads the
+  // waveform into localStorage eagerly so the moment the track starts
+  // playing, `_fetchWaveform` hits the cache and renders instantly —
+  // eliminates the visible lag where the plain progress bar shows for
+  // ~100-500ms before swapping to the waveform.
+  //
+  // Concurrency-capped so "Add All To Queue" on a 52-track album doesn't
+  // fire 52 parallel HTTP requests at the server. Silently ignores:
+  //   - radio/http(s) streams (no waveform on the server side)
+  //   - anything already in-memory or already in localStorage
+  //   - duplicate enqueues (dedup'd by filepath)
+  const _WF_PREFETCH_MAX = 2;
+  const _wfPrefetchQueue = [];
+  const _wfPrefetchSeen = new Set(); // filepaths already queued/done this session
+  let _wfPrefetchActive = 0;
+
+  async function _prefetchWaveform(filepath) {
+    if (!filepath || /^https?:\/\//i.test(filepath)) { return; }
+    if (_wfPrefetchSeen.has(filepath)) { return; }
+    if (_waveformFp === filepath && _waveformData) { return; }  // in memory
+    if (_wfLsGet(filepath)) { return; }                          // localStorage
+    _wfPrefetchSeen.add(filepath);
+    _wfPrefetchQueue.push(filepath);
+    _drainWfPrefetch();
+  }
+
+  function _drainWfPrefetch() {
+    while (_wfPrefetchActive < _WF_PREFETCH_MAX && _wfPrefetchQueue.length) {
+      const filepath = _wfPrefetchQueue.shift();
+      _wfPrefetchActive++;
+      (async () => {
+        try {
+          // Re-check localStorage under the lock — the currently-playing
+          // track's own fetch may have filled the cache while we were
+          // waiting in the concurrency queue.
+          if (_wfLsGet(filepath)) { return; }
+          const url = MSTREAMAPI.currentServer.host +
+            'api/v1/db/waveform?filepath=' + encodeURIComponent(filepath) +
+            '&token=' + MSTREAMAPI.currentServer.token;
+          const res = await fetch(url);
+          if (!res.ok) { return; }
+          const d = await res.json();
+          if (!d.waveform || d.waveform.length === 0) { return; }
+          _wfLsSet(filepath, d.waveform);
+          // If the operator hit Play while we were prefetching, fold this
+          // data straight into the live render instead of waiting for the
+          // currentSong watcher to re-fetch.
+          const liveFp = MSTREAMPLAYER.playerStats.metadata.filepath;
+          if (liveFp === filepath && !_waveformData) {
+            _waveformData = d.waveform;
+            _waveformFp   = filepath;
+            _setWaveformReady(true);
+            _drawWaveform();
+            if (MSTREAMPLAYER.playerStats.playing) { _startWaveformRaf(); }
+          }
+        } catch (_e) { /* swallow — best-effort */ }
+        finally {
+          _wfPrefetchActive--;
+          _drainWfPrefetch();
+        }
+      })();
+    }
+  }
+
+  // Exposed so the queue-add path can trigger prefetch.
+  mstreamModule.prefetchWaveform = _prefetchWaveform;
 
   function _drawWaveform() {
     const canvas = document.getElementById('waveform-canvas');
