@@ -3,7 +3,14 @@ name: Build Server
 on:
   push:
     tags:
+      # Server release tags (e.g. v6.5.0). The `!*-DESKTOP_PLAYER`
+      # exclusion prevents this workflow from re-firing when
+      # build-webapp.yml creates its companion `<tag>-DESKTOP_PLAYER`
+      # draft release — creating that release via `gh release create`
+      # also creates the tag, which would otherwise match `*` and
+      # spawn a duplicate Server build for every release.
       - '*'
+      - '!*-DESKTOP_PLAYER'
 
 jobs:
   release:
@@ -15,10 +22,10 @@ jobs:
 
     steps:
       - name: Check out Git repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24
 

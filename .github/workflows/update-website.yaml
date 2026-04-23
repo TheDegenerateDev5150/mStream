@@ -7,7 +7,10 @@ on:
 
 jobs:
   update-website:
-    if: "!contains(github.event.release.tag_name, 'DESKTOP_PLAYER')"
+    # Server releases only. The `-DESKTOP_PLAYER` companion
+    # release bumps a different version channel entirely; the
+    # mstream.io website's homepage badge tracks the server.
+    if: ${{ !endsWith(github.event.release.tag_name, '-DESKTOP_PLAYER') }}
     runs-on: ubuntu-latest
     steps:
       - name: get node

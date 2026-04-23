@@ -7,11 +7,14 @@ on:
 
 jobs:
   deploy-demo:
-    if: "!contains(github.event.release.tag_name, 'DESKTOP_PLAYER')"
+    # Server releases only. The `-DESKTOP_PLAYER` companion
+    # release is just binaries for the Electron player; there's
+    # no reason to re-pull the server on the demo host.
+    if: ${{ !endsWith(github.event.release.tag_name, '-DESKTOP_PLAYER') }}
     runs-on: ubuntu-latest
     steps:
     - name: pull changes
-      uses: appleboy/ssh-action@master
+      uses: appleboy/ssh-action@v1.2.5
       with:
         host: ${{ secrets.DEMO_HOST }}
         username: ${{ secrets.DEMO_SSH_USERNAME }}

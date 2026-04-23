@@ -3,7 +3,16 @@ name: Build Desktop Player
 on:
   push:
     tags:
+      # Server release tags (e.g. v6.5.0). The `!*-DESKTOP_PLAYER`
+      # exclusion stops this workflow from re-triggering itself:
+      # the `release` job below creates a `<tag>-DESKTOP_PLAYER`
+      # draft via `gh release create`, which also pushes that
+      # tag. Without the exclusion, each server release would
+      # spawn a second desktop build for the `-DESKTOP_PLAYER`
+      # tag, and that build's release job would try to create a
+      # `<tag>-DESKTOP_PLAYER-DESKTOP_PLAYER` release.
       - '*'
+      - '!*-DESKTOP_PLAYER'
 
 jobs:
   build:
@@ -15,10 +24,10 @@ jobs:
 
     steps:
       - name: Check out Git repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24
 
@@ -33,7 +42,7 @@ jobs:
         run: npx electron-builder --publish never
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: desktop-${{ matrix.os }}
           path: |
@@ -52,7 +61,7 @@ jobs:
 
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
