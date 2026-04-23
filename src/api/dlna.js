@@ -44,10 +44,21 @@ function libraryIndex(libraries) {
 // eslint-disable-next-line no-control-regex
 const XML_INVALID_CTRL = /[\x00-\x08\x0B\x0C\x0E-\x1F]/g;
 
+// XML 1.0 also forbids lone surrogate halves (U+D800–U+DFFF that aren't part
+// of a valid pair) and the two non-characters U+FFFE / U+FFFF. JS strings are
+// UTF-16, so a mojibake-ridden ID3 tag can easily contain a stray 0xD800 that
+// would produce `&#xD800;` downstream and crash strict parsers. We drop them.
+const XML_LONE_HIGH_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g;
+const XML_LONE_LOW_SURROGATE = /(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+const XML_NONCHARS = /[\uFFFE\uFFFF]/g;
+
 function xmlEscape(str) {
   if (str == null) { return ''; }
   return String(str)
     .replace(XML_INVALID_CTRL, '')
+    .replace(XML_LONE_HIGH_SURROGATE, '')
+    .replace(XML_LONE_LOW_SURROGATE, '')
+    .replace(XML_NONCHARS, '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -164,10 +175,19 @@ function containerArtXml(albumArtFile) {
 }
 
 function libraryContainer(lib, parentId, childCount) {
+  // Libraries of type `audio-books` advertise as
+  // `object.container.album.audioBook` so bookmark-capable renderers
+  // (Plex, Sonos, some TVs) light up their resume-playback UI. Music
+  // libraries stay on `storageFolder` — promoting them to album.audioBook
+  // would make every library look like a single book, which breaks nested
+  // browsing on strict renderers.
+  const cls = lib.type === 'audio-books'
+    ? 'object.container.album.audioBook'
+    : 'object.container.storageFolder';
   return `
   <container id="lib-${lib.id}" parentID="${xmlEscape(parentId)}" restricted="1" childCount="${childCount}">
     <dc:title>${xmlEscape(lib.name)}</dc:title>
-    <upnp:class>object.container.storageFolder</upnp:class>
+    <upnp:class>${cls}</upnp:class>
   </container>`;
 }
 
@@ -313,9 +333,12 @@ function yearContainer(year, childCount) {
   </container>`;
 }
 
-function trackItem(track, libName, parentId) {
+// `lib` is a library-descriptor with at least `{name, type}`. Callers either
+// pass the full libraries row or a lightweight `{name: ..., type: ...}` blob
+// (e.g. playlist rows where we only joined the two columns).
+function trackItem(track, lib, parentId) {
   const base = getBaseUrl();
-  const mediaUrl = `${base}/media/${encodeURIComponent(libName)}/${filePathToUrlPath(track.filepath)}`;
+  const mediaUrl = `${base}/media/${encodeURIComponent(lib.name)}/${filePathToUrlPath(track.filepath)}`;
 
   let artXml = '';
   if (track.album_art_file) {
@@ -332,13 +355,22 @@ function trackItem(track, libName, parentId) {
     ? `\n    <dc:date>${track.year}-01-01</dc:date>\n    <upnp:originalYear>${track.year}</upnp:originalYear>`
     : '';
 
+  // Tracks from `type: 'audio-books'` libraries advertise as
+  // `object.item.audioItem.audioBook` so resume-playback-capable renderers
+  // (Plex, Sonos, some TVs) actually enable the resume UI. Advertising it
+  // only on the parent container (which we do) isn't enough for most
+  // renderers — they key their bookmark tracking off the track class.
+  const itemClass = lib.type === 'audio-books'
+    ? 'object.item.audioItem.audioBook'
+    : 'object.item.audioItem.musicTrack';
+
   return `
   <item id="track-${track.id}" parentID="${xmlEscape(parentId)}" restricted="1">
     <dc:title>${xmlEscape(track.title || path.basename(track.filepath))}</dc:title>
     <dc:creator>${xmlEscape(track.artist_name)}</dc:creator>
     <upnp:artist>${xmlEscape(track.artist_name)}</upnp:artist>
     <upnp:album>${xmlEscape(track.album_name)}</upnp:album>${track.track_number ? `\n    <upnp:originalTrackNumber>${track.track_number}</upnp:originalTrackNumber>` : ''}${track.genre ? `\n    <upnp:genre>${xmlEscape(track.genre)}</upnp:genre>` : ''}${yearXml}${artXml}
-    <upnp:class>object.item.audioItem.musicTrack</upnp:class>
+    <upnp:class>${itemClass}</upnp:class>
     <res protocolInfo="${xmlEscape(protocolInfo(track.format))}"${durationAttr}${sizeAttr}>${xmlEscape(mediaUrl)}</res>
   </item>`;
 }
@@ -790,7 +822,7 @@ function getPlaylistTracks(playlistId) {
            t.title, t.track_number, t.duration, t.format, t.file_size,
            t.genre, t.album_art_file, t.year,
            a.name AS artist_name, al.name AS album_name,
-           l.name AS library_name
+           l.name AS library_name, l.type AS library_type
     FROM playlist_tracks pt
     JOIN libraries l ON l.name = CASE
         WHEN INSTR(pt.filepath, '/') > 0 THEN SUBSTR(pt.filepath, 1, INSTR(pt.filepath, '/') - 1)
@@ -988,7 +1020,7 @@ function handleBrowse(body, res) {
     const tracks = getRecentTracks(startIdx, reqCount);
     const items = tracks.map(t => {
       const lib = libById.get(t.library_id);
-      return lib ? trackItem(t, lib.name, 'recent') : '';
+      return lib ? trackItem(t, lib, 'recent') : '';
     }).filter(Boolean);
     return sendBrowseResponse(res, didlWrapper(items.join('')), items.length, totalRecent);
   }
@@ -1003,7 +1035,7 @@ function handleBrowse(body, res) {
     const rows = getRows(startIdx, reqCount);
     const items = rows.map(t => {
       const lib = libById.get(t.library_id);
-      return lib ? trackItem(t, lib.name, id) : '';
+      return lib ? trackItem(t, lib, id) : '';
     }).filter(Boolean);
     return sendBrowseResponse(res, didlWrapper(items.join('')), items.length, total);
   }
@@ -1034,7 +1066,7 @@ function handleBrowse(body, res) {
     const tracks = getYearTracks(year, startIdx, reqCount);
     const items = tracks.map(t => {
       const lib = libById.get(t.library_id);
-      return lib ? trackItem(t, lib.name, objectId) : '';
+      return lib ? trackItem(t, lib, objectId) : '';
     }).filter(Boolean);
     return sendBrowseResponse(res, didlWrapper(items.join('')), items.length, total);
   }
@@ -1071,7 +1103,7 @@ function handleBrowse(body, res) {
 
     const children = [
       ...dirs.map(d => dirContainer(libId, d, objectId, dirChildCount(allTracks, d))),
-      ...items.map(t => trackItem(t, lib.name, objectId)),
+      ...items.map(t => trackItem(t, lib, objectId)),
     ];
     const slice = paginate(children, startIdx, reqCount);
     return sendBrowseResponse(res, didlWrapper(slice.join('')), slice.length, children.length);
@@ -1191,7 +1223,7 @@ function handleBrowse(body, res) {
 
     const orderBy = buildOrderBy(sortTerms, 'al.name, t.disc_number, t.track_number, t.title');
     const tracks = getLibraryTracks(libId, startIdx, reqCount, orderBy);
-    return sendBrowseResponse(res, didlWrapper(tracks.map(t => trackItem(t, lib.name, objectId)).join('')), tracks.length, total);
+    return sendBrowseResponse(res, didlWrapper(tracks.map(t => trackItem(t, lib, objectId)).join('')), tracks.length, total);
   }
 
   // ── Directory container (dirs mode) ──────────────────────────────────────
@@ -1217,7 +1249,7 @@ function handleBrowse(body, res) {
         const full = relPath + '/' + d;
         return dirContainer(libId, full, objectId, dirChildCount(allTracks, full));
       }),
-      ...items.map(t => trackItem(t, lib.name, objectId)),
+      ...items.map(t => trackItem(t, lib, objectId)),
     ];
     const slice = paginate(children, startIdx, reqCount);
     return sendBrowseResponse(res, didlWrapper(slice.join('')), slice.length, children.length);
@@ -1259,7 +1291,7 @@ function handleBrowse(body, res) {
     }
 
     const slice = paginate(tracks, startIdx, reqCount);
-    return sendBrowseResponse(res, didlWrapper(slice.map(t => trackItem(t, lib.name, objectId)).join('')), slice.length, tracks.length);
+    return sendBrowseResponse(res, didlWrapper(slice.map(t => trackItem(t, lib, objectId)).join('')), slice.length, tracks.length);
   }
 
   // ── Genre container (genre mode) ─────────────────────────────────────────
@@ -1320,7 +1352,7 @@ function handleBrowse(body, res) {
       duration: row.duration, format: row.format, file_size: row.file_size,
       genre: row.genre, album_art_file: row.album_art_file,
       artist_name: row.artist_name, album_name: row.album_name,
-    }, row.library_name, objectId)).join('');
+    }, { name: row.library_name, type: row.library_type }, objectId)).join('');
     return sendBrowseResponse(res, didlWrapper(items), slice.length, rows.length);
   }
 
@@ -1345,7 +1377,7 @@ function handleBrowse(body, res) {
     if (browseFlag === 'BrowseDirectChildren') {
       return sendBrowseResponse(res, didlWrapper(''), 0, 0);
     }
-    return sendBrowseResponse(res, didlWrapper(trackItem(row, lib.name, `tracks-${lib.id}`)), 1, 1);
+    return sendBrowseResponse(res, didlWrapper(trackItem(row, lib, `tracks-${lib.id}`)), 1, 1);
   }
 
   sendXml(res, soapError('701', 'No Such Object'), 500);
@@ -1489,7 +1521,7 @@ function handleSearch(body, res) {
 
   const items = rows.map(row => {
     const lib = libById.get(row.library_id);
-    return lib ? trackItem(row, lib.name, objectId) : '';
+    return lib ? trackItem(row, lib, objectId) : '';
   }).filter(Boolean).join('');
 
   const escapedDidl = xmlEscape(didlWrapper(items));
