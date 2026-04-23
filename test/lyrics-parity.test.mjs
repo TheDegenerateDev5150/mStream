@@ -27,7 +27,7 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { extractLyrics } from '../src/db/lyrics-extraction.js';
 
@@ -46,8 +46,22 @@ function findRustParser() {
       `rust-parser-${process.platform}-${process.arch}${libc}${ext}`),
     path.join(REPO_ROOT, 'bin', 'rust-parser',
       `rust-parser-${process.platform}-${process.arch}${ext}`),
-  ];
-  for (const c of candidates) { if (fsSync.existsSync(c)) { return c; } }
+  ].filter(p => fsSync.existsSync(p));
+
+  // Probe each candidate for the `--extract-lyrics` subcommand. A
+  // stale local build (from before the subcommand was added) falls
+  // through to the main JSON-input path and exits 1 with "Invalid
+  // JSON Input" on stderr. Any other response means the subcommand
+  // is recognised — distinguish by the stderr signature so this
+  // works whether the probe path exists or not.
+  for (const bin of candidates) {
+    try {
+      const result = spawnSync(bin, ['--extract-lyrics', path.join(REPO_ROOT, 'NONEXISTENT_PROBE_FILE')],
+        { stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 });
+      const stderr = (result.stderr || '').toString();
+      if (!/Invalid JSON Input/.test(stderr)) { return bin; }
+    } catch (_) { /* try next candidate */ }
+  }
   return null;
 }
 const RUST_BIN = findRustParser();

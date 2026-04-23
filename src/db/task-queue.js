@@ -57,8 +57,24 @@ function findRustParser() {
     return true;
   };
 
-  // Check local build first (may be newer than prebuilt during development)
-  if (fs.existsSync(localBuildBin)) { return markReady(localBuildBin); }
+  // Check local build first (may be newer than prebuilt during
+  // development). Probe it with `--waveform <nonexistent>` — the
+  // subcommand is a recent addition, so a stale local build that
+  // pre-dates it falls through to the main JSON-input path and
+  // exits 1 with "Invalid JSON Input". If that happens, skip the
+  // stale local build and let the newer prebuilt bin take over.
+  // Without this, an old `cargo build --release` output would
+  // silently shadow the CI-shipped binary and break scans.
+  if (fs.existsSync(localBuildBin)) {
+    try {
+      const probe = child.spawnSync(localBuildBin, ['--waveform', path.join(rustParserDir, 'NONEXISTENT_PROBE_FILE')],
+        { stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 });
+      const stderr = (probe.stderr || '').toString();
+      if (!/Invalid JSON Input/.test(stderr)) { return markReady(localBuildBin); }
+      winston.warn(`Local rust-parser build at ${localBuildBin} pre-dates the --waveform subcommand; ` +
+        `falling through to the prebuilt binary. Rebuild with \`npm run build-rust\` to clear this warning.`);
+    } catch (_) { /* probe failed — try the prebuilt */ }
+  }
   if (fs.existsSync(prebuiltBin)) { return markReady(prebuiltBin); }
 
   // Try to build from source

@@ -27,7 +27,7 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -44,8 +44,24 @@ function findRustParser() {
     path.join(REPO_ROOT, 'rust-parser', 'target', 'release', `rust-parser${ext}`),
     path.join(REPO_ROOT, 'bin', 'rust-parser',
       `rust-parser-${process.platform}-${process.arch}${libc}${ext}`),
-  ];
-  return candidates.find(p => fsSync.existsSync(p));
+  ].filter(p => fsSync.existsSync(p));
+
+  // Probe each candidate for the `--waveform` subcommand. A stale
+  // local build (compiled before --waveform was added) falls through
+  // to the main JSON-input path and exits 1 with "Invalid JSON Input"
+  // on stderr. Any other response — success, or a different error —
+  // means the subcommand is recognised. Distinguish by the stderr
+  // signature rather than status code so we work whether the probe
+  // path exists or not.
+  for (const bin of candidates) {
+    try {
+      const result = spawnSync(bin, ['--waveform', path.join(REPO_ROOT, 'NONEXISTENT_PROBE_FILE')],
+        { stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 });
+      const stderr = (result.stderr || '').toString();
+      if (!/Invalid JSON Input/.test(stderr)) { return bin; }
+    } catch (_) { /* try next candidate */ }
+  }
+  return null;
 }
 
 function runFfmpeg(args) {

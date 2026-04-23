@@ -357,11 +357,28 @@ export function reboot() {
     dlnaServer.stop();
     subsonicServer.stop();
     serverPlaybackApi.killRustPlayer();
+    // Tear down the /remote WebSocket server — any open WS client
+    // otherwise keeps the HTTP server alive and server.close() below
+    // never fires its callback, leaving the user with "server stopped
+    // but never rebooted".
+    remoteApi.stop();
 
-    // Close the server
+    // Close the server. server.close() waits for every in-flight HTTP
+    // request AND every idle keep-alive socket to drain. The admin
+    // client that just issued the UI-switch POST has an open
+    // keep-alive socket; without closeAllConnections() we'd wait up
+    // to the agent's keep-alive timeout (tens of seconds) before the
+    // callback fires. Force the close after a short grace period so
+    // in-flight writes get a chance to finish but stragglers don't
+    // block the restart.
     server.close(() => {
       serveIt(config.configFile);
     });
+    setTimeout(() => {
+      if (typeof server.closeAllConnections === 'function') {
+        try { server.closeAllConnections(); } catch (_) {}
+      }
+    }, 1000);
   } catch (err) {
     winston.error('Reboot Failed', { stack: err });
     process.exit(1);

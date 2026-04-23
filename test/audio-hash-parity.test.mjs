@@ -25,7 +25,7 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { computeHashes } from '../src/db/audio-hash.js';
 
@@ -47,8 +47,25 @@ function findRustParser() {
     path.join(REPO_ROOT, 'rust-parser', 'target', 'release', `rust-parser${ext}`),
     path.join(REPO_ROOT, 'bin', 'rust-parser',
       `rust-parser-${process.platform}-${process.arch}${libc}${ext}`),
-  ];
-  return candidates.find(p => fsSync.existsSync(p));
+  ].filter(p => fsSync.existsSync(p));
+
+  // Probe each candidate for the `--audio-hash` subcommand. A stale
+  // local build (compiled before the subcommand was added) falls
+  // through to the main JSON-input path and exits 1 with "Invalid
+  // JSON Input" on stderr. Any other response means the subcommand
+  // is recognised — distinguish by the stderr signature so this
+  // works whether the probe path exists or not (the current binary
+  // returns exit 2 + "compute_hashes failed" for a missing file,
+  // which is still fine for our purposes).
+  for (const bin of candidates) {
+    try {
+      const result = spawnSync(bin, ['--audio-hash', path.join(REPO_ROOT, 'NONEXISTENT_PROBE_FILE')],
+        { stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 });
+      const stderr = (result.stderr || '').toString();
+      if (!/Invalid JSON Input/.test(stderr)) { return bin; }
+    } catch (_) { /* try next candidate */ }
+  }
+  return null;
 }
 
 function runFfmpeg(args) {

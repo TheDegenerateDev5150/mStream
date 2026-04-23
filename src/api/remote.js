@@ -31,8 +31,29 @@ const allowedCommands = [
   'setVolume',
 ];
 
+// Module-level reference so `stop()` can close the server on reboot.
+// Leaving it bound keeps the HTTP server alive forever (`server.close()`
+// waits for every upgrade/socket to finish) and mStream's UI switcher
+// never completes its reboot step — user-visible as "server stopped
+// but never came back up".
+let wss = null;
+
+export function stop() {
+  if (!wss) { return; }
+  try {
+    // Gracefully ask every open connection to close, then terminate
+    // any stragglers after a short grace period so reboot isn't
+    // blocked by a misbehaving client.
+    for (const client of wss.clients) {
+      try { client.close(); } catch (_) {}
+    }
+    wss.close();
+  } catch (_) {}
+  wss = null;
+}
+
 export function setupAfterAuth(mstream, server) {
-  const wss = new WebSocketServer({ server: server, verifyClient: (info, cb) => {
+  wss = new WebSocketServer({ server: server, verifyClient: (info, cb) => {
     try {
       let decoded;
       const allUsers = db.getAllUsers ? db.getAllUsers() : [];
