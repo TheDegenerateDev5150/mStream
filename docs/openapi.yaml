@@ -2289,23 +2289,24 @@ paths:
     get:
       tags: [User API Keys]
       summary: List the caller's own Subsonic API keys
+      description: |
+        Returns an array (not a wrapped object) of keys the caller has
+        minted. Key strings are never returned — those are view-once at
+        creation time; after that only id/name/timestamps are visible.
       responses:
         "200":
-          description: Keys minted by this user (key value NOT returned — view-once on creation).
+          description: Keys minted by this user. Key values NOT returned.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  keys:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        id:         { type: integer }
-                        name:       { type: string }
-                        created_at: { type: string, format: date-time }
-                        last_used:  { type: string, format: date-time, nullable: true }
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:         { type: integer }
+                    name:       { type: string }
+                    created_at: { type: string, format: date-time }
+                    last_used:  { type: string, format: date-time, nullable: true }
         "401": { $ref: "#/components/responses/Unauthorized" }
     post:
       tags: [User API Keys]
@@ -2322,10 +2323,13 @@ paths:
           application/json:
             schema:
               type: object
+              required: [name]
               properties:
                 name:
                   type: string
-                  description: Free-form label so the user can tell keys apart. Optional.
+                  minLength: 1
+                  maxLength: 100
+                  description: Free-form label so the user can tell keys apart. Required.
       responses:
         "200":
           description: One-time view of the freshly-minted key.
@@ -2333,12 +2337,12 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [key, id, name]
+                required: [key, name]
                 properties:
                   key:  { type: string }
-                  id:   { type: integer }
-                  name: { type: string, nullable: true }
+                  name: { type: string }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Validation error (missing/blank `name`). }
 
   /api/v1/user/api-keys/{id}:
     delete:
@@ -4368,9 +4372,36 @@ paths:
     get:
       tags: [Admin - Subsonic]
       summary: Live jukebox status (Rust audio backend)
+      description: |
+        Proxies to the bundled rust-server-audio process for its `/status` and
+        `/queue` endpoints. Returns `{available:false, reason}` if the
+        backend isn't running (autoBootServerAudio disabled or boot failed).
       responses:
         "200":
           description: Status snapshot.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    required: [available]
+                    properties:
+                      available: { type: boolean, enum: [false] }
+                      reason:    { type: string }
+                  - type: object
+                    required: [available]
+                    properties:
+                      available:   { type: boolean, enum: [true] }
+                      playing:     { type: boolean }
+                      paused:      { type: boolean }
+                      position:    { type: number, description: "Seconds." }
+                      duration:    { type: number, description: "Seconds." }
+                      volume:      { type: number, minimum: 0, maximum: 1 }
+                      currentFile: { type: string }
+                      queueLength: { type: integer }
+                      queueIndex:  { type: integer }
+                      shuffle:     { type: boolean }
+                      loopMode:    { type: string, enum: [none, one, all] }
 
   /api/v1/admin/subsonic/token-auth-attempts:
     get:
@@ -4414,10 +4445,14 @@ paths:
           application/json:
             schema:
               type: object
-              required: [username]
+              required: [username, name]
               properties:
                 username: { type: string }
-                name:     { type: string, description: Optional key label. }
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                  description: Key label. Required; distinguishes multiple keys on the same user.
       responses:
         "200":
           description: The freshly-minted key (view-once).
@@ -4425,11 +4460,13 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [key, name, username]
                 properties:
                   key:      { type: string }
                   username: { type: string }
-                  name:     { type: string, nullable: true }
+                  name:     { type: string }
         "404": { description: User not found. }
+        "403": { description: Validation error (missing `username` or `name`). }
 
   /api/v1/admin/users/subsonic-password:
     post:

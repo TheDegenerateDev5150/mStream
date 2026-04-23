@@ -437,6 +437,16 @@ export function writeSidecarIfPossible(audioHash, data) {
     const payload = data.syncedLyrics || data.plainLyrics;
     if (!payload) { return false; }
 
+    // Respect the scanner's sidecar size cap on the write path too —
+    // otherwise a pathologically large LRCLib response would produce
+    // a sidecar the scanner immediately refuses to re-read (cap check
+    // in lyrics-extraction.js), leaving a dead file on disk. LRCLib in
+    // practice returns <32KB, so this is belt-and-braces.
+    if (Buffer.byteLength(payload, 'utf8') > 256 * 1024) {
+      winston.warn(`[lyrics-lrclib] sidecar payload > 256KB for ${audioHash}; keeping cache only`);
+      return false;
+    }
+
     // Atomic write via .tmp + rename so a crashed process never leaves
     // a truncated sidecar that the next scan would cache verbatim.
     const tmp = target + '.tmp';
