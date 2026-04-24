@@ -14,7 +14,7 @@ All config params have default values. A newly generated config will be empty js
 { }
 ```
 
-A heavily edited config would look like: 
+A heavily edited config would look like:
 
 ```json
 {
@@ -87,7 +87,7 @@ If this is not set, the cwd will be used
 
 If there is no users object, the login system will not be enabled and anyone will be abe to access the server.  All folders will be accessible
 
-A basic user example.  
+A basic user example.
 
 Note that the hashed password and salt can be generated automatically by creating a new user via the admin ui.
 
@@ -162,7 +162,7 @@ The `defaultCodec` accepts the values `aac`, `mp3`, `opus`.
 
 The `defaultBitrate` accepts the values, `192k` `128k`, `96k`, `64k`
 
-## Secret 
+## Secret
 
 Sets the secret key used for the login system.  If this is not set, mStream will generate a different secret key on each boot and all previous login sessions will be voided
 
@@ -235,7 +235,7 @@ Each user can have their own lastFM credentials
 
 mStream will write, logs, DB files, and album art to the filesystem.  By default these will be written in the mStream project folder tothe `save` and `image-cache` folders.  Use the `storage` object to choose where to save these files
 
-The `albumArtDirectory` will be publicly available 
+The `albumArtDirectory` will be publicly available
 
 ```json
 {
@@ -273,3 +273,11 @@ Folder that contains the frontend for mStream.  Defaults to `public` if not set
 The object key is the file extension and the value is true/false.
 
 If true, the file will be scanned and saved the db as an audio file. If false, the file will not be scanned but still be viewable in the file explorer
+
+## Trust Proxy
+
+Set `trustProxy` to `true` to get correct client IPs in logs when behind a reverse proxy. This defaults to `false`.  It should be `false` on directly exposed instances to prevent trivial spoofing.
+
+```
+  "trustProxy": true,
+```

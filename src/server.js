@@ -92,6 +92,10 @@ export async function serveIt(configFile) {
     );
     next();
   });
+  // Trust Proxy
+  if (config.program.trustProxy) {
+    mstream.set("trust proxy", true);
+  }
 
   // Setup DB
   dbManager.initDB();
