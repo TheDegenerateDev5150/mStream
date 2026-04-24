@@ -1,10 +1,13 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use md5::{Digest, Md5};
+
 use lofty::config::{ParseOptions, ParsingMode};
+use lofty::file::FileType;
 use lofty::prelude::*;
 use lofty::probe::Probe;
 use lofty::tag::{ItemKey, ItemValue};
@@ -63,10 +66,76 @@ struct ScanConfig {
 
 fn default_commit_interval() -> u64 { 25 }
 
+// Snapshot of a row in the `tracks` table, pre-fetched in bulk at scan
+// start so the per-file fast-path check doesn't hit SQLite. For a
+// library that hasn't changed since the last scan, this cuts N
+// `SELECT … WHERE filepath = ? AND library_id = ?` queries down to one
+// `SELECT … WHERE library_id = ?` upfront.
+#[derive(Clone)]
+struct ExistingTrack {
+    id: i64,
+    modified: i64,
+    file_hash: Option<String>,
+    audio_hash: Option<String>,
+    album_id: Option<i64>,
+    lyrics_sidecar_mtime: Option<i64>,
+}
+
+fn load_existing_tracks(
+    conn: &Connection, library_id: i64,
+) -> Result<HashMap<String, ExistingTrack>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT filepath, id, modified, file_hash, audio_hash, album_id, lyrics_sidecar_mtime
+           FROM tracks
+          WHERE library_id = ?",
+    )?;
+    let rows = stmt.query_map([library_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            ExistingTrack {
+                id: row.get(1)?,
+                modified: row.get(2)?,
+                file_hash: row.get::<_, Option<String>>(3)?,
+                audio_hash: row.get::<_, Option<String>>(4)?,
+                album_id: row.get::<_, Option<i64>>(5)?,
+                lyrics_sidecar_mtime: row.get::<_, Option<i64>>(6)?,
+            },
+        ))
+    })?;
+    let mut map = HashMap::new();
+    for row in rows {
+        let (path, track) = row?;
+        map.insert(path, track);
+    }
+    Ok(map)
+}
+
 // ── Entry point ─────────────────────────────────────────────────────────────
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+
+    // Hidden developer/test subcommand that uses the buffered scan path
+    // (whole file into RAM → md5 from slice). Exercises the same
+    // `compute_hashes_from_bytes` the scanner uses, so a side-by-side
+    // diff vs. `--audio-hash` below proves the streaming and buffered
+    // paths are byte-identical.
+    if args.len() == 3 && args[1] == "--audio-hash-buffered" {
+        let p = Path::new(&args[2]);
+        let ext = file_ext(p).to_lowercase();
+        match fs::read(p) {
+            Ok(bytes) => {
+                let (fh, ah) = compute_hashes_from_bytes(&bytes, &ext);
+                let ah_json = match ah {
+                    Some(s) => format!("\"{}\"", s),
+                    None => "null".to_string(),
+                };
+                println!("{{\"fileHash\":\"{}\",\"audioHash\":{},\"format\":\"{}\"}}", fh, ah_json, ext);
+                return;
+            }
+            Err(e) => { eprintln!("read failed: {}", e); std::process::exit(2); }
+        }
+    }
 
     // Hidden developer/test subcommand: `rust-parser --audio-hash <path>`
     // prints the dual-hash result as JSON on stdout and exits. Used by
@@ -185,8 +254,54 @@ fn run_scan(config: &ScanConfig) -> Result<(), Box<dyn std::error::Error>> {
     // main server's shared-playlist cleanup or any API-triggered write).
     // Without this, the scanner fails immediately with "database is locked".
     conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;")?;
+    // Keep every prepared SELECT/INSERT/UPDATE/DELETE used by process_one
+    // in the statement cache. Hot loop does ~15 distinct statements per
+    // changed file; the default (16) just barely fits, so bump headroom
+    // so cache churn doesn't re-compile SQL on every track.
+    conn.set_prepared_statement_cache_capacity(64);
 
     let dir_art_cache: Mutex<HashMap<String, Option<String>>> = Mutex::new(HashMap::new());
+    // Per-directory filename listing cache. Avoids N×22 `fs::metadata`
+    // calls per scan when probing lyrics sidecars (every audio file
+    // otherwise probes 21 `<base>.<lang>.lrc` candidates + `<base>.txt`
+    // via stat, which on a remote CIFS mount costs one round-trip each).
+    // One `read_dir` per directory at first touch, cached thereafter.
+    let dir_file_cache: Mutex<HashMap<PathBuf, DirListing>> = Mutex::new(HashMap::new());
+
+    // Pre-scan the waveform cache directory once up front, keeping an
+    // in-memory set of `<hash>.bin` filenames. The per-track existence
+    // check then becomes a HashSet probe instead of `fs::metadata` —
+    // saves one stat per track on every scan when waveforms are
+    // enabled (local disk or network-mount for the cache dir).
+    let waveform_cache_names: Mutex<HashSet<String>> = Mutex::new(
+        if config.waveform_cache_dir.is_empty() {
+            HashSet::new()
+        } else {
+            load_waveform_cache_names(Path::new(&config.waveform_cache_dir))
+        }
+    );
+
+    // Bulk-prefetch every tracks row for this library into memory. The
+    // per-file fast-path then lives off this HashMap instead of issuing
+    // one `SELECT … WHERE filepath = ?` per entry — on a 3400-file
+    // library that's 3400 round trips collapsed into one query.
+    let existing_tracks = load_existing_tracks(&conn, config.library_id)?;
+
+    // Per-scan name→id memoisation. `find_or_create_artist` in
+    // particular runs 2-4× per changed file (primary + featured +
+    // album-artist + M2M) and almost always resolves to a small set of
+    // repeat values, so caching collapses thousands of SELECTs into
+    // a handful. Albums key on (name, artist_id, year) because the
+    // same album name under a different artist is a different row.
+    // Genres are keyed by name alone.
+    let artist_cache: Mutex<HashMap<String, i64>> = Mutex::new(HashMap::new());
+    let album_cache: Mutex<HashMap<(String, Option<i64>, Option<i64>), i64>> = Mutex::new(HashMap::new());
+    let genre_cache: Mutex<HashMap<String, i64>> = Mutex::new(HashMap::new());
+    // Cached id for the seeded "Various Artists" row, resolved on
+    // first compilation track. -1 stored after a negative lookup so we
+    // don't re-query for every compilation file on libraries that
+    // never seeded the row.
+    let various_artists_id: Mutex<Option<i64>> = Mutex::new(None);
 
     println!("Scanning {}...", config.directory);
 
@@ -197,10 +312,12 @@ fn run_scan(config: &ScanConfig) -> Result<(), Box<dyn std::error::Error>> {
         .filter(|e| e.file_type().is_file())
         .collect();
 
-    // Count expected audio files for progress reporting
+    // Count expected audio files for progress reporting. File extensions
+    // are ASCII by convention; `to_ascii_lowercase` skips the Unicode
+    // mapping table that `to_lowercase` applies.
     let expected_files: u64 = entries.iter()
         .filter(|e| {
-            let ext = file_ext(e.path()).to_lowercase();
+            let ext = file_ext(e.path()).to_ascii_lowercase();
             config.supported_files.get(&ext).copied().unwrap_or(false)
         })
         .count() as u64;
@@ -221,15 +338,23 @@ fn run_scan(config: &ScanConfig) -> Result<(), Box<dyn std::error::Error>> {
     // Use explicit transactions for batch performance.
     // Without this, SQLite does a disk fsync per INSERT (~50 files/sec).
     // With transactions, it batches fsyncs (~5000+ files/sec).
-    conn.execute_batch("BEGIN")?;
+    // `execute_batch` parses & validates every statement in the string;
+    // for a one-liner we can skip that overhead by going through the
+    // lighter `execute` path.
+    conn.execute("BEGIN", [])?;
 
     for entry in &entries {
-        let ext = file_ext(entry.path()).to_lowercase();
+        let ext = file_ext(entry.path()).to_ascii_lowercase();
         if !config.supported_files.get(&ext).copied().unwrap_or(false) {
             continue;
         }
 
-        match process_one(entry, &ext, config, &conn, &dir_art_cache) {
+        match process_one(
+            entry, &ext, config, &conn,
+            &dir_art_cache, &dir_file_cache,
+            &waveform_cache_names, &existing_tracks,
+            &artist_cache, &album_cache, &genre_cache, &various_artists_id,
+        ) {
             Ok(true) => {
                 file_count += 1;
             }
@@ -245,19 +370,24 @@ fn run_scan(config: &ScanConfig) -> Result<(), Box<dyn std::error::Error>> {
         // Periodically commit and report progress so the API can see
         // updates between batches. Also serves as the batch commit.
         if total_processed % commit_interval == 0 {
-            let rel = entry.path().strip_prefix(&config.directory)
-                .map(|p| p.to_string_lossy().replace('\\', "/"))
+            let rel_cow = entry.path().strip_prefix(&config.directory)
+                .map(|p| p.to_string_lossy())
                 .unwrap_or_default();
-            conn.execute_batch("COMMIT")?;
+            let rel: String = if rel_cow.contains('\\') {
+                rel_cow.replace('\\', "/")
+            } else {
+                rel_cow.into_owned()
+            };
+            conn.execute("COMMIT", [])?;
             let _ = conn.execute(
                 "UPDATE scan_progress SET scanned = ?1, current_file = ?2 WHERE scan_id = ?3",
                 rusqlite::params![total_processed, rel, config.scan_id],
             );
-            conn.execute_batch("BEGIN")?;
+            conn.execute("BEGIN", [])?;
         }
     }
 
-    conn.execute_batch("COMMIT")?;
+    conn.execute("COMMIT", [])?;
 
     // Remove progress row — scan is done
     let _ = conn.execute("DELETE FROM scan_progress WHERE scan_id = ?1", rusqlite::params![config.scan_id]);
@@ -296,49 +426,61 @@ fn run_scan(config: &ScanConfig) -> Result<(), Box<dyn std::error::Error>> {
 
 // ── Per-file processing ─────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn process_one(
     entry: &walkdir::DirEntry,
     ext: &str,
     config: &ScanConfig,
     conn: &Connection,
     dir_art_cache: &Mutex<HashMap<String, Option<String>>>,
+    dir_file_cache: &Mutex<HashMap<PathBuf, DirListing>>,
+    waveform_cache_names: &Mutex<HashSet<String>>,
+    existing_tracks: &HashMap<String, ExistingTrack>,
+    artist_cache: &Mutex<HashMap<String, i64>>,
+    album_cache: &Mutex<HashMap<(String, Option<i64>, Option<i64>), i64>>,
+    genre_cache: &Mutex<HashMap<String, i64>>,
+    various_artists_id: &Mutex<Option<i64>>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let filepath = entry.path();
-    let mod_time = entry.metadata()?
+    // Pull size + mtime in one stat. Used below to decide whether to
+    // pull the file fully into RAM for the buffered fast-path, and
+    // replaces the separate `file.metadata()?.len()` inside
+    // compute_hashes.
+    let meta = entry.metadata()?;
+    let mod_time = meta
         .modified()?
         .duration_since(std::time::UNIX_EPOCH)?
         .as_millis() as i64;
+    let file_size = meta.len();
 
-    let rel_path = filepath
-        .strip_prefix(&config.directory)?
-        .to_string_lossy()
-        .replace('\\', "/");
+    // Skip the `replace` allocation on Unix where there are no
+    // backslashes to convert. `to_string_lossy()` returns a Cow, so the
+    // common path is zero-copy.
+    let rel_path_cow = filepath.strip_prefix(&config.directory)?.to_string_lossy();
+    let rel_path: String = if rel_path_cow.contains('\\') {
+        rel_path_cow.replace('\\', "/")
+    } else {
+        rel_path_cow.into_owned()
+    };
 
-    // Check if the file is already in the table. Keep a snapshot of both
-    // hashes so we can migrate user-facing rows (stars, ratings, play
-    // counts, bookmarks, play queue) if the track's canonical identity
-    // changed on re-parse — typical trigger is an external ID3 tag editor.
-    // Also captures the existing track's album_id so we can migrate
-    // user_album_stars on the V17 compilation-collapse path. lyrics
-    // sidecar mtime (V19) lets us re-read a track whose audio file
-    // didn't change but whose .lrc / .txt sidecar got edited.
-    let existing: Option<(i64, i64, String, String, Option<i64>, Option<i64>)> = conn.prepare_cached(
-        "SELECT id, modified, file_hash, audio_hash, album_id, lyrics_sidecar_mtime
-           FROM tracks WHERE filepath = ? AND library_id = ?"
-    )?.query_row(rusqlite::params![rel_path, config.library_id], |row| {
-        Ok((
-            row.get(0)?,
-            row.get(1)?,
-            row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-            row.get::<_, Option<String>>(3)?.unwrap_or_default(),
-            row.get::<_, Option<i64>>(4)?,
-            row.get::<_, Option<i64>>(5)?,
-        ))
-    }).ok();
+    // Existing-track snapshot comes from the pre-fetched HashMap, not
+    // a per-file SELECT. See `load_existing_tracks` at the top of
+    // run_scan. The row (if any) carries everything the fast-path
+    // check and the downstream migration logic need:
+    //   - id            — for the scan_id UPDATE
+    //   - modified      — mtime equality check for fast path
+    //   - file_hash /
+    //     audio_hash    — migrate user-facing rows (stars, bookmarks,
+    //                     play queue) on tag edits that change the
+    //                     canonical identity
+    //   - album_id      — migrate user_album_stars on V17
+    //                     compilation-collapse
+    //   - sidecar_mtime — fast-path invalidation on .lrc / .txt drift
+    let existing = existing_tracks.get(&rel_path);
 
     // Probe sidecars BEFORE the fast-path decision so a drift between
     // the stored mtime and what's on disk triggers a re-read.
-    let current_sidecar_mtime = sidecar_mtime(filepath);
+    let current_sidecar_mtime = sidecar_mtime_cached(filepath, dir_file_cache);
 
     // NOTE: we intentionally do NOT DELETE the old tracks row before
     // tag parsing. A mid-parse failure used to leave the DELETE
@@ -349,19 +491,20 @@ fn process_one(
     // track_genres) only disappears when the new one is ready to take
     // its place.
     let (old_hash, old_audio_hash, old_album_id): (Option<String>, Option<String>, Option<i64>) =
-        if let Some((id, existing_mod, old_file, old_audio, old_album, old_sidecar_mtime)) = &existing {
-            let audio_unchanged = *existing_mod == mod_time;
-            let sidecar_drifted = *old_sidecar_mtime != current_sidecar_mtime;
+        if let Some(e) = existing {
+            let audio_unchanged = e.modified == mod_time;
+            let sidecar_drifted = e.lyrics_sidecar_mtime != current_sidecar_mtime;
             if audio_unchanged && !config.force_rescan && !sidecar_drifted {
-                // Unchanged — just update scan_id
-                conn.execute("UPDATE tracks SET scan_id = ? WHERE id = ?",
-                    rusqlite::params![config.scan_id, id])?;
+                // Unchanged — just update scan_id. This is the hot path
+                // for any rescan of a stable library; keep it prepared.
+                conn.prepare_cached("UPDATE tracks SET scan_id = ? WHERE id = ?")?
+                    .execute(rusqlite::params![config.scan_id, e.id])?;
                 return Ok(false);
             }
             (
-                if old_file.is_empty()  { None } else { Some(old_file.clone())  },
-                if old_audio.is_empty() { None } else { Some(old_audio.clone()) },
-                *old_album,
+                e.file_hash.clone().filter(|s| !s.is_empty()),
+                e.audio_hash.clone().filter(|s| !s.is_empty()),
+                e.album_id,
             )
         } else {
             (None, None, None)
@@ -400,12 +543,53 @@ fn process_one(
     let mut lyrics_synced_lrc: Option<String> = None;
     let mut lyrics_lang: Option<String> = None;
 
+    // Single-buffer fast path: pull the file into RAM once and share the
+    // bytes between lofty (tags), MD5 (hashes), and symphonia (waveform).
+    // Previously each of those steps opened the file independently and
+    // re-read up to the full payload from disk. On local SSD the savings
+    // are in the tens of ms per new/modified file; on CIFS or spinning
+    // disk they're dominant. A size threshold keeps memory bounded so a
+    // pathological 2 GB WAV doesn't blow out the process.
+    const MAX_BUFFERED_FILE: u64 = 256 * 1024 * 1024;
+    let mut buf: Option<Vec<u8>> = if file_size <= MAX_BUFFERED_FILE {
+        match fs::read(filepath) {
+            Ok(b) => Some(b),
+            Err(e) => {
+                // If the read failed outright (permission, transient
+                // network), fall back to the streaming path. lofty/hash
+                // will likely also fail and get logged per-step, but
+                // that matches the pre-buffered-path behaviour.
+                eprintln!("Warning: buffered read failed on {}: {}", filepath.display(), e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // Use Relaxed parsing so malformed frames (e.g. odd-length UTF-16 strings,
     // invalid year lengths) get dropped individually instead of failing the
     // whole file. Bulk rips with a broken tagger can otherwise lose all
     // metadata for hundreds of tracks from one bad frame each.
+    // Match `Probe::open`'s behaviour: set the file type from the
+    // extension (what lofty's source does via `FileType::from_path`).
+    // The earlier version of the buffered arm used `guess_file_type()`
+    // which is magic-bytes-only — for files whose magic signature is
+    // unusual or corrupted but whose extension is known, `Probe::open`
+    // succeeds while magic detection returns `UnknownFormat`. Keeping
+    // the two paths semantically identical preserves parity.
     let parse_opts = ParseOptions::new().parsing_mode(ParsingMode::Relaxed);
-    match Probe::open(filepath).and_then(|p| p.options(parse_opts).read()) {
+    let tagged_result = match buf.as_deref() {
+        Some(bytes) => {
+            let mut probe = Probe::new(Cursor::new(bytes));
+            if let Some(ft) = FileType::from_ext(ext) {
+                probe = probe.set_file_type(ft);
+            }
+            probe.options(parse_opts).read()
+        }
+        None => Probe::open(filepath).and_then(|p| p.options(parse_opts).read()),
+    };
+    match tagged_result {
         Ok(tagged_file) => {
             // Get duration + extended audio properties.
             let props = tagged_file.properties();
@@ -505,7 +689,7 @@ fn process_one(
     // synced variant from the tag. Mirrors the JS extractor's precedence
     // (embedded synced > sidecar .lrc > embedded plain > sidecar .txt).
     if lyrics_synced_lrc.is_none() {
-        if let Some((text, lang)) = read_lrc_sidecar(filepath) {
+        if let Some((text, lang)) = read_lrc_sidecar_cached(filepath, dir_file_cache) {
             lyrics_synced_lrc = Some(text);
             if lyrics_lang.is_none() {
                 lyrics_lang = lang.and_then(|l| normalise_lang(&l));
@@ -513,7 +697,7 @@ fn process_one(
         }
     }
     if lyrics_synced_lrc.is_none() && lyrics_embedded.is_none() {
-        if let Some(text) = read_txt_sidecar(filepath) {
+        if let Some(text) = read_txt_sidecar_cached(filepath, dir_file_cache) {
             if looks_like_lrc(&text) {
                 lyrics_synced_lrc = Some(text);
             } else {
@@ -531,7 +715,10 @@ fn process_one(
         aa_file = check_directory_for_album_art(filepath, config, dir_art_cache);
     }
 
-    let (hash, audio_hash) = compute_hashes(filepath, ext)?;
+    let (hash, audio_hash) = match buf.as_deref() {
+        Some(bytes) => compute_hashes_from_bytes(bytes, ext),
+        None => compute_hashes(filepath, ext)?,
+    };
 
     // Best-effort waveform generation — uses audio_hash as the cache key so
     // waveforms survive tag edits (same pattern as user_* rows). Falls back
@@ -540,9 +727,20 @@ fn process_one(
     // via ffmpeg lazily) and for tracks whose .bin file already exists.
     if !config.waveform_cache_dir.is_empty() {
         let wf_key = audio_hash.as_deref().unwrap_or(&hash);
-        let wf_path = PathBuf::from(&config.waveform_cache_dir).join(format!("{}.bin", wf_key));
-        if !wf_path.exists() {
-            if let Some(bars) = waveform_from_symphonia(filepath, ext) {
+        let wf_filename = format!("{}.bin", wf_key);
+        // Membership check against the in-memory set we pre-scanned at
+        // the start of run_scan — saves one `fs::metadata` per track.
+        let already_cached = waveform_cache_names.lock().unwrap().contains(&wf_filename);
+        if !already_cached {
+            let wf_path = PathBuf::from(&config.waveform_cache_dir).join(&wf_filename);
+            // Move `buf` into symphonia when we have one — the decoder
+            // reads from the Vec<u8> directly, saving a full file read.
+            // `buf` is consumed here so `None` path is still safe.
+            let bars = match buf.take() {
+                Some(b) => waveform_from_bytes(b, ext),
+                None => waveform_from_symphonia(filepath, ext),
+            };
+            if let Some(bars) = bars {
                 if let Some(dir) = wf_path.parent() {
                     let _ = fs::create_dir_all(dir);
                 }
@@ -553,24 +751,30 @@ fn process_one(
                 // when the target doesn't exist.
                 let tmp_path = PathBuf::from(&config.waveform_cache_dir)
                     .join(format!("{}.bin.tmp", wf_key));
-                if fs::write(&tmp_path, &bars).is_ok() {
-                    let _ = fs::rename(&tmp_path, &wf_path);
+                if fs::write(&tmp_path, &bars).is_ok() && fs::rename(&tmp_path, &wf_path).is_ok() {
+                    // Track what we wrote so a subsequent track with the
+                    // same audio_hash in the same scan doesn't redo the work.
+                    waveform_cache_names.lock().unwrap().insert(wf_filename);
                 }
             }
         }
     }
+    // `buf` (if not moved into the waveform branch above) drops here
+    // — no explicit free needed, but worth being aware of the memory
+    // peak: one audio file's bytes are live from fs::read until here.
+    drop(buf);
 
     // Resolve track-artist ids (primary first) and album-artist ids.
     let primary_track_artist_name = track_artists.first().cloned()
         .or_else(|| artist.clone());
     let primary_track_artist_id = match primary_track_artist_name.as_deref() {
-        Some(name) if !name.is_empty() => Some(find_or_create_artist(conn, name)?),
+        Some(name) if !name.is_empty() => Some(find_or_create_artist(conn, artist_cache, name)?),
         _ => None,
     };
     let mut album_artist_ids: Vec<i64> = Vec::new();
     for name in &album_artists {
         if !name.is_empty() {
-            album_artist_ids.push(find_or_create_artist(conn, name)?);
+            album_artist_ids.push(find_or_create_artist(conn, artist_cache, name)?);
         }
     }
 
@@ -581,7 +785,7 @@ fn process_one(
     let primary_album_artist_id = if !album_artist_ids.is_empty() {
         Some(album_artist_ids[0])
     } else if is_compilation {
-        find_various_artists(conn).ok().flatten().or(primary_track_artist_id)
+        find_various_artists(conn, various_artists_id).ok().flatten().or(primary_track_artist_id)
     } else {
         primary_track_artist_id
     };
@@ -590,7 +794,8 @@ fn process_one(
     let album_id = match &album {
         Some(name) => {
             let aid = find_or_create_album(
-                conn, name, primary_album_artist_id, year, aa_file.as_deref(),
+                conn, album_cache,
+                name, primary_album_artist_id, year, aa_file.as_deref(),
                 album_artist_tag.as_deref(), is_compilation,
             )?;
             Some(aid)
@@ -598,65 +803,71 @@ fn process_one(
         None => None,
     };
 
-    // Insert track
-    conn.execute(
+    // Insert track. Hottest statement in the scanner — prepared once
+    // per connection and reused for every changed file.
+    conn.prepare_cached(
         "INSERT OR REPLACE INTO tracks (filepath, library_id, title, artist_id, album_id, track_number,
          disc_number, year, duration, format, file_hash, audio_hash, album_art_file, genre,
          replaygain_track_db, sample_rate, channels, bit_depth,
          lyrics_embedded, lyrics_synced_lrc, lyrics_lang, lyrics_sidecar_mtime,
          modified, scan_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        rusqlite::params![
-            rel_path, config.library_id, title, primary_track_artist_id, album_id,
-            track_num, disc_num, year, duration_sec, ext, hash, audio_hash,
-            aa_file, genre, rg_track_db, sample_rate, channels, bit_depth,
-            lyrics_embedded, lyrics_synced_lrc, lyrics_lang, current_sidecar_mtime,
-            mod_time, config.scan_id
-        ],
-    )?;
+    )?.execute(rusqlite::params![
+        rel_path, config.library_id, title, primary_track_artist_id, album_id,
+        track_num, disc_num, year, duration_sec, ext, hash, audio_hash,
+        aa_file, genre, rg_track_db, sample_rate, channels, bit_depth,
+        lyrics_embedded, lyrics_synced_lrc, lyrics_lang, current_sidecar_mtime,
+        mod_time, config.scan_id
+    ])?;
 
     let track_id = conn.last_insert_rowid();
-    set_track_genres(conn, track_id, genre.as_deref())?;
+    set_track_genres(conn, genre_cache, track_id, genre.as_deref())?;
 
     // V17: populate M2M. Album-artists — INSERT OR IGNORE across multiple
     // tracks sharing the same album. Fall back to the primary album-artist
-    // id so the M2M isn't empty for legacy single-artist albums.
+    // id so the M2M isn't empty for legacy single-artist albums. Hoist the
+    // prepared statement out of the loop to avoid a statement-cache
+    // lookup per collaborator.
     if let Some(aid) = album_id {
         let m2m_ids: Vec<i64> = if !album_artist_ids.is_empty() {
             album_artist_ids.clone()
         } else {
             primary_album_artist_id.into_iter().collect()
         };
-        for (i, artist_fk) in m2m_ids.iter().enumerate() {
-            conn.execute(
+        if !m2m_ids.is_empty() {
+            let mut stmt = conn.prepare_cached(
                 "INSERT OR IGNORE INTO album_artists (album_id, artist_id, role, position)
                  VALUES (?, ?, 'main', ?)",
-                rusqlite::params![aid, artist_fk, i as i64],
             )?;
+            for (i, artist_fk) in m2m_ids.iter().enumerate() {
+                stmt.execute(rusqlite::params![aid, artist_fk, i as i64])?;
+            }
         }
     }
 
     // Track-artists — clear first (defensive; REPLACE above should have
     // cascaded, but a partial-run rescan could leave orphans). Primary is
     // role='main'; any additional collaborators are 'featured' in tag order.
-    conn.execute("DELETE FROM track_artists WHERE track_id = ?",
-        rusqlite::params![track_id])?;
+    conn.prepare_cached("DELETE FROM track_artists WHERE track_id = ?")?
+        .execute(rusqlite::params![track_id])?;
     let mut track_artist_ids: Vec<i64> = Vec::new();
     for name in &track_artists {
         if !name.is_empty() {
-            track_artist_ids.push(find_or_create_artist(conn, name)?);
+            track_artist_ids.push(find_or_create_artist(conn, artist_cache, name)?);
         }
     }
     if track_artist_ids.is_empty() {
         if let Some(id) = primary_track_artist_id { track_artist_ids.push(id); }
     }
-    for (i, artist_fk) in track_artist_ids.iter().enumerate() {
-        let role = if i == 0 { "main" } else { "featured" };
-        conn.execute(
+    if !track_artist_ids.is_empty() {
+        let mut stmt = conn.prepare_cached(
             "INSERT OR IGNORE INTO track_artists (track_id, artist_id, role, position)
              VALUES (?, ?, ?, ?)",
-            rusqlite::params![track_id, artist_fk, role, i as i64],
         )?;
+        for (i, artist_fk) in track_artist_ids.iter().enumerate() {
+            let role = if i == 0 { "main" } else { "featured" };
+            stmt.execute(rusqlite::params![track_id, artist_fk, role, i as i64])?;
+        }
     }
 
     // Migrate user_* rows to the new canonical identity. Canonical = audio_hash
@@ -740,56 +951,110 @@ fn migrate_hash_references(
 
 // ── Artist / Album helpers ──────────────────────────────────────────────────
 
-fn find_or_create_artist(conn: &Connection, name: &str) -> Result<i64, rusqlite::Error> {
-    if let Ok(id) = conn.query_row(
-        "SELECT id FROM artists WHERE name = ?", [name], |row| row.get(0)
-    ) {
+fn find_or_create_artist(
+    conn: &Connection,
+    cache: &Mutex<HashMap<String, i64>>,
+    name: &str,
+) -> Result<i64, rusqlite::Error> {
+    // Check the per-scan memo first — most tracks reuse ~dozens of
+    // artist names, so the SELECT rarely has to hit SQLite twice for
+    // the same value across a scan.
+    if let Some(&id) = cache.lock().unwrap().get(name) {
         return Ok(id);
     }
-    conn.execute("INSERT INTO artists (name) VALUES (?)", [name])?;
-    Ok(conn.last_insert_rowid())
+    let existing: Option<i64> = conn
+        .prepare_cached("SELECT id FROM artists WHERE name = ?")?
+        .query_row([name], |row| row.get(0))
+        .optional()?;
+    let id = match existing {
+        Some(id) => id,
+        None => {
+            conn.prepare_cached("INSERT INTO artists (name) VALUES (?)")?
+                .execute([name])?;
+            conn.last_insert_rowid()
+        }
+    };
+    cache.lock().unwrap().insert(name.to_string(), id);
+    Ok(id)
 }
 
 fn find_or_create_album(
-    conn: &Connection, name: &str, artist_id: Option<i64>, year: Option<i64>,
+    conn: &Connection,
+    cache: &Mutex<HashMap<(String, Option<i64>, Option<i64>), i64>>,
+    name: &str, artist_id: Option<i64>, year: Option<i64>,
     art: Option<&str>, album_artist_display: Option<&str>, compilation: bool,
 ) -> Result<i64, rusqlite::Error> {
-    let existing: Result<i64, _> = conn.query_row(
-        "SELECT id FROM albums WHERE name = ? AND artist_id IS ? AND year IS ?",
-        rusqlite::params![name, artist_id, year],
-        |row| row.get(0),
-    );
-    if let Ok(id) = existing {
-        if let Some(art_file) = art {
-            conn.execute(
-                "UPDATE albums SET album_art_file = ? WHERE id = ? AND album_art_file IS NULL",
-                rusqlite::params![art_file, id],
-            )?;
+    let key = (name.to_string(), artist_id, year);
+
+    // Cache hit → we already resolved this album this scan. We still
+    // re-apply the album-art + display + compilation UPDATEs because
+    // per-track rescans can surface new art / change compilation
+    // flagging, and we need to keep those in sync with the DB.
+    let cached = cache.lock().unwrap().get(&key).copied();
+    let id = match cached {
+        Some(id) => id,
+        None => {
+            let existing: Option<i64> = conn
+                .prepare_cached("SELECT id FROM albums WHERE name = ? AND artist_id IS ? AND year IS ?")?
+                .query_row(rusqlite::params![name, artist_id, year], |row| row.get(0))
+                .optional()?;
+            let resolved = match existing {
+                Some(id) => id,
+                None => {
+                    conn.prepare_cached(
+                        "INSERT INTO albums (name, artist_id, year, album_art_file, album_artist, compilation)
+                         VALUES (?, ?, ?, ?, ?, ?)",
+                    )?.execute(rusqlite::params![
+                        name, artist_id, year, art, album_artist_display, compilation as i64,
+                    ])?;
+                    let new_id = conn.last_insert_rowid();
+                    // Newly-inserted row already has the art/display/
+                    // compilation columns we want; skip the UPDATE path.
+                    cache.lock().unwrap().insert(key, new_id);
+                    return Ok(new_id);
+                }
+            };
+            cache.lock().unwrap().insert(key, resolved);
+            resolved
         }
-        // Re-asserting display + compilation keeps them fresh on rescan.
-        conn.execute(
-            "UPDATE albums SET album_artist = COALESCE(?, album_artist), compilation = ? WHERE id = ?",
-            rusqlite::params![album_artist_display, compilation as i64, id],
-        )?;
-        return Ok(id);
+    };
+
+    if let Some(art_file) = art {
+        conn.prepare_cached(
+            "UPDATE albums SET album_art_file = ? WHERE id = ? AND album_art_file IS NULL",
+        )?.execute(rusqlite::params![art_file, id])?;
     }
-    conn.execute(
-        "INSERT INTO albums (name, artist_id, year, album_art_file, album_artist, compilation)
-         VALUES (?, ?, ?, ?, ?, ?)",
-        rusqlite::params![name, artist_id, year, art, album_artist_display, compilation as i64],
-    )?;
-    Ok(conn.last_insert_rowid())
+    conn.prepare_cached(
+        "UPDATE albums SET album_artist = COALESCE(?, album_artist), compilation = ? WHERE id = ?",
+    )?.execute(rusqlite::params![album_artist_display, compilation as i64, id])?;
+    Ok(id)
 }
 
 /// Return the id of the seeded "Various Artists" row, if any. Used by
 /// the album-artist fallback chain when COMPILATION=1 is set but no
-/// ALBUMARTIST tag is present.
-fn find_various_artists(conn: &Connection) -> Result<Option<i64>, rusqlite::Error> {
-    conn.query_row(
-        "SELECT id FROM artists WHERE name = 'Various Artists' LIMIT 1",
-        [],
-        |row| row.get::<_, i64>(0),
-    ).optional()
+/// ALBUMARTIST tag is present. The id is memoised for the rest of the
+/// scan (both hits and misses) to avoid re-querying for every
+/// compilation track.
+fn find_various_artists(
+    conn: &Connection,
+    cache: &Mutex<Option<i64>>,
+) -> Result<Option<i64>, rusqlite::Error> {
+    // `Mutex<Option<i64>>` with the sentinel `-1` representing a
+    // confirmed absence. Using `Option<Option<i64>>` would be cleaner
+    // but doubles the cache-check overhead for no reason; -1 can't
+    // collide with a real SQLite rowid (always positive).
+    {
+        let g = cache.lock().unwrap();
+        if let Some(v) = *g {
+            return Ok(if v < 0 { None } else { Some(v) });
+        }
+    }
+    let looked_up: Option<i64> = conn
+        .prepare_cached("SELECT id FROM artists WHERE name = 'Various Artists' LIMIT 1")?
+        .query_row([], |row| row.get::<_, i64>(0))
+        .optional()?;
+    *cache.lock().unwrap() = Some(looked_up.unwrap_or(-1));
+    Ok(looked_up)
 }
 
 /// Re-map user_album_stars rows from an old album id to a new one.
@@ -931,8 +1196,9 @@ fn looks_like_lrc(text: &str) -> bool {
 }
 
 // Newest mtime across `<base>.lrc`, `<base>.<lang>.lrc`, `<base>.txt`
-// siblings, in ms epoch. None if no sidecar exists. Called by both
-// the fast-path drift check (early in scan_file) and the full probe.
+// siblings, in ms epoch. None if no sidecar exists. Standalone version
+// used by the `--extract-lyrics` CLI subcommand. The scanner hot path
+// uses `sidecar_mtime_cached` which amortises the directory read.
 fn sidecar_mtime(audio_path: &Path) -> Option<i64> {
     let dir = audio_path.parent()?;
     let base = audio_path.file_stem()?.to_string_lossy().to_string();
@@ -958,6 +1224,138 @@ fn sidecar_mtime(audio_path: &Path) -> Option<i64> {
         push(dir.join(name), &mut newest);
     }
     push(dir.join(format!("{}.txt", base)), &mut newest);
+    newest
+}
+
+// Lowercased set of filenames present in a directory. One `fs::read_dir`
+// populates it; subsequent sidecar lookups for any audio file in that
+// directory skip the probe entirely when no candidate filename exists.
+// Lowercasing keeps behaviour parity with Windows/CIFS (case-insensitive)
+// — on case-sensitive filesystems the subsequent `fs::metadata` with
+// the exact-case name is what decides, the set is just a cheap filter.
+pub(crate) struct DirListing {
+    names: HashSet<String>,
+    // Fast "are there any lyrics sidecars in this dir?" hint set at
+    // load time. Lets sidecar probes short-circuit for directories that
+    // contain zero `.lrc` / `.txt` files — the common case for most
+    // libraries. Without this the probe still walks 22 candidate
+    // filenames and HashSet-queries each, which adds up across a scan.
+    has_lyric_sidecars: bool,
+}
+
+// One-time scan of the waveform cache directory into a set of filenames
+// (`<hash>.bin`). Called once at scan start; the main loop then checks
+// membership against the set instead of stat-ing the filesystem per
+// track. Missing/unreadable cache dir → empty set, which degrades to
+// "generate everything" — matches the previous behaviour.
+fn load_waveform_cache_names(dir: &Path) -> HashSet<String> {
+    let mut names = HashSet::new();
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            if let Some(fname) = entry.file_name().to_str() {
+                if fname.ends_with(".bin") {
+                    names.insert(fname.to_string());
+                }
+            }
+        }
+    }
+    names
+}
+
+fn load_dir_listing(dir: &Path) -> DirListing {
+    let mut names = HashSet::new();
+    let mut has_lyric_sidecars = false;
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name_lc = entry.file_name().to_string_lossy().to_lowercase();
+            if !has_lyric_sidecars
+                && (name_lc.ends_with(".lrc") || name_lc.ends_with(".txt"))
+            {
+                has_lyric_sidecars = true;
+            }
+            names.insert(name_lc);
+        }
+    }
+    DirListing { names, has_lyric_sidecars }
+}
+
+// Check the cache for whether any filename candidate exists in the
+// directory. The closure is given the exact filename it should stat
+// if the cache reports a hit. Returns None when no directory exists
+// (parent() is None) or read_dir failed — callers treat this as
+// "no sidecars" same as before.
+fn with_dir_listing<F, R>(
+    dir: &Path,
+    cache: &Mutex<HashMap<PathBuf, DirListing>>,
+    f: F,
+) -> Option<R>
+where
+    F: FnOnce(&DirListing) -> R,
+{
+    {
+        let g = cache.lock().unwrap();
+        if let Some(listing) = g.get(dir) {
+            return Some(f(listing));
+        }
+    }
+    // Load outside the lock so concurrent readers for other dirs don't
+    // serialise behind a slow CIFS readdir on this one.
+    let listing = load_dir_listing(dir);
+    let mut g = cache.lock().unwrap();
+    let listing_ref = g.entry(dir.to_path_buf()).or_insert(listing);
+    Some(f(listing_ref))
+}
+
+// Cache-backed equivalent of `sidecar_mtime`. Same return contract; the
+// only difference is that a directory with no matching sidecar filenames
+// costs one `read_dir` (amortised across every track in the directory)
+// and zero `fs::metadata` calls, instead of 22 stats per track.
+fn sidecar_mtime_cached(
+    audio_path: &Path,
+    cache: &Mutex<HashMap<PathBuf, DirListing>>,
+) -> Option<i64> {
+    let dir = audio_path.parent()?;
+    let base = audio_path.file_stem()?.to_string_lossy().to_string();
+
+    // Fast path: directory contains zero `.lrc` / `.txt` files (the
+    // common case). Skip the whole candidate build + HashSet queries.
+    let has_sidecars = with_dir_listing(dir, cache, |l| l.has_lyric_sidecars)?;
+    if !has_sidecars { return None; }
+
+    // Collect the candidate filenames we'd probe with a stat otherwise.
+    let mut candidates: Vec<String> = Vec::with_capacity(LYRICS_LANG_PROBE.len() + 1);
+    for suffix in LYRICS_LANG_PROBE {
+        candidates.push(if suffix.is_empty() {
+            format!("{}.lrc", base)
+        } else {
+            format!("{}.{}.lrc", base, suffix)
+        });
+    }
+    candidates.push(format!("{}.txt", base));
+
+    // Filter down to names the directory actually contains. The listing
+    // stores lowercase; we compare lowercase but keep the original case
+    // for the subsequent stat so case-sensitive filesystems still agree.
+    let to_stat: Vec<String> = with_dir_listing(dir, cache, |listing| {
+        candidates.into_iter()
+            .filter(|name| listing.names.contains(&name.to_lowercase()))
+            .collect::<Vec<_>>()
+    })?;
+
+    let mut newest: Option<i64> = None;
+    for name in &to_stat {
+        let candidate = dir.join(name);
+        if let Ok(meta) = fs::metadata(&candidate) {
+            if meta.is_file() {
+                if let Ok(modified) = meta.modified() {
+                    if let Ok(dur) = modified.duration_since(std::time::UNIX_EPOCH) {
+                        let ms = dur.as_millis() as i64;
+                        if newest.map(|n| ms > n).unwrap_or(true) { newest = Some(ms); }
+                    }
+                }
+            }
+        }
+    }
     newest
 }
 
@@ -1015,6 +1413,71 @@ fn read_txt_sidecar(audio_path: &Path) -> Option<String> {
     None
 }
 
+// Cache-aware variants. Consult the DirListing first; only touch the
+// filesystem when a candidate filename is known to exist. Matches the
+// precedence and behaviour of the non-cached versions exactly — tests
+// in test/lyrics-parity.test.mjs cover both in aggregate via the
+// `--extract-lyrics` CLI which uses the standalone path.
+fn read_lrc_sidecar_cached(
+    audio_path: &Path,
+    cache: &Mutex<HashMap<PathBuf, DirListing>>,
+) -> Option<(String, Option<String>)> {
+    let dir = audio_path.parent()?;
+    let base = audio_path.file_stem()?.to_string_lossy().to_string();
+
+    // Short-circuit when we already know this directory has no
+    // .lrc/.txt files at all.
+    if !with_dir_listing(dir, cache, |l| l.has_lyric_sidecars)? {
+        return None;
+    }
+
+    let mut plan: Vec<(String, Option<String>)> = Vec::with_capacity(LYRICS_LANG_PROBE.len());
+    for suffix in LYRICS_LANG_PROBE {
+        let (name, lang) = if suffix.is_empty() {
+            (format!("{}.lrc", base), None)
+        } else {
+            (format!("{}.{}.lrc", base, suffix), Some((*suffix).to_string()))
+        };
+        plan.push((name, lang));
+    }
+
+    let to_try: Vec<(String, Option<String>)> = with_dir_listing(dir, cache, |listing| {
+        plan.into_iter()
+            .filter(|(name, _)| listing.names.contains(&name.to_lowercase()))
+            .collect::<Vec<_>>()
+    })?;
+
+    for (name, lang) in to_try {
+        if let Some(clean) = read_sidecar(&dir.join(&name)) {
+            if !clean.trim().is_empty() {
+                return Some((clean, lang));
+            }
+        }
+    }
+    None
+}
+
+fn read_txt_sidecar_cached(
+    audio_path: &Path,
+    cache: &Mutex<HashMap<PathBuf, DirListing>>,
+) -> Option<String> {
+    let dir = audio_path.parent()?;
+    let base = audio_path.file_stem()?.to_string_lossy().to_string();
+
+    if !with_dir_listing(dir, cache, |l| l.has_lyric_sidecars)? {
+        return None;
+    }
+
+    let target = format!("{}.txt", base);
+    let present = with_dir_listing(dir, cache, |listing| {
+        listing.names.contains(&target.to_lowercase())
+    }).unwrap_or(false);
+    if !present { return None; }
+
+    let clean = read_sidecar(&dir.join(&target))?;
+    if clean.trim().is_empty() { None } else { Some(clean) }
+}
+
 // Standalone re-implementation of the scanner's lyrics extraction
 // path, used by the `--extract-lyrics` CLI subcommand for the
 // JS↔Rust parity test. Returns the four column values without
@@ -1070,30 +1533,49 @@ fn extract_lyrics_for_cli(audio_path: &Path)
 
 // ── Genre helpers ────────────────────────────────────────────────────────────
 
-fn find_or_create_genre(conn: &Connection, name: &str) -> Result<i64, rusqlite::Error> {
-    if let Ok(id) = conn.query_row(
-        "SELECT id FROM genres WHERE name = ?", [name], |row| row.get(0)
-    ) {
+fn find_or_create_genre(
+    conn: &Connection,
+    cache: &Mutex<HashMap<String, i64>>,
+    name: &str,
+) -> Result<i64, rusqlite::Error> {
+    if let Some(&id) = cache.lock().unwrap().get(name) {
         return Ok(id);
     }
-    conn.execute("INSERT INTO genres (name) VALUES (?)", [name])?;
-    Ok(conn.last_insert_rowid())
+    let existing: Option<i64> = conn
+        .prepare_cached("SELECT id FROM genres WHERE name = ?")?
+        .query_row([name], |row| row.get(0))
+        .optional()?;
+    let id = match existing {
+        Some(id) => id,
+        None => {
+            conn.prepare_cached("INSERT INTO genres (name) VALUES (?)")?
+                .execute([name])?;
+            conn.last_insert_rowid()
+        }
+    };
+    cache.lock().unwrap().insert(name.to_string(), id);
+    Ok(id)
 }
 
-fn set_track_genres(conn: &Connection, track_id: i64, genre_str: Option<&str>) -> Result<(), rusqlite::Error> {
+fn set_track_genres(
+    conn: &Connection,
+    cache: &Mutex<HashMap<String, i64>>,
+    track_id: i64,
+    genre_str: Option<&str>,
+) -> Result<(), rusqlite::Error> {
     let genre_str = match genre_str {
         Some(s) if !s.is_empty() => s,
         _ => return Ok(()),
     };
 
+    let mut stmt = conn.prepare_cached(
+        "INSERT OR IGNORE INTO track_genres (track_id, genre_id) VALUES (?, ?)",
+    )?;
     for part in genre_str.split(&[',', ';', '/'][..]) {
         let name = part.trim();
         if name.is_empty() { continue; }
-        let genre_id = find_or_create_genre(conn, name)?;
-        conn.execute(
-            "INSERT OR IGNORE INTO track_genres (track_id, genre_id) VALUES (?, ?)",
-            rusqlite::params![track_id, genre_id],
-        )?;
+        let genre_id = find_or_create_genre(conn, cache, name)?;
+        stmt.execute(rusqlite::params![track_id, genre_id])?;
     }
     Ok(())
 }
@@ -1108,40 +1590,13 @@ fn set_track_genres(conn: &Connection, track_id: i64, genre_str: Option<&str>) -
 // test/audio-hash-parity.test.mjs. Any change to the byte-range logic must
 // land in both implementations simultaneously.
 
-// Feed a single [start, end) byte range into an existing md5 context.
-fn feed_range(
-    ctx: &mut md5::Context, file: &mut fs::File, start: u64, end: u64,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if end <= start { return Ok(()); }
-    file.seek(SeekFrom::Start(start))?;
-    let mut remaining = end - start;
-    let mut buf = [0u8; 65536];
-    while remaining > 0 {
-        let chunk = buf.len().min(remaining as usize);
-        let n = file.read(&mut buf[..chunk])?;
-        if n == 0 { break; }
-        ctx.consume(&buf[..n]);
-        remaining -= n as u64;
-    }
-    Ok(())
-}
-
-// Hash the concatenation of a list of byte ranges. For single-range formats
-// the slice has one element; for Ogg we pass one entry per audio page payload.
-fn hash_ranges(
-    file: &mut fs::File, ranges: &[(u64, u64)],
-) -> Result<String, Box<dyn std::error::Error>> {
-    let mut ctx = md5::Context::new();
-    for &(start, end) in ranges {
-        feed_range(&mut ctx, file, start, end)?;
-    }
-    Ok(format!("{:x}", ctx.compute()))
-}
-
 // MP3 & AAC (ADTS): strip ID3v2 prefix + ID3v1 suffix + APEv2 suffix.
 // See src/db/audio-hash.js for the spec references — this impl mirrors
 // `mp3OrAacAudioRange` byte-for-byte.
-fn mp3_or_aac_audio_range(file: &mut fs::File, file_size: u64) -> Option<Vec<(u64, u64)>> {
+//
+// Generic over any `Read + Seek` so the same code serves both the
+// file-backed path (fs::File) and the buffered path (Cursor<&[u8]>).
+fn mp3_or_aac_audio_range<R: Read + Seek>(file: &mut R, file_size: u64) -> Option<Vec<(u64, u64)>> {
     if file_size < 10 { return None; }
 
     let mut head = [0u8; 10];
@@ -1185,7 +1640,7 @@ fn mp3_or_aac_audio_range(file: &mut fs::File, file_size: u64) -> Option<Vec<(u6
 }
 
 // FLAC: walk metadata blocks until last_flag set, then audio follows.
-fn flac_audio_range(file: &mut fs::File, file_size: u64) -> Option<Vec<(u64, u64)>> {
+fn flac_audio_range<R: Read + Seek>(file: &mut R, file_size: u64) -> Option<Vec<(u64, u64)>> {
     if file_size < 4 { return None; }
     let mut magic = [0u8; 4];
     file.seek(SeekFrom::Start(0)).ok()?;
@@ -1210,7 +1665,7 @@ fn flac_audio_range(file: &mut fs::File, file_size: u64) -> Option<Vec<(u64, u64
 
 // WAV (RIFF/WAVE): walk chunks, return the `data` chunk payload. Other
 // chunks (LIST/INFO, ID3, bext, iXML) are skipped.
-fn wav_audio_range(file: &mut fs::File, file_size: u64) -> Option<Vec<(u64, u64)>> {
+fn wav_audio_range<R: Read + Seek>(file: &mut R, file_size: u64) -> Option<Vec<(u64, u64)>> {
     if file_size < 12 { return None; }
     let mut hdr = [0u8; 12];
     file.seek(SeekFrom::Start(0)).ok()?;
@@ -1236,7 +1691,7 @@ fn wav_audio_range(file: &mut fs::File, file_size: u64) -> Option<Vec<(u64, u64)
 // Ogg: walk pages; hash payloads of audio pages (from first page with
 // granule_position > 0 onwards). Page headers are NOT hashed — their
 // page_sequence_number drifts when header pages change size.
-fn ogg_audio_range(file: &mut fs::File, file_size: u64) -> Option<Vec<(u64, u64)>> {
+fn ogg_audio_range<R: Read + Seek>(file: &mut R, file_size: u64) -> Option<Vec<(u64, u64)>> {
     if file_size < 27 { return None; }
     let mut ranges = Vec::new();
     let mut audio_started = false;
@@ -1276,7 +1731,7 @@ fn ogg_audio_range(file: &mut fs::File, file_size: u64) -> Option<Vec<(u64, u64)
 // MP4 / M4A / M4B: walk atom tree, hash `mdat` payload(s). `moov` (where
 // metadata lives) is skipped automatically. Supports 64-bit extended
 // sizes (size == 1) and extends-to-EOF (size == 0).
-fn mp4_audio_range(file: &mut fs::File, file_size: u64) -> Option<Vec<(u64, u64)>> {
+fn mp4_audio_range<R: Read + Seek>(file: &mut R, file_size: u64) -> Option<Vec<(u64, u64)>> {
     if file_size < 8 { return None; }
     let mut ranges = Vec::new();
     let mut cursor: u64 = 0;
@@ -1313,8 +1768,8 @@ fn mp4_audio_range(file: &mut fs::File, file_size: u64) -> Option<Vec<(u64, u64)
     if ranges.is_empty() { None } else { Some(ranges) }
 }
 
-fn audio_ranges_for_ext(
-    file: &mut fs::File, ext: &str, file_size: u64,
+fn audio_ranges_for_ext<R: Read + Seek>(
+    file: &mut R, ext: &str, file_size: u64,
 ) -> Option<Vec<(u64, u64)>> {
     match ext {
         "mp3" | "aac"            => mp3_or_aac_audio_range(file, file_size),
@@ -1343,14 +1798,21 @@ fn audio_ranges_for_ext(
 //       Capped at MAX_BUFFERED_FRAMES to keep worst-case memory bounded on
 //       very long WAV files; past that we truncate.
 const MAX_BUFFERED_FRAMES: usize = 30 * 1024 * 1024;  // ~10 min at 48 kHz
-fn waveform_from_symphonia(path: &Path, ext: &str) -> Option<[u8; NUM_BARS]> {
+
+// Decode a media source directly. Both the file-backed and in-memory
+// paths land here; the only difference is the concrete `MediaSource`
+// behind the Box — `fs::File` for large files (streaming) or
+// `Cursor<Vec<u8>>` for the buffered path (zero re-read because the
+// bytes are already in RAM from the hashing pass).
+fn waveform_from_source(
+    source: Box<dyn symphonia::core::io::MediaSource>, ext: &str,
+) -> Option<[u8; NUM_BARS]> {
     // Symphonia doesn't ship an Opus decoder in 0.5. We want to keep the
     // binary pure-Rust (no libopus), so skip .opus here and let the
     // on-demand endpoint handle it via ffmpeg on first playback.
     if ext == "opus" { return None; }
 
-    let file = fs::File::open(path).ok()?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mss = MediaSourceStream::new(source, Default::default());
 
     let mut hint = Hint::new();
     hint.with_extension(ext);
@@ -1450,29 +1912,116 @@ fn waveform_from_symphonia(path: &Path, ext: &str) -> Option<[u8; NUM_BARS]> {
     Some(bars)
 }
 
+// File-backed waveform entry point — retained for the streaming
+// fall-back path (very large files, or when the buffered path chose
+// not to load the file). Opens the file once; symphonia reads it as
+// needed.
+fn waveform_from_symphonia(path: &Path, ext: &str) -> Option<[u8; NUM_BARS]> {
+    let file = fs::File::open(path).ok()?;
+    waveform_from_source(Box::new(file), ext)
+}
+
+// In-memory waveform entry point — consumes the buffer we already
+// allocated for hashing + lofty. Symphonia operates on `Cursor<Vec<u8>>`
+// which is a zero-I/O MediaSource, so decode is bottlenecked only by
+// CPU (the codec), not by disk/network.
+fn waveform_from_bytes(buf: Vec<u8>, ext: &str) -> Option<[u8; NUM_BARS]> {
+    waveform_from_source(Box::new(Cursor::new(buf)), ext)
+}
+
+// Hash a whole-file buffer. Direct slice access means no seeks, no
+// buffered reads, and no boundary-straddling bookkeeping — we already
+// have every byte in memory.
+fn compute_hashes_from_bytes(buf: &[u8], ext: &str) -> (String, Option<String>) {
+    let file_hash = hex_lower(Md5::digest(buf));
+
+    // audio_ranges_for_ext still needs a Read + Seek to walk headers;
+    // a Cursor over the slice satisfies that without copying.
+    let mut cursor = Cursor::new(buf);
+    let ranges = audio_ranges_for_ext(&mut cursor, ext, buf.len() as u64)
+        .unwrap_or_default();
+
+    let audio_hash = if !ranges.is_empty() {
+        let mut ctx = Md5::new();
+        for (start, end) in ranges {
+            ctx.update(&buf[start as usize..end as usize]);
+        }
+        Some(hex_lower(ctx.finalize()))
+    } else {
+        None
+    };
+    (file_hash, audio_hash)
+}
+
 fn compute_hashes(
     filepath: &Path, ext: &str,
 ) -> Result<(String, Option<String>), Box<dyn std::error::Error>> {
     let mut file = fs::File::open(filepath)?;
     let file_size = file.metadata()?.len();
 
+    // Parse the audio byte ranges first. Each format's extractor only
+    // reads headers/atom tables to locate the audio payload, so this is
+    // cheap relative to a full-file read. The ranges returned are
+    // monotonically increasing and non-overlapping (built by walking
+    // the file linearly), which lets the single-pass loop below feed
+    // them into the audio_hash context in the same order as the
+    // previous two-pass impl — preserving byte-for-byte MD5 parity
+    // with src/db/audio-hash.js (enforced by audio-hash-parity.test.mjs).
+    let ranges: Vec<(u64, u64)> = audio_ranges_for_ext(&mut file, ext, file_size)
+        .unwrap_or_default();
+    let has_ranges = !ranges.is_empty();
+
+    // Single-pass hash. Every byte is fed into `file_ctx`; bytes whose
+    // file offset falls inside an audio range are also fed into
+    // `audio_ctx`. For MP3/FLAC/WAV the audio range is ~95 % of the
+    // file, so this halves total file I/O vs. the old two-pass approach
+    // — most of the win on slow storage (CIFS, spinning disks).
     file.seek(SeekFrom::Start(0))?;
-    let file_hash = {
-        let mut ctx = md5::Context::new();
-        let mut buf = [0u8; 65536];
-        loop {
-            let n = file.read(&mut buf)?;
-            if n == 0 { break; }
-            ctx.consume(&buf[..n]);
+    let mut file_ctx = Md5::new();
+    let mut audio_ctx = if has_ranges { Some(Md5::new()) } else { None };
+
+    let mut buf = [0u8; 65536];
+    let mut pos: u64 = 0;
+    // Index of the first range that may still have bytes in front of
+    // us. Advanced as we pass ranges entirely; never rewound.
+    let mut range_idx = 0usize;
+
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 { break; }
+        file_ctx.update(&buf[..n]);
+
+        if let Some(actx) = audio_ctx.as_mut() {
+            let buf_start = pos;
+            let buf_end   = pos + n as u64;
+
+            // Drop ranges that ended on or before this buffer starts.
+            while range_idx < ranges.len() && ranges[range_idx].1 <= buf_start {
+                range_idx += 1;
+            }
+
+            // Feed every range that intersects [buf_start, buf_end).
+            // A single buffer can cover many small ranges (Ogg pages)
+            // or be fully contained inside one large range (FLAC mdat).
+            let mut i = range_idx;
+            while i < ranges.len() {
+                let (rs, re) = ranges[i];
+                if rs >= buf_end { break; }              // range is entirely past this buffer
+                let s = rs.max(buf_start) - buf_start;   // buffer-relative start
+                let e = re.min(buf_end)   - buf_start;   // buffer-relative end
+                if e > s {
+                    actx.update(&buf[s as usize..e as usize]);
+                }
+                if re > buf_end { break; }               // range continues into next buffer
+                i += 1;
+            }
         }
-        format!("{:x}", ctx.compute())
-    };
 
-    let audio_hash = match audio_ranges_for_ext(&mut file, ext, file_size) {
-        Some(ranges) if !ranges.is_empty() => Some(hash_ranges(&mut file, &ranges)?),
-        _ => None,
-    };
+        pos += n as u64;
+    }
 
+    let file_hash  = hex_lower(file_ctx.finalize());
+    let audio_hash = audio_ctx.map(|ctx| hex_lower(ctx.finalize()));
     Ok((file_hash, audio_hash))
 }
 
@@ -1481,7 +2030,7 @@ fn compute_hashes(
 fn save_embedded_art(pic: &lofty::picture::Picture, config: &ScanConfig) -> Option<String> {
     let data = pic.data();
     let ext = pic.mime_type().map(mime_to_ext).unwrap_or("jpeg");
-    let hash = format!("{:x}", md5::compute(data));
+    let hash = hex_lower(Md5::digest(data));
     let filename = format!("{}.{}", hash, ext);
     let art_path = Path::new(&config.album_art_directory).join(&filename);
 
@@ -1515,12 +2064,16 @@ fn check_directory_for_album_art(
     let mut images: Vec<PathBuf> = Vec::new();
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
+            // `entry.file_type()` uses `d_type` from `getdents` on
+            // Unix / the cached FindNextFile metadata on Windows —
+            // no per-entry stat. `p.is_file()` (the previous code)
+            // calls `fs::metadata()`, one stat per entry.
+            let is_file = entry.file_type().map(|t| t.is_file()).unwrap_or(false);
+            if !is_file { continue; }
             let p = entry.path();
-            if p.is_file() {
-                let e = file_ext(&p).to_lowercase();
-                if e == "jpg" || e == "png" {
-                    images.push(p);
-                }
+            let e = file_ext(&p).to_ascii_lowercase();
+            if e == "jpg" || e == "png" {
+                images.push(p);
             }
         }
     }
@@ -1542,7 +2095,7 @@ fn check_directory_for_album_art(
 
     let data = fs::read(chosen).ok()?;
     let pic_ext = file_ext(chosen);
-    let hash = format!("{:x}", md5::compute(&data));
+    let hash = hex_lower(Md5::digest(&data));
     let filename = format!("{}.{}", hash, pic_ext);
     let art_path = Path::new(&config.album_art_directory).join(&filename);
 
@@ -1573,11 +2126,12 @@ fn compress_album_art(data: &[u8], name: &str, art_dir: &str) {
 
 // ── Utilities ───────────────────────────────────────────────────────────────
 
-fn file_ext(p: &Path) -> String {
-    p.extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_string()
+// Borrowed extension — the old version eagerly allocated a String on
+// every call, which for the main scan loop fires per-entry twice (once
+// during the counting pass, once during processing). Callers that need
+// lowercase use `.to_ascii_lowercase()` at the call site.
+fn file_ext(p: &Path) -> &str {
+    p.extension().and_then(|e| e.to_str()).unwrap_or("")
 }
 
 fn mime_to_ext(mime: &MimeType) -> &'static str {
@@ -1589,6 +2143,21 @@ fn mime_to_ext(mime: &MimeType) -> &'static str {
         MimeType::Gif => "gif",
         _ => "jpeg",
     }
+}
+
+// Lowercase hex encode for hash outputs. RustCrypto's `Md5::finalize`
+// returns a `GenericArray<u8, U16>` that doesn't directly implement
+// `fmt::LowerHex` the way the old `md5` crate's `Digest` type did, so
+// we do the two-chars-per-byte conversion ourselves. Matches Node's
+// `crypto.createHash('md5').digest('hex')` byte-for-byte.
+fn hex_lower(bytes: impl AsRef<[u8]>) -> String {
+    use std::fmt::Write;
+    let bytes = bytes.as_ref();
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        write!(s, "{:02x}", b).unwrap();
+    }
+    s
 }
 
 fn parse_replaygain_db(s: &str) -> Option<f64> {

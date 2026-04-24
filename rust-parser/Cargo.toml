@@ -13,7 +13,11 @@ serde_json = "1"
 rusqlite = { version = "0.33", features = ["bundled"] }
 lofty = "0.22"
 walkdir = "2"
-md5 = "0.7"
+# RustCrypto's MD5 impl. The older `md5` crate (0.7) is marked unmaintained
+# (RUSTSEC informational — MD5 isn't used for security here, only content
+# addressing for cache keys + JS parity). `md-5` exports its library as
+# `md5`, so call sites still `use md5::{Md5, Digest}`.
+md-5 = "0.10"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 # Pure-Rust audio decoder used to build the 800-bar waveform cache during a
 # scan. Codec features cover every extension in supportedAudioFiles
