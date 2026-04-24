@@ -188,6 +188,9 @@ const schema = Joi.object({
   subsonic: subsonicOptions.default(subsonicOptions.validate({}).value),
   autoBootServerAudio: Joi.boolean().default(false),
   rustPlayerPort: Joi.number().integer().min(1).max(65535).default(3333),
+  // true  - trust X-Forwarded-For header for client IP address
+  // false - default behavior
+  trustProxy: Joi.boolean().default(false),
 });
 
 export let program;
