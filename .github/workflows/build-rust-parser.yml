@@ -110,6 +110,13 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add bin/rust-parser/rust-parser-*
+          # GH Actions artifact upload/download uses zip, which does not
+          # preserve the Unix exec bit. Force the index entries to 100755
+          # so users' checkouts get `+x` — without this, scanners spawn
+          # the binary and hit EACCES on every boot. Run AFTER `git add`
+          # but BEFORE the diff check so a pure-mode flip still skips
+          # the commit when content is unchanged.
+          git update-index --chmod=+x bin/rust-parser/rust-parser-*
           if git diff --cached --quiet; then
             echo "No binary changes to commit"
           else

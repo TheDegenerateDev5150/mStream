@@ -55,7 +55,16 @@ function findRustBinary() {
   ];
 
   for (const bin of candidates) {
-    if (fs.existsSync(bin)) { return bin; }
+    if (fs.existsSync(bin)) {
+      // Docker image builds / tarball extraction / npm pack commonly strip
+      // the execute bit from checked-in binaries — without this, spawn
+      // fails with EACCES on every boot. No-op on Windows. `chmod` fails
+      // silently on read-only volumes; the downstream spawn will surface
+      // the real error if exec is truly blocked (noexec mount, SELinux).
+      // Matches the rust-parser's fix in src/db/task-queue.js.
+      try { fs.chmodSync(bin, 0o755); } catch (_) {}
+      return bin;
+    }
   }
   return null;
 }
