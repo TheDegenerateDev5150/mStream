@@ -333,7 +333,11 @@ fn run_scan(config: &ScanConfig) -> Result<(), Box<dyn std::error::Error>> {
     // Commit cadence: doubles as progress-update cadence and write-lock release.
     // Lower = more responsive API writes during scans but more COMMIT/BEGIN overhead.
     // Admin-configurable via scanCommitInterval; default (25) is a balanced starting point.
-    let commit_interval = config.scan_commit_interval;
+    // Clamp to ≥1 because the modulo below panics on zero, and 0 would mean
+    // "never commit mid-scan" which breaks progress reporting. The JS side's
+    // Joi schema already enforces min(1), but defence-in-depth for direct
+    // invocations of the binary.
+    let commit_interval = config.scan_commit_interval.max(1);
 
     // Use explicit transactions for batch performance.
     // Without this, SQLite does a disk fsync per INSERT (~50 files/sec).
