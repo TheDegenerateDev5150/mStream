@@ -249,6 +249,19 @@ fn main() {
 // ── Main scan ───────────────────────────────────────────────────────────────
 
 fn run_scan(config: &ScanConfig) -> Result<(), Box<dyn std::error::Error>> {
+    // Fail fast if the library root isn't accessible. Without this check,
+    // `WalkDir` yields zero entries on a missing mount — main-loop runs
+    // over an empty set — the final `DELETE FROM tracks WHERE scan_id != ?`
+    // then wipes *every* track for this library, cascading through
+    // albums / artists / user_album_stars. A transient CIFS or NFS outage
+    // would silently erase the DB. Erroring out before any DB writes is
+    // safer than trying to reason about partial-processed states.
+    if !Path::new(&config.directory).is_dir() {
+        return Err(format!(
+            "library directory not accessible: {}", config.directory
+        ).into());
+    }
+
     let conn = Connection::open(&config.db_path)?;
     // Wait up to 5s when another connection holds the write lock (e.g. the
     // main server's shared-playlist cleanup or any API-triggered write).
@@ -395,6 +408,27 @@ fn run_scan(config: &ScanConfig) -> Result<(), Box<dyn std::error::Error>> {
 
     // Remove progress row — scan is done
     let _ = conn.execute("DELETE FROM scan_progress WHERE scan_id = ?1", rusqlite::params![config.scan_id]);
+
+    // Belt-and-suspenders: if the walk yielded zero files but the library
+    // had tracks before this scan, the mount probably went away after the
+    // initial is_dir() check above succeeded. Legitimately emptying a
+    // populated library ends up here too — we distinguish by re-checking
+    // the directory. Still accessible → user emptied it, proceed with
+    // cleanup. Gone → skip cleanup, leave user data alone, let the next
+    // scan with a working mount converge.
+    if total_processed == 0 && !existing_tracks.is_empty()
+        && !Path::new(&config.directory).is_dir()
+    {
+        eprintln!(
+            "Warning: scan processed 0 files and directory is no longer accessible ({}). \
+             Library had {} tracks — skipping cleanup to avoid data loss.",
+            config.directory, existing_tracks.len(),
+        );
+        println!(
+            "{{\"event\":\"scanComplete\",\"filesProcessed\":0,\"staleEntriesRemoved\":0}}"
+        );
+        return Ok(());
+    }
 
     // Remove tracks not seen in this scan (deleted files)
     let deleted = conn.execute(
