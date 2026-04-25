@@ -425,7 +425,7 @@ fn run_scan(config: &ScanConfig) -> Result<(), Box<dyn std::error::Error>> {
             config.directory, existing_tracks.len(),
         );
         println!(
-            "{{\"event\":\"scanComplete\",\"filesProcessed\":0,\"staleEntriesRemoved\":0}}"
+            "{{\"event\":\"scanComplete\",\"filesProcessed\":0,\"filesUnchanged\":0,\"filesScanned\":0,\"staleEntriesRemoved\":0}}"
         );
         return Ok(());
     }
@@ -454,10 +454,21 @@ fn run_scan(config: &ScanConfig) -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     // Structured end-of-scan event — parsed by task-queue.js to decide whether
-    // to run the waveform post-processor. Integer fields only; no escaping needed.
+    // to run the waveform post-processor and to print a human-readable summary.
+    // Integer fields only; no escaping needed.
+    //
+    //   filesProcessed     New / modified — DB rows actually written by this scan.
+    //   filesUnchanged     Cache-hit fast-path skips — file existed in DB and
+    //                      mtime matched, only scan_id was bumped.
+    //   filesScanned       Total supported-extension files visited (sum of the
+    //                      above plus any per-file errors). Lets the operator
+    //                      sanity-check 'is the scanner actually seeing my
+    //                      library' even on a no-op subsequent run.
+    //   staleEntriesRemoved  Tracks deleted because the file disappeared.
+    let unchanged = total_processed.saturating_sub(file_count);
     println!(
-        "{{\"event\":\"scanComplete\",\"filesProcessed\":{},\"staleEntriesRemoved\":{}}}",
-        file_count, deleted
+        "{{\"event\":\"scanComplete\",\"filesProcessed\":{},\"filesUnchanged\":{},\"filesScanned\":{},\"staleEntriesRemoved\":{}}}",
+        file_count, unchanged, total_processed, deleted
     );
     Ok(())
 }

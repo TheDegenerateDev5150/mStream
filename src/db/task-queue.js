@@ -135,7 +135,17 @@ function handleScannerLine(line) {
     try {
       const evt = JSON.parse(line);
       if (evt?.event === 'scanComplete') {
-        winston.info(`Scan complete: ${evt.filesProcessed} files processed, ${evt.staleEntriesRemoved} stale entries removed`);
+        // filesUnchanged / filesScanned were added to the contract later — emit
+        // them only when the scanner actually reported them, so a stale
+        // prebuilt rust-parser binary still produces a clean log line instead
+        // of "undefined unchanged" / "(undefined scanned)".
+        const parts = [`${evt.filesProcessed} files processed`];
+        if (evt.filesUnchanged != null) {
+          parts.push(`${evt.filesUnchanged} unchanged`);
+        }
+        parts.push(`${evt.staleEntriesRemoved} stale entries removed`);
+        const tail = evt.filesScanned != null ? ` (${evt.filesScanned} scanned)` : '';
+        winston.info(`Scan complete: ${parts.join(', ')}${tail}`);
         if (evt.filesProcessed > 0 || evt.staleEntriesRemoved > 0) {
           anyScansChanged = true;
         }
