@@ -47,6 +47,12 @@ export function setup(mstream) {
   });
 
   // ── Create a cue point ─────────────────────────────────────
+  // In public/no-users mode the FK target is the V25 anonymous sentinel
+  // — multiple anon sessions effectively share one persistent identity,
+  // which is the whole point of the sentinel. The `req.user.id` write
+  // below works either way; the unauthorized branch just guards against
+  // truly missing user objects (e.g. an unauthenticated request that
+  // never hit auth.js's no-users branch).
   mstream.post('/api/v1/db/cuepoints', (req, res) => {
     if (!req.user?.id) return res.status(401).json({ error: 'unauthorized' });
 

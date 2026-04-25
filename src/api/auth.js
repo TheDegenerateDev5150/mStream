@@ -56,7 +56,18 @@ export function setup(mstream) {
     if (allUsers.length === 0) {
       const allLibs = db.getAllLibraries();
       const adminLocked = config.program.lockAdmin === true;
+      // Spread the sentinel's actual users-table row first so per-user
+      // columns (lastfm_user, lastfm_password, listenbrainz_token, …)
+      // are present on req.user exactly the way they are for real-user
+      // requests above. Endpoints that read those columns off req.user
+      // (scrobbler.js, velvet-stubs.js /lastfm/status, etc.) then work
+      // in public mode without per-endpoint DB lookups. Permission
+      // flags below override whatever the sentinel row stored — the
+      // sentinel's own allow_* defaults are 0 (see ensureAnonymousUser),
+      // and we want them driven by adminLocked instead.
+      const sentinel = db.getAnonymousUser() || {};
       req.user = {
+        ...sentinel,
         vpaths: allLibs.map(l => l.name),
         username: 'mstream-user',
         admin: !adminLocked,

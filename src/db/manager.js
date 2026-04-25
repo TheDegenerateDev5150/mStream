@@ -235,6 +235,50 @@ export function getAnonymousUserId() {
   return _anonymousUserId;
 }
 
+// Returns the anonymous sentinel's full users-table row (or null when
+// the sentinel hasn't been initialised yet — only happens before
+// initDB() finishes).
+//
+// Callers: auth.js's no-users branch uses this to spread the sentinel's
+// columns (lastfm_user, lastfm_password, listenbrainz_token, …) onto
+// req.user, so public-mode requests look like a real-user request and
+// the per-user-data endpoints (LB/Last.fm scrobbling, /lastfm/status,
+// etc.) work without per-endpoint special-casing.
+//
+// getUserByUsername / getAllUsers intentionally hide the sentinel from
+// admin-facing surfaces; this getter is the explicit bypass for the one
+// caller that legitimately needs the full row.
+export function getAnonymousUser() {
+  if (_anonymousUserId === null) { return null; }
+  loadUsersCache();
+  for (const u of _usersCache.values()) {
+    if (u.id === _anonymousUserId) { return u; }
+  }
+  return null;
+}
+
+// "Public mode" predicate. Returns true when the request has no user
+// (legacy null-id callers) OR when it's been pinned to the anonymous
+// sentinel by auth.js's no-users branch. Used wherever the old code
+// said `if (!user || !user.id)` to mean "skip per-user filtering /
+// short-circuit per-user state writes".
+//
+// Background: V25 introduced the sentinel so per-user tables (which all
+// FK NOT NULL on users(id)) can accept inserts in public/no-users mode.
+// auth.js now sets `req.user.id = getAnonymousUserId()` instead of `null`,
+// which makes the sentinel id truthy. Every site that used `!user.id` as
+// a shorthand for "public mode" got silently bypassed by the change —
+// most visibly the library filter, which started returning `1=0` for
+// public-mode requests because the sentinel has no user_libraries rows.
+//
+// Call this whenever the OLD intent was "treat the absence of a user as
+// public mode" — it preserves that intent while remaining correct under
+// the sentinel design.
+export function isPublicMode(user) {
+  if (!user || !user.id) { return true; }
+  return _anonymousUserId !== null && user.id === _anonymousUserId;
+}
+
 function ensureAnonymousUser() {
   // Already have a sentinel? Reuse it.
   const existing = db.prepare('SELECT id FROM users WHERE is_anonymous_sentinel = 1').get();
@@ -273,8 +317,12 @@ export function getAllLibraries() {
 }
 
 export function getUserLibraryIds(user) {
-  if (!user || !user.id) {
-    // Public mode — return all library IDs
+  // Public mode (no user, or pinned to the anonymous sentinel by auth.js)
+  // — every library is visible. Without this branch, the sentinel id (a
+  // real integer with zero rows in user_libraries) would fall through to
+  // the lookup below and return [], which libraryFilter then translates
+  // to `1=0`, hiding every track. See isPublicMode() above for context.
+  if (isPublicMode(user)) {
     loadLibrariesCache();
     return _librariesCache.map(l => l.id);
   }

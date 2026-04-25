@@ -90,6 +90,13 @@ export function setup(mstream) {
   // EVENT TRACKING ENDPOINTS
   // ══════════════════════════════════════════════════════════════
 
+  // In public/no-users mode events are attributed to the V25 anonymous
+  // sentinel. The /api/v1/user/wrapped view then reflects "this server's"
+  // listening — exactly right for the single-operator docker pattern,
+  // and consistent with how playlists, ratings, and queue state are
+  // backed by the sentinel. If req.user is missing entirely (auth.js
+  // never ran the no-users branch), we fall back to a synthetic OK
+  // response so the velvet client doesn't toast.
   mstream.post('/api/v1/wrapped/play-start', (req, res) => {
     if (!req.user?.id) return res.json({ eventId: null });
     const { filePath, sessionId, source } = req.body;

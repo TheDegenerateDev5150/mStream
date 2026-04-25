@@ -80,8 +80,13 @@ function buildListenPayload(track, listenType, listenedAt) {
 export function setup(mstream) {
 
   // ── Status ─────────────────────────────────────────────────
+  // In public/no-users mode the token comes off the V25 anonymous
+  // sentinel — the operator's persistent identity. The status, scrobble,
+  // and now-playing handlers below are all sentinel-aware via
+  // auth.js's no-users branch (which spreads the sentinel's row onto
+  // req.user). Same model the rest of mStream uses for per-user state
+  // (playlists, ratings, cue points, …) under V25.
   mstream.get('/api/v1/listenbrainz/status', (req, res) => {
-    if (!req.user?.id) return res.json({ serverEnabled: true, linked: false });
     const user = d().prepare('SELECT listenbrainz_token FROM users WHERE id = ?').get(req.user.id);
     res.json({
       serverEnabled: true,
@@ -90,10 +95,20 @@ export function setup(mstream) {
   });
 
   // ── Connect (save token) ───────────────────────────────────
+  // Admin-gated: in public mode `req.user.admin` is true when the
+  // adminLocked config flag is false (the single-operator pattern), and
+  // false when the admin API is locked (read-only public deployment).
+  // Real-user accounts go through the normal admin check on their
+  // is_admin column. Either way, only admins can write credentials —
+  // a viewer in adminLocked public mode can't overwrite the operator's
+  // ListenBrainz token.
   mstream.post('/api/v1/listenbrainz/connect', async (req, res) => {
     const token = req.body.lbToken;
-    if (!token || !req.user?.id) {
+    if (!token) {
       return res.status(400).json({ error: 'Token required' });
+    }
+    if (!req.user?.admin) {
+      return res.status(403).json({ error: 'Admin access required' });
     }
 
     // Validate token by calling LB API
@@ -115,8 +130,12 @@ export function setup(mstream) {
   });
 
   // ── Disconnect (remove token) ──────────────────────────────
+  // Same admin gate as /connect — adminLocked public deployments must
+  // not let viewers wipe the operator's stored token.
   mstream.post('/api/v1/listenbrainz/disconnect', (req, res) => {
-    if (!req.user?.id) return res.json({ ok: true });
+    if (!req.user?.admin) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
     d().prepare('UPDATE users SET listenbrainz_token = NULL WHERE id = ?').run(req.user.id);
     db.invalidateCache();
     res.json({ ok: true });
@@ -124,8 +143,6 @@ export function setup(mstream) {
 
   // ── Now Playing ────────────────────────────────────────────
   mstream.post('/api/v1/listenbrainz/playing-now', async (req, res) => {
-    if (!req.user?.id) return res.json({ ok: true });
-
     const user = d().prepare('SELECT listenbrainz_token FROM users WHERE id = ?').get(req.user.id);
     if (!user?.listenbrainz_token) return res.json({ ok: true });
 
@@ -143,8 +160,6 @@ export function setup(mstream) {
 
   // ── Scrobble ───────────────────────────────────────────────
   mstream.post('/api/v1/listenbrainz/scrobble-by-filepath', async (req, res) => {
-    if (!req.user?.id) return res.json({ ok: true });
-
     const user = d().prepare('SELECT listenbrainz_token FROM users WHERE id = ?').get(req.user.id);
     if (!user?.listenbrainz_token) return res.json({ ok: true });
 

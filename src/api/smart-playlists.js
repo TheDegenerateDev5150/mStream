@@ -136,6 +136,9 @@ function countSmartQuery(filters, userId, user) {
 export function setup(mstream) {
 
   // ── List all smart playlists ───────────────────────────────
+  // In public/no-users mode the rows are scoped to the V25 anonymous
+  // sentinel — the operator's persistent identity. Same model as
+  // playlists, cue points, and user_metadata.
   mstream.get('/api/v1/smart-playlists', (req, res) => {
     if (!req.user?.id) return res.json({ playlists: [] });
     const rows = d().prepare(

@@ -9,6 +9,12 @@ const d = () => db.getDB();
 export function setup(mstream) {
 
   // ── Get settings ───────────────────────────────────────────
+  // In public/no-users mode the row is keyed to the V25 anonymous
+  // sentinel — every anon session shares it, which is intentional:
+  // dark mode and the saved play queue should survive page reloads
+  // for the operator running a single-user public deployment. If the
+  // user object is genuinely missing (no auth.js public-mode branch
+  // ran), we return empty rather than crash.
   mstream.get('/api/v1/user/settings', (req, res) => {
     if (!req.user?.id) return res.json({ prefs: {} });
 

@@ -5,6 +5,7 @@
 import * as db from '../db/manager.js';
 import * as config from '../state/config.js';
 import { renderMetadataObj, libraryFilter, trackQuery } from './db.js';
+import { warmScrobbleUser } from './scrobbler.js';
 import { getVPathInfo } from '../util/vpath.js';
 
 const d = () => db.getDB();
@@ -166,6 +167,9 @@ export function setup(mstream) {
   });
 
   // ── Play logging ─────────────────────────────────────────────
+  // In public/no-users mode the play count hangs off the V25 anonymous
+  // sentinel — the operator's "what I've been listening to" history,
+  // same model as user_metadata.rating and the playlists table.
   mstream.post('/api/v1/db/stats/log-play', (req, res) => {
     const filePath = req.body.filePath;
     if (!filePath || !req.user?.id) return res.json({ ok: true });
@@ -227,6 +231,11 @@ export function setup(mstream) {
   });
 
   // ── Share list and delete ────────────────────────────────────
+  // In public/no-users mode the rows are scoped to the V25 anonymous
+  // sentinel. Share links are intentionally public-by-design — they
+  // carry their own access token in the URL — so listing them under
+  // the sentinel just gives the operator a "manage shares I created"
+  // surface in single-user public deployments.
   mstream.get('/api/v1/share/list', (req, res) => {
     if (!req.user?.id) return res.json([]);
     const rows = d().prepare(
@@ -303,20 +312,37 @@ export function setup(mstream) {
     });
   });
 
-  // Last.fm connect/disconnect (update user's lastfm credentials in DB)
+  // Last.fm connect/disconnect (update user's lastfm credentials in DB).
+  //
+  // Public/no-users mode is supported: writes target the V25 anonymous
+  // sentinel via req.user.id, which auth.js's no-users branch pins for
+  // the operator. Admin-gated to prevent random viewers in adminLocked
+  // public deployments from overwriting the operator's stored Last.fm
+  // credentials. Same gate the ListenBrainz handlers use.
+  //
+  // After saving creds we warm the Scribble session map so the next
+  // /scrobble-by-filepath call doesn't need a server restart to pick
+  // them up — the boot-time pre-load only covers credentials present
+  // when scrobbler.setup() ran.
   mstream.post('/api/v1/lastfm/connect', (req, res) => {
     const { lastfmUser, lastfmPassword } = req.body;
-    if (!lastfmUser || !lastfmPassword || !req.user?.id) {
+    if (!lastfmUser || !lastfmPassword) {
       return res.status(400).json({ error: 'Username and password required' });
+    }
+    if (!req.user?.admin) {
+      return res.status(403).json({ error: 'Admin access required' });
     }
     d().prepare('UPDATE users SET lastfm_user = ?, lastfm_password = ? WHERE id = ?')
       .run(lastfmUser, lastfmPassword, req.user.id);
     db.invalidateCache();
+    warmScrobbleUser(lastfmUser, lastfmPassword);
     res.json({ ok: true });
   });
 
   mstream.post('/api/v1/lastfm/disconnect', (req, res) => {
-    if (!req.user?.id) return res.json({ ok: true });
+    if (!req.user?.admin) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
     d().prepare('UPDATE users SET lastfm_user = NULL, lastfm_password = NULL WHERE id = ?')
       .run(req.user.id);
     db.invalidateCache();

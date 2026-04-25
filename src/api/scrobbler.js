@@ -9,17 +9,40 @@ import { getVPathInfo } from '../util/vpath.js';
 
 const Scrobbler = new Scribble();
 
+// Exposed so /lastfm/connect (in velvet-stubs.js) can register newly-saved
+// credentials with the Scribble session map without waiting for a server
+// restart. The boot-time pre-load below covers credentials already in the
+// DB on startup; warmScrobbleUser handles the post-boot path.
+export function warmScrobbleUser(lastfmUser, lastfmPassword) {
+  if (!lastfmUser || !lastfmPassword) { return; }
+  Scrobbler.addUser(lastfmUser, lastfmPassword);
+}
+
 export function setup(mstream) {
   Scrobbler.setKeys(config.program.lastFM.apiKey, config.program.lastFM.apiSecret);
 
-  // Initialize lastfm users from database
-  const users = db.getAllUsers();
+  // Initialize lastfm users from database. getAllUsers() filters out the
+  // anonymous sentinel (V25) — pull it in explicitly so a public-mode
+  // operator who linked Last.fm gets their session warmed at boot.
+  const users = [...db.getAllUsers()];
+  const sentinel = db.getAnonymousUser();
+  if (sentinel) { users.push(sentinel); }
   for (const user of users) {
     if (!user.lastfm_user || !user.lastfm_password) { continue; }
     Scrobbler.addUser(user.lastfm_user, user.lastfm_password);
   }
 
   const d = () => db.getDB();
+
+  // Last.fm scrobbling (and play-count tracking on /scrobble-by-filepath).
+  //
+  // Public/no-users mode is supported here: auth.js's no-users branch
+  // spreads the V25 anonymous sentinel's row onto req.user, so
+  // `req.user.lastfm_user` / `lastfm_password` are populated when the
+  // operator has linked an account via /lastfm/connect. The "operator
+  // is the sentinel" model means scrobbles flow under that single
+  // operator-supplied identity — same trade-off as sentinel-backed
+  // playlists, cue points, and play counts.
 
   mstream.post('/api/v1/lastfm/scrobble-by-metadata', (req, res) => {
     const schema = Joi.object({
@@ -66,7 +89,8 @@ export function setup(mstream) {
     // formats we don't yet parse fall back to file_hash.
     const trackKey = track.audio_hash || track.file_hash;
 
-    // Update play count and last played
+    // Update play count and last played. Sentinel-keyed in public mode
+    // — the operator's listening history. See the header comment above.
     d().prepare(`
       INSERT INTO user_metadata (user_id, track_hash, play_count, last_played)
       VALUES (?, ?, 1, datetime('now'))
@@ -77,7 +101,7 @@ export function setup(mstream) {
 
     res.json({});
 
-    // Scrobble to last.fm if configured
+    // Scrobble to last.fm if configured.
     if (req.user.lastfm_user && req.user.lastfm_password) {
       Scrobbler.Scrobble(
         { artist: track.artist, album: track.album, track: track.title },
