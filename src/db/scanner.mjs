@@ -625,10 +625,19 @@ async function run() {
     // Remove tracks that weren't seen in this scan (deleted files)
     const deleted = stmts.deleteOldTracks.run(loadJson.libraryId, loadJson.scanId);
     // Structured end-of-scan event — parsed by task-queue.js to decide whether
-    // to run the waveform post-processor.
+    // to run the waveform post-processor and to print a human-readable summary.
+    // Field shapes mirror the rust-parser's emitter:
+    //   filesProcessed       New / modified rows actually written.
+    //   filesUnchanged       Cache-hit fast-path skips (file existed in DB and
+    //                        mtime matched; only scan_id was bumped).
+    //   filesScanned         Total supported files visited (processed +
+    //                        unchanged + per-file errors).
+    //   staleEntriesRemoved  Tracks deleted because the file disappeared.
     console.log(JSON.stringify({
       event: 'scanComplete',
       filesProcessed: fileCount,
+      filesUnchanged: Math.max(0, totalProcessed - fileCount),
+      filesScanned: totalProcessed,
       staleEntriesRemoved: deleted.changes
     }));
 
