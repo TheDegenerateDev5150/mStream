@@ -3,7 +3,6 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import os from 'os';
-import { makeDirectory } from 'make-dir';
 import * as server from '../src/server.js';
 import pkg from 'electron-updater';
 const { autoUpdater } = pkg;
@@ -18,27 +17,27 @@ let updateAlertFlag = false;
 const configFile = path.join(app.getPath('userData'), 'save/server-config-v3.json');
 
 if (!fs.existsSync(path.join(app.getPath('userData'), 'image-cache'))) {
-  makeDirectory(path.join(app.getPath('userData'), 'image-cache'));
+  fs.mkdirSync(path.join(app.getPath('userData'), 'image-cache'), { recursive: true });
 }
 
 if (!fs.existsSync(path.join(app.getPath('userData'), 'save'))) {
-  makeDirectory(path.join(app.getPath('userData'), 'save'));
+  fs.mkdirSync(path.join(app.getPath('userData'), 'save'), { recursive: true });
 }
 
 if (!fs.existsSync(path.join(app.getPath('userData'), 'db'))) {
-  makeDirectory(path.join(app.getPath('userData'), 'db'));
+  fs.mkdirSync(path.join(app.getPath('userData'), 'db'), { recursive: true });
 }
 
 if (!fs.existsSync(path.join(app.getPath('userData'), 'logs'))) {
-  makeDirectory(path.join(app.getPath('userData'), 'logs'));
+  fs.mkdirSync(path.join(app.getPath('userData'), 'logs'), { recursive: true });
 }
 
 if (!fs.existsSync(path.join(app.getPath('userData'), 'sync'))) {
-  makeDirectory(path.join(app.getPath('userData'), 'sync'));
+  fs.mkdirSync(path.join(app.getPath('userData'), 'sync'), { recursive: true });
 }
 
 if (!fs.existsSync(path.join(app.getPath('userData'), 'ffmpeg'))) {
-  makeDirectory(path.join(app.getPath('userData'), 'ffmpeg'));
+  fs.mkdirSync(path.join(app.getPath('userData'), 'ffmpeg'), { recursive: true });
 }
 
 process.on('uncaughtException', (error) => {
