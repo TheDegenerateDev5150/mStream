@@ -21,7 +21,7 @@ jobs:
         key: ${{ secrets.DEMO_SSH_KEY }}
         port: ${{ secrets.DEMO_SSH_PORT }}
         script: |
-          cd mStream/
+          cd ~/mstream
           git pull
-          npm install --production
-          pm2 restart all
+          npm ci --omit=dev
+          systemctl restart mstream
