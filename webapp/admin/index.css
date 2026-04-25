@@ -1,3 +1,17 @@
+/* Materialize 1.x leaves its .input-field label as a tap target. The label
+   sits on top of the empty input and uses `for="..."` to redirect clicks to
+   the linked field. Desktop Firefox honours the redirect and pops focus +
+   the keyboard. Mobile Firefox honours the focus redirect but doesn't always
+   activate the soft keyboard — so the field looks selected but typing does
+   nothing.
+   pointer-events: none on the label sends taps straight to the input
+   underneath. The float-up animation still fires because Materialize toggles
+   the .active class from the input's focus/blur events, not from clicks on
+   the label itself. */
+.input-field > label {
+  pointer-events: none;
+}
+
 .collection-item {
   display: flow-root;
 }
