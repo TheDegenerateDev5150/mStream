@@ -9,6 +9,30 @@ import { shouldMigrate, migrate } from './migrate-from-loki.js';
 let db = null;
 let clearSharedTimer = null;
 
+// ── Anonymous (no-users) sentinel ────────────────────────────────────────────
+//
+// users.user_id is a NOT NULL FK on every per-user table (user_metadata,
+// playlists, cue_points, user_settings, …). When the admin hasn't created
+// any real users — i.e. mStream is running in public read-only mode — every
+// HTTP request still needs *some* valid user_id to attribute writes to,
+// otherwise scrobbles, ratings, "save queue as playlist", etc. all crash
+// with NOT NULL constraint violations.
+//
+// Solution: keep one always-present sentinel user row identified by the
+// is_anonymous_sentinel = 1 flag (added in V25). When auth.js detects
+// "no real users", it pins req.user.id to this sentinel's id so every
+// downstream INSERT has a valid FK target without per-endpoint null guards.
+//
+// The flag, not the username, is what marks the sentinel — usernames have
+// no server-side validation, so an admin could legitimately have already
+// created a user with whatever default name we'd pick. ensureAnonymousUser()
+// finds an unused name (suffixing if needed) for fresh sentinels, and
+// existing real rows always get is_anonymous_sentinel = 0 by ALTER's
+// default, so they can never be confused with the sentinel.
+const ANONYMOUS_USERNAME_BASE = '__mstream_anonymous__';
+
+let _anonymousUserId = null;
+
 // ── In-memory cache for users and libraries ─────────────────────────────────
 // These change rarely (admin panel only) but are read on every HTTP request.
 // Cache is invalidated by calling invalidateCache() after any admin mutation.
@@ -35,6 +59,10 @@ export function initDB() {
   if (shouldMigrate()) {
     migrate(db);
   }
+
+  // Ensure the anonymous sentinel exists before populating caches —
+  // auth.js's no-users branch needs its id at request time.
+  ensureAnonymousUser();
 
   // Populate caches
   loadUsersCache();
@@ -182,12 +210,56 @@ function loadUserLibrariesCache() {
 
 export function getUserByUsername(username) {
   loadUsersCache();
-  return _usersCache.get(username);
+  const row = _usersCache.get(username);
+  // The sentinel is never reachable by name. Login attempts already fail
+  // at PBKDF2 (its stored hash is the literal '!' which no PBKDF2 output
+  // can produce), but every other call site — admin mint-key, password
+  // change, delete-user, edit-access, Subsonic getUser/updateUser — also
+  // resolves users by name, and we don't want any of those to be able
+  // to address the sentinel either. The auth no-users branch resolves
+  // the sentinel by id (getAnonymousUserId), not name, so it's
+  // unaffected by this filter.
+  if (row?.is_anonymous_sentinel === 1) { return undefined; }
+  return row;
 }
 
 export function getAllUsers() {
   loadUsersCache();
-  return Array.from(_usersCache.values());
+  // Hide the anonymous sentinel — empty-check `getAllUsers().length === 0`
+  // should mean "no real users", and admin panels listing users shouldn't
+  // surface a row no one can actually log in as.
+  return Array.from(_usersCache.values()).filter(u => u.is_anonymous_sentinel !== 1);
+}
+
+export function getAnonymousUserId() {
+  return _anonymousUserId;
+}
+
+function ensureAnonymousUser() {
+  // Already have a sentinel? Reuse it.
+  const existing = db.prepare('SELECT id FROM users WHERE is_anonymous_sentinel = 1').get();
+  if (existing) {
+    _anonymousUserId = existing.id;
+    return;
+  }
+
+  // Pick a username that isn't already taken. Almost always the canonical
+  // base; suffix with a counter only on the unlikely chance that an admin
+  // has already created a user with that name.
+  let username = ANONYMOUS_USERNAME_BASE;
+  for (let i = 1; db.prepare('SELECT 1 FROM users WHERE username = ?').get(username); i++) {
+    username = `${ANONYMOUS_USERNAME_BASE.slice(0, -2)}_${i}__`;
+  }
+
+  // Dummy password/salt are literal '!' — no PBKDF2 output ever produces
+  // that exact string, so login attempts against the sentinel are
+  // guaranteed to fail at the hash-comparison step in src/util/auth.js.
+  const result = db.prepare(
+    `INSERT INTO users (username, password, salt, is_admin, is_anonymous_sentinel,
+                        allow_upload, allow_mkdir, allow_server_audio)
+     VALUES (?, '!', '!', 0, 1, 0, 0, 0)`
+  ).run(username);
+  _anonymousUserId = Number(result.lastInsertRowid);
 }
 
 export function getLibraryByName(name) {

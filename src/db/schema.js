@@ -1,7 +1,7 @@
 // SQLite schema definitions and migration system for mStream.
 // Uses PRAGMA user_version for tracking which migrations have been applied.
 
-export const SCHEMA_VERSION = 24;
+export const SCHEMA_VERSION = 25;
 
 export const SCHEMA_V1 = `
   -- Users
@@ -732,6 +732,33 @@ export const SCHEMA_V24 = `
   CREATE INDEX IF NOT EXISTS idx_tracks_audio_hash ON tracks(audio_hash);
 `;
 
+export const SCHEMA_V25 = `
+  -- ── Anonymous sentinel flag ──────────────────────────────────────
+  --
+  -- mStream supports a public read-only "no users configured" mode.
+  -- Every per-user table (user_metadata, playlists, cue_points, …)
+  -- has a NOT NULL FK on users(id), so anonymous traffic still needs
+  -- *some* valid user_id to attribute writes to. Solution: keep one
+  -- always-present sentinel row in users with this flag set to 1.
+  -- src/db/manager.js inserts the sentinel after migrations run and
+  -- pins anonymous req.user.id to its rowid in src/api/auth.js.
+  --
+  -- The flag (rather than a reserved username) is what identifies
+  -- the sentinel — usernames have no validation, so a real admin
+  -- could have already created a user with any name we'd otherwise
+  -- pick. A flag column is uncollidable: existing rows default to
+  -- 0 on migrate; only ensureAnonymousUser() ever writes 1.
+  --
+  -- getAllUsers() filters rows where is_anonymous_sentinel = 1 so
+  -- admin panels and the auth empty-check ('no real users') don't
+  -- see it. Login attempts against the sentinel always fail at the
+  -- PBKDF2 stage — its stored hash is the literal '!', a value no
+  -- PBKDF2 output can produce.
+  --
+  -- Not rescanRequired.
+  ALTER TABLE users ADD COLUMN is_anonymous_sentinel INTEGER NOT NULL DEFAULT 0;
+`;
+
 // rescanRequired: true — marks migrations that change the tracks table schema
 // and need a force rescan to populate new fields. When applied, a marker file
 // is written so the next boot triggers rescanAll() instead of scanAll().
@@ -782,4 +809,11 @@ export const MIGRATIONS = [
   // Fresh databases land at INTEGER via SCHEMA_V1; existing rows are
   // CAST during a tracks-table rebuild. See SCHEMA_V24 comments.
   { version: 24, sql: SCHEMA_V24 },
+  // V25 adds users.is_anonymous_sentinel — flag for the always-
+  // present sentinel row that backs no-users public mode. The flag
+  // is what identifies the sentinel (not its username), so an
+  // admin who happens to have already created a user with our
+  // canonical name can't accidentally collide with the sentinel
+  // semantics. See SCHEMA_V25 comments.
+  { version: 25, sql: SCHEMA_V25 },
 ];

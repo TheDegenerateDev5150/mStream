@@ -35,12 +35,19 @@ function decodeEncHex(pStr) {
 
 // Look up an API key. Side-effect: updates `last_used` timestamp. Returns
 // the full user row (for subsequent req.user population) or null.
+//
+// Excludes the anonymous sentinel by FK in the JOIN: the sentinel must
+// never be authenticated-as via any path other than the auth.js no-users
+// branch. The mint-key admin endpoint already can't target it (its
+// getUserByUsername lookup filters the sentinel out), but excluding it
+// here too means a hypothetical row planted directly into user_api_keys
+// — bypassing the API surface entirely — still can't authenticate.
 function userForApiKey(key) {
   const d = db.getDB();
   const row = d.prepare(`
     SELECT u.* FROM users u
     JOIN user_api_keys k ON k.user_id = u.id
-    WHERE k.key = ?
+    WHERE k.key = ? AND u.is_anonymous_sentinel = 0
   `).get(key);
   if (!row) { return null; }
   d.prepare('UPDATE user_api_keys SET last_used = datetime(\'now\') WHERE key = ?').run(key);

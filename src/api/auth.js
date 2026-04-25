@@ -60,7 +60,13 @@ export function setup(mstream) {
         vpaths: allLibs.map(l => l.name),
         username: 'mstream-user',
         admin: !adminLocked,
-        id: null,
+        // Pin to the always-present anonymous sentinel row in the
+        // users table. Per-user tables (user_metadata, playlists,
+        // cue_points, …) all FK on users(id) NOT NULL, so a null id
+        // here meant every write endpoint crashed in public mode.
+        // The sentinel is filtered out of getAllUsers() so the
+        // empty-check above still means "no real users".
+        id: db.getAnonymousUserId(),
         allow_upload: adminLocked ? 0 : 1,
         allow_mkdir: adminLocked ? 0 : 1,
         allow_file_modify: adminLocked ? 0 : 1,
