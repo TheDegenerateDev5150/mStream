@@ -1,7 +1,7 @@
 // SQLite schema definitions and migration system for mStream.
 // Uses PRAGMA user_version for tracking which migrations have been applied.
 
-export const SCHEMA_VERSION = 23;
+export const SCHEMA_VERSION = 24;
 
 export const SCHEMA_V1 = `
   -- Users
@@ -90,7 +90,14 @@ export const SCHEMA_V1 = `
     album_art_file TEXT,
     genre TEXT,
     replaygain_track_db REAL,
-    modified REAL,
+    -- modified is mtime in epoch milliseconds — semantically an integer.
+    -- Declared INTEGER so SQLite's column affinity stores it as INTEGER
+    -- rather than coercing it to REAL on insert. The Rust scanner reads
+    -- this column with strict typing (rusqlite refuses REAL→i64), so a
+    -- REAL declaration broke load_existing_tracks() on the second scan
+    -- of any populated library. V24 migrates pre-existing REAL-stored
+    -- rows; fresh databases get INTEGER from V1.
+    modified INTEGER,
     created_at TEXT DEFAULT (datetime('now')),
     scan_id TEXT,
     UNIQUE(filepath, library_id)
@@ -618,6 +625,113 @@ export const SCHEMA_V20 = `
   CREATE INDEX IF NOT EXISTS idx_lyrics_cache_fetched ON lyrics_cache(fetched_at);
 `;
 
+export const SCHEMA_V24 = `
+  -- ── Re-type tracks.modified from REAL to INTEGER ─────────────────
+  --
+  -- tracks.modified holds an mtime as epoch milliseconds — semantically
+  -- always an integer. SCHEMA_V1 declared the column REAL, which made
+  -- SQLite's column affinity coerce every inserted i64 to a float on
+  -- write. The JS scanner reads with loose typing and never noticed,
+  -- but the Rust scanner reads through rusqlite's strict typing:
+  --
+  --     row.get::<_, i64>(2)?   →   "Invalid column type Real at index 2"
+  --
+  -- Symptom for end users: the FIRST scan of a fresh DB succeeds
+  -- (load_existing_tracks() returns empty before insert), then EVERY
+  -- subsequent scan fails before doing any work, leaving the library
+  -- frozen at whatever the first scan happened to write. New files
+  -- never appear; deletions are never reaped.
+  --
+  -- Fix: rebuild the table with 'modified INTEGER' and CAST existing
+  -- values back to integer on copy. Tracks ids are preserved across
+  -- the rebuild so the M2M tables (track_artists, track_genres) keep
+  -- valid references — but DROP TABLE in SQLite DOES fire ON DELETE
+  -- CASCADE when foreign_keys are enabled, so we have to back the M2M
+  -- rows out into TEMP tables, empty the M2M tables, do the rebuild,
+  -- then restore. (V18's albums rebuild didn't need this dance because
+  -- album_artists/track_artists were created NEW in the same migration
+  -- and had no preexisting rows to lose.)
+  --
+  -- Not rescanRequired: data is preserved, just re-typed.
+
+  -- Snapshot M2M relations referencing tracks(id) before the rebuild.
+  CREATE TEMP TABLE _v24_track_artists_backup AS SELECT * FROM track_artists;
+  CREATE TEMP TABLE _v24_track_genres_backup  AS SELECT * FROM track_genres;
+
+  -- Empty the M2M tables so the upcoming DROP TABLE tracks doesn't
+  -- cascade-delete anything we still need (rows are already gone) and
+  -- so the FK check on DROP TABLE has no inbound references to worry
+  -- about. The TEMP backups above hold the data we'll restore.
+  DELETE FROM track_artists;
+  DELETE FROM track_genres;
+
+  CREATE TABLE tracks_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    filepath TEXT NOT NULL,
+    library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+    title TEXT,
+    artist_id INTEGER REFERENCES artists(id) ON DELETE SET NULL,
+    album_id INTEGER REFERENCES albums(id) ON DELETE SET NULL,
+    track_number INTEGER,
+    disc_number INTEGER,
+    year INTEGER,
+    duration REAL,
+    bitrate INTEGER,
+    format TEXT,
+    file_size INTEGER,
+    file_hash TEXT,
+    album_art_file TEXT,
+    genre TEXT,
+    replaygain_track_db REAL,
+    modified INTEGER,
+    created_at TEXT DEFAULT (datetime('now')),
+    scan_id TEXT,
+    audio_hash TEXT,
+    sample_rate INTEGER,
+    channels INTEGER,
+    bit_depth INTEGER,
+    lyrics_embedded TEXT,
+    lyrics_synced_lrc TEXT,
+    lyrics_lang TEXT,
+    lyrics_sidecar_mtime INTEGER,
+    UNIQUE(filepath, library_id)
+  );
+
+  INSERT INTO tracks_new (
+    id, filepath, library_id, title, artist_id, album_id, track_number,
+    disc_number, year, duration, bitrate, format, file_size, file_hash,
+    album_art_file, genre, replaygain_track_db, modified, created_at,
+    scan_id, audio_hash, sample_rate, channels, bit_depth,
+    lyrics_embedded, lyrics_synced_lrc, lyrics_lang, lyrics_sidecar_mtime
+  )
+  SELECT
+    id, filepath, library_id, title, artist_id, album_id, track_number,
+    disc_number, year, duration, bitrate, format, file_size, file_hash,
+    album_art_file, genre, replaygain_track_db, CAST(modified AS INTEGER), created_at,
+    scan_id, audio_hash, sample_rate, channels, bit_depth,
+    lyrics_embedded, lyrics_synced_lrc, lyrics_lang, lyrics_sidecar_mtime
+  FROM tracks;
+
+  DROP TABLE tracks;
+  ALTER TABLE tracks_new RENAME TO tracks;
+
+  -- Restore the M2M rows. track_id values are preserved across the
+  -- rebuild (we copied the ids verbatim), so FK checks pass.
+  INSERT INTO track_artists SELECT * FROM _v24_track_artists_backup;
+  INSERT INTO track_genres  SELECT * FROM _v24_track_genres_backup;
+
+  DROP TABLE _v24_track_artists_backup;
+  DROP TABLE _v24_track_genres_backup;
+
+  CREATE INDEX IF NOT EXISTS idx_tracks_library    ON tracks(library_id);
+  CREATE INDEX IF NOT EXISTS idx_tracks_artist     ON tracks(artist_id);
+  CREATE INDEX IF NOT EXISTS idx_tracks_album      ON tracks(album_id);
+  CREATE INDEX IF NOT EXISTS idx_tracks_hash       ON tracks(file_hash);
+  CREATE INDEX IF NOT EXISTS idx_tracks_filepath   ON tracks(filepath, library_id);
+  CREATE INDEX IF NOT EXISTS idx_tracks_scan       ON tracks(scan_id);
+  CREATE INDEX IF NOT EXISTS idx_tracks_audio_hash ON tracks(audio_hash);
+`;
+
 // rescanRequired: true — marks migrations that change the tracks table schema
 // and need a force rescan to populate new fields. When applied, a marker file
 // is written so the next boot triggers rescanAll() instead of scanAll().
@@ -661,4 +775,11 @@ export const MIGRATIONS = [
   // existing rows so branch-trackers / Loki-migrated hosts don't
   // silently keep blanket access. See SCHEMA_V23 comments.
   { version: 23, sql: SCHEMA_V23 },
+  // V24 retypes tracks.modified from REAL → INTEGER. Long-standing
+  // schema/scanner mismatch: the Rust scanner reads modified as i64
+  // through rusqlite's strict typing, and a REAL column made every
+  // subsequent scan blow up after the first one populated rows.
+  // Fresh databases land at INTEGER via SCHEMA_V1; existing rows are
+  // CAST during a tracks-table rebuild. See SCHEMA_V24 comments.
+  { version: 24, sql: SCHEMA_V24 },
 ];
