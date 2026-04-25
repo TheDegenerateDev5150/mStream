@@ -15,16 +15,25 @@ Main|Shared|Admin
 #### [Website](https://mstream.io)
 
 ### Server Features
-* Cross Platform. Works on Windows, OSX, Linux, & FreeBSD
+* Cross Platform. Works on Windows, OSX, Linux, & FreeBSD and ARM CPUs
 * Light on memory and CPU
 * Tested on multi-terabyte libraries
-* Runs on ARM boards like the Raspberry Pi
+* Metadata parser written in Rust for fast indexing - JS fallback included for maximum compatibility
+* Multi-user accounts with per-library access control
+* DLNA / UPnP server for casting to TVs and stereos
+* [Subsonic / OpenSubsonic API](https://opensubsonic.netlify.app/) — works with DSub, play:Sub, Symfonium, Feishin, Supersonic, and other Subsonic clients
+* On-the-fly transcoding via ffmpeg (opus, mp3, aac)
+* Server-side audio playback for headless boxes (Rust audio engine + CLI fallback)
 
 ### WebApp Features
 * Gapless Playback
-* Milkdrop Visualizer
-* Playlist Sharing
-* Upload Files through the file explorer
+* Milkdrop Visualizer ([Butterchurn](https://github.com/jberg/butterchurn))
+* Playlist Sharing via signed links
+* Upload, create, and rename files through the file explorer
+* Synced + plain lyrics (embedded, sidecar `.lrc`, or [LRCLib](https://lrclib.net/) — opt-in)
+* Waveform previews rendered at scan time
+* Album art auto-fetch from MusicBrainz, iTunes, and Deezer
+* Admin UI for server configuration
 
 ## Installing mStream
 
@@ -43,7 +52,7 @@ Main|Shared|Admin
 
 ## Quick Install from CLI
 
-Deploying an mStream server is simple. 
+Deploying an mStream server is simple.
 
 ```shell
 # Install From Git
@@ -57,16 +66,21 @@ npm run-script wizard
 
 ## Technical Details
 
-* **Dependencies:** NodeJS v10 or greater
-
-* **Supported File Formats:** flac, mp3, mp4, wav, ogg, opus, aac, m4a
+* **Dependencies:** NodeJS v22.5 or greater
+* **Database:** SQLite (via `node:sqlite`) — no external DB server required
+* **Scanner:** Pre-built Rust binary (Linux x64/arm/arm64 + musl, macOS x64/arm64, Windows x64); falls back to a pure-JS scanner when no binary matches the host
+* **Supported File Formats:** flac, mp3, wav, ogg, opus, aac, m4a, m4b
+* **APIs:** mStream `/api/v1` (REST, [OpenAPI spec](docs/openapi.yaml)) and Subsonic `/rest` (1.16.1 + OpenSubsonic extensions)
 
 ## Credits
 
-mStream is built on top some great open-source libraries:
+mStream is built on top of some great open-source libraries:
 
-* [music-metadata](https://github.com/Borewit/music-metadata) - The best metadata parser for NodeJS
-* [LokiJS](https://github.com/techfort/LokiJS) - A native, in-memory, database written in JavaScript.  LokiJS is the reason mStream is so fast and easy to install
+* [music-metadata](https://github.com/Borewit/music-metadata) - The metadata parser used by the JS scanner fallback
+* [Lofty](https://github.com/Serial-ATA/lofty-rs) - Audio tag reader powering the Rust scanner
+* [Symphonia](https://github.com/pdeljanov/Symphonia) - Pure-Rust audio decoder used to render waveform previews during a scan
 * [Butterchurn](https://github.com/jberg/butterchurn) - A clone of Milkdrop Visualizer written in JavaScript
+* [Syncthing](https://syncthing.net/) - Powers federation between mStream servers
+* [LRCLib](https://lrclib.net/) - Optional source for synced lyrics
 
 And thanks to the [LinuxServer.io](https://www.linuxserver.io/) group for maintaining the Docker image!
