@@ -5,8 +5,7 @@ import winston from 'winston';
 import path from 'path';
 import { spawn } from 'child_process';
 import { XMLParser, XMLBuilder } from 'fast-xml-parser';
-import axios from 'axios';
-import https from 'https';
+import { Agent } from 'undici';
 import kill from 'tree-kill';
 import * as killQueue from './kill-list.js';
 import * as config from './config.js';
@@ -379,15 +378,10 @@ function saveIt() {
 
 async function rebootSyncThing() {
   try {
-    const agent = new https.Agent({
-      rejectUnauthorized: false
-     });
-
-    await axios({
-      method: 'post',
-      url: `https://${xmlObj.configuration.gui.address}/rest/system/restart`,
+    await fetch(`https://${xmlObj.configuration.gui.address}/rest/system/restart`, {
+      method: 'POST',
       headers: { 'X-API-Key': xmlObj.configuration.gui.apikey },
-      httpsAgent: agent
+      dispatcher: new Agent({ connect: { rejectUnauthorized: false } })
     });
   } catch(err) {
     winston.error('Syncthing Reboot Failed', { stack: err });
