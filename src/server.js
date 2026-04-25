@@ -35,6 +35,7 @@ import * as userApiKeysApi from './api/user-api-keys.js';
 import * as serverPlaybackApi from './api/server-playback.js';
 import * as albumArtApi from './api/album-art.js';
 import * as waveformApi from './api/waveform.js';
+import * as scanApi from './api/scan.js';
 import * as lyricsApi from './api/lyrics.js';
 import * as lyricsLrclib from './api/lyrics-lrclib.js';
 // Velvet UI modules — dynamically imported only when ui='velvet' is active
@@ -253,6 +254,7 @@ export async function serveIt(configFile) {
   ytdlApi.setup(mstream);
   albumArtApi.setup(mstream);
   waveformApi.setup(mstream);
+  scanApi.setup(mstream);
   lyricsApi.setup(mstream);
   // V20 housekeeping: clean up 'pending' lyrics_cache rows from any
   // previous process that crashed mid-fetch, and start the periodic

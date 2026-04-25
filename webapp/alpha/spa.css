@@ -148,26 +148,12 @@ body.top-bar-hidden #content {
   z-index: 2;
   display: none;
 }
-/* `wf-enabled` applies when the operator has the waveform-bar setting
-   turned on, regardless of whether the data for this track has loaded
-   yet. It reserves the full 28px-tall strip up front so the bar
-   doesn't grow/shift the moment waveform data arrives for the track
-   (previously the plain progress bar sat short, then jumped taller
-   when `wf-active` kicked in — a visible layout shake every song).
-   The plain orange `.determinate` fill continues to render inside the
-   tall strip while data loads. */
-.progress.wf-enabled {
-  padding-top: 28px;
-  margin-top: 12px;
-}
-/* `wf-active` is the narrower "data is actually loaded, show the
-   canvas" state. Hides the plain determinate fill and swaps in the
-   waveform overlay. Layers on top of `wf-enabled` so the tall
-   strip stays put. */
 .progress.wf-active .waveform-canvas { display: block; }
 .progress.wf-active .determinate { visibility: hidden; }
 .progress.wf-active {
   background-color: transparent !important;
+  padding-top: 28px;
+  margin-top: 12px;
 }
 /* Keep time indicators above the waveform */
 .progress-wrapper .left,
@@ -896,7 +882,7 @@ body.top-bar-hidden #content {
   padding-right: 6px;
 }
 
-.removeSong, .deletePlaylist, .removePlaylistSong, .renamePlaylist{
+.removeSong, .deletePlaylist, .removePlaylistSong{
   cursor: pointer;
   min-width: 28px !important;
   height: 14px;
@@ -918,46 +904,6 @@ body.top-bar-hidden #content {
   padding-left: 7px;
   padding-right: 7px;
   border-bottom-left-radius: 3px;
-}
-
-.renamePlaylist {
-  background-color: rgba(70, 130, 200, .75);
-  line-height: 100% !important;
-  padding-left: 7px;
-  padding-right: 7px;
-  margin-right: 2px;
-}
-
-.renamePlaylist:hover {
-  opacity: 1;
-  background-color: rgba(70, 130, 200, .9);
-}
-
-.rename-playlist-input {
-  width: 260px;
-  padding: 6px 8px;
-  font-size: 14px;
-  border: 1px solid #ccc;
-  border-radius: 3px;
-  box-sizing: border-box;
-}
-
-/* iziToast sets `user-select: none` on the entire toast so the toast body
-   itself isn't selectable. That cascades into child inputs too and blocks
-   double-click-to-select inside our text fields. Re-enable selection for
-   any text-like input living inside an iziToast. */
-.iziToast input[type="text"],
-.iziToast input[type="search"],
-.iziToast input[type="email"],
-.iziToast input[type="url"],
-.iziToast input[type="password"],
-.iziToast input[type="number"],
-.iziToast textarea {
-  -webkit-user-select: text;
-  -moz-user-select: text;
-  -ms-user-select: text;
-  user-select: text;
-  -webkit-touch-callout: default;
 }
 
 .downloadPlaylistSong, .recursiveAddDir, .addFileplaylist {
@@ -1437,4 +1383,81 @@ select {
 
 .make-white {
   color: #FFF;
+}
+
+/* ── Compact progress cards (nav bar — scan + sync) ─────────────────────── */
+/* Adapted from webapp/velvet/style.css .spc-* rules with concrete colors
+   matching the main UI palette (velvet's CSS variables aren't defined here). */
+.spc-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.spc-card {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: #262a33;
+  border: 1px solid #444c56;
+  border-left: 2px solid #2ecc71;
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: default;
+  min-width: 180px;
+  max-width: 320px;
+}
+.spc-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #2ecc71;
+  flex-shrink: 0;
+  animation: spc-pulse 1.4s ease-in-out infinite;
+}
+@keyframes spc-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+.spc-vpath {
+  font-size: 12px;
+  font-weight: 700;
+  color: #F5F7FA;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+  max-width: 80px;
+}
+.spc-track {
+  flex: 1;
+  position: relative;
+  height: 4px;
+  background: #444c56;
+  border-radius: 99px;
+  overflow: hidden;
+  min-width: 40px;
+}
+.spc-fill {
+  height: 100%;
+  background: #2ecc71;
+  border-radius: 99px;
+  transition: width .8s ease-out;
+}
+.spc-fill-ind {
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, rgb(101, 126, 228), transparent);
+  animation: spc-shimmer 1.8s ease-in-out infinite;
+}
+@keyframes spc-shimmer { 0% { transform: translateX(-250%); } 100% { transform: translateX(350%); } }
+.spc-pct {
+  font-size: 11px;
+  font-weight: 700;
+  color: #2ecc71;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.spc-count {
+  font-size: 10px;
+  color: #F5F7FA;
+  white-space: nowrap;
+  flex-shrink: 0;
 }

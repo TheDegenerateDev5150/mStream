@@ -471,7 +471,6 @@ function playNow(el) {
   VUEPLAYERCORE.addSongWizard(el.getAttribute("data-file_location"), {}, true, MSTREAMPLAYER.positionCache.val + 1);
 }
 
-let startInterval = false;
 async function init() {
   try {
     const response = await MSTREAMAPI.ping();
@@ -560,40 +559,13 @@ async function init() {
     }
 
   }catch(err) {}
-
-  dbStatus();
 }
 
-async function dbStatus() {
-  try {
-    const response = await MSTREAMAPI.dbStatus();
-    // if not scanning
-    if (!response.locked || response.locked === false) {
-      clearInterval(startInterval);
-      startInterval = false;
-      document.getElementById('scan-status').innerHTML = '';
-      document.getElementById('scan-status-files').innerHTML = '';
-
-      return;
-    }
-
-    // Set Interval
-    if (startInterval === false) {
-      startInterval = setInterval(function () {
-        dbStatus();
-      }, 2000);
-    }
-
-    // Update status
-    document.getElementById('scan-status').innerHTML = t('status.scanInProgress');
-    document.getElementById('scan-status-files').innerHTML = t('status.filesInDB', { count: response.totalFileCount });
-  }catch(err) {
-    document.getElementById('scan-status').innerHTML = '';
-    document.getElementById('scan-status-files').innerHTML = '';
-    clearInterval(startInterval);
-    startInterval = false;
-  }
-}
+// Scan progress display moved to webapp/alpha/scan-progress.js — that
+// poller hits /api/v1/scan/progress unconditionally on a 3s interval and
+// renders rich per-vpath cards. The old dbStatus() polled /api/v1/db/status
+// only after seeing locked=true once, so a scan triggered post-page-load
+// never appeared. Removed entirely.
 
 function createPopper3(el) {
   if (curFileTracker === el.getAttribute("data-file_location")) {
