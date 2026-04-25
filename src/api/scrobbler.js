@@ -1,6 +1,5 @@
 import crypto from 'crypto';
 import Joi from 'joi';
-import axios from 'axios';
 import * as config from '../state/config.js';
 import Scribble from '../state/lastfm.js';
 import * as db from '../db/manager.js';
@@ -74,7 +73,7 @@ export function setup(mstream) {
     if (!lib) { return res.json({ scrobble: false }); }
 
     const track = d().prepare(`
-      SELECT t.file_hash, t.audio_hash, t.title, a.name AS artist, al.name AS album
+      SELECT t.file_hash, t.title, a.name AS artist, al.name AS album
       FROM tracks t
       LEFT JOIN artists a ON t.artist_id = a.id
       LEFT JOIN albums al ON t.album_id = al.id
@@ -122,10 +121,12 @@ export function setup(mstream) {
     const cryptoString = `api_key${config.program.lastFM.apiKey}authToken${token}methodauth.getMobileSessionusername${req.body.username}${config.program.lastFM.apiSecret}`;
     const hash = crypto.createHash('md5').update(cryptoString, 'utf8').digest('hex');
 
-    await axios({
-      method: 'GET',
-      url: `http://ws.audioscrobbler.com/2.0/?method=auth.getMobileSession&username=${req.body.username}&authToken=${token}&api_key=${config.program.lastFM.apiKey}&api_sig=${hash}`
-    });
+    const lastfmRes = await fetch(
+      `http://ws.audioscrobbler.com/2.0/?method=auth.getMobileSession&username=${req.body.username}&authToken=${token}&api_key=${config.program.lastFM.apiKey}&api_sig=${hash}`
+    );
+    if (!lastfmRes.ok) {
+      throw new Error(`last.fm test-login returned ${lastfmRes.status}`);
+    }
     res.json({});
   });
 }
