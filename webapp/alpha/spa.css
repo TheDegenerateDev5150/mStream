@@ -985,8 +985,8 @@ svg {
 }
 
 #directoryName, #search_folders {
-  flex-grow: 1;
-  max-width: calc(100% - 72px);
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 #search_folders {
@@ -1070,6 +1070,11 @@ svg {
   min-height: 40px;
   align-items: center;
   justify-content: center;
+  flex-wrap: nowrap;
+}
+
+#directory_bar > svg {
+  flex-shrink: 0;
 }
 
 #directory_bar > svg path:not([fill="none"]) {
@@ -1084,6 +1089,7 @@ svg {
 #directoryName{
   padding-bottom: 3px;
   padding-left: 5px;
+  white-space: nowrap;
   text-overflow: ellipsis;
   overflow: hidden;
   max-height: 100%;
