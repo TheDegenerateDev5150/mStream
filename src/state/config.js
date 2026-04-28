@@ -23,6 +23,19 @@ const scanOptions = Joi.object({
   maxConcurrentTasks: Joi.number().integer().min(1).default(1),
   compressImage: Joi.boolean().default(true),
   scanCommitInterval: Joi.number().integer().min(1).default(25),
+  // Number of worker threads the Rust scanner uses for parallel
+  // file extraction. 0 (default) = auto: half the available CPU
+  // cores, clamped to [1, 8]. The 8-thread cap protects against
+  // monster-core boxes spinning up dozens of workers that mostly
+  // idle on the single SQLite writer thread; explicit positive
+  // values bypass the cap for operators who really want it to rip
+  // (at the cost of higher peak memory — ~256 MB per worker for
+  // large files). The Rust binary resolves the actual count; this
+  // field just sets the policy. The JS fallback scanner
+  // (src/db/scanner.mjs) ignores it — it stays single-threaded
+  // because it's the slow-path for hosts without a Rust binary
+  // anyway.
+  scanThreads: Joi.number().integer().min(0).default(0),
   autoAlbumArt: Joi.boolean().default(true),
   albumArtWriteToFolder: Joi.boolean().default(false),
   albumArtWriteToFile: Joi.boolean().default(false),

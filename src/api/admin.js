@@ -154,6 +154,21 @@ export function setup(mstream) {
     res.json({});
   });
 
+  // 0 = auto (Rust scanner picks half the available cores). Operators
+  // who want to push harder during a known-quiet maintenance window
+  // can set N explicitly; pinning to 1 keeps the legacy single-
+  // threaded behaviour. Only the Rust scanner honours this — the JS
+  // fallback ignores the field, see src/db/scanner.mjs.
+  mstream.post("/api/v1/admin/db/params/scan-threads", async (req, res) => {
+    const schema = Joi.object({
+      scanThreads: Joi.number().integer().min(0).required()
+    });
+    joiValidate(schema, req.body);
+
+    await admin.editScanThreads(req.body.scanThreads);
+    res.json({});
+  });
+
   mstream.post("/api/v1/admin/db/params/auto-album-art", async (req, res) => {
     const schema = Joi.object({ autoAlbumArt: Joi.boolean().required() });
     joiValidate(schema, req.body);

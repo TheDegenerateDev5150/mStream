@@ -286,6 +286,11 @@ function runScan(scanObj) {
     compressImage: config.program.scanOptions.compressImage,
     supportedFiles: config.program.supportedAudioFiles,
     scanCommitInterval: config.program.scanOptions.scanCommitInterval || 25,
+    // Pass through unconditionally — Rust binary treats 0 as "auto"
+    // and resolves to half the available CPU cores. The JS fallback
+    // scanner ignores this field. See scanThreads in src/state/config.js
+    // for the rationale on the half-cores default.
+    scanThreads: config.program.scanOptions.scanThreads || 0,
     forceRescan: scanObj.forceRescan || false,
     // Per-library followSymlinks flag (V21). Pulled straight from
     // the libraries row — toggling it in the admin panel takes
