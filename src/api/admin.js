@@ -169,6 +169,22 @@ export function setup(mstream) {
     res.json({});
   });
 
+  // Toggle inline waveform generation during scans. true (default) =
+  // scanner decodes and writes <hash>.bin files (instant playback
+  // bar, ~90% of scan wall-time). false = scanner skips the decode
+  // entirely; the on-demand /api/v1/db/waveform endpoint regenerates
+  // via ffmpeg on first playback. ~10× scan speedup at the cost of
+  // a few hundred ms latency on first waveform request per track.
+  mstream.post("/api/v1/admin/db/params/generate-waveforms", async (req, res) => {
+    const schema = Joi.object({
+      generateWaveforms: Joi.boolean().required()
+    });
+    joiValidate(schema, req.body);
+
+    await admin.editGenerateWaveforms(req.body.generateWaveforms);
+    res.json({});
+  });
+
   mstream.post("/api/v1/admin/db/params/auto-album-art", async (req, res) => {
     const schema = Joi.object({ autoAlbumArt: Joi.boolean().required() });
     joiValidate(schema, req.body);

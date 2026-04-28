@@ -2401,25 +2401,59 @@ fn waveform_from_bytes(buf: Vec<u8>, ext: &str) -> Option<[u8; NUM_BARS]> {
 // Hash a whole-file buffer. Direct slice access means no seeks, no
 // buffered reads, and no boundary-straddling bookkeeping — we already
 // have every byte in memory.
+//
+// Single-pass dual-hash (matches the design of the streaming
+// `compute_hashes` above): for each audio range we feed the bytes to
+// both file_ctx and audio_ctx; gap bytes between ranges feed only
+// file_ctx. The previous two-pass version did `Md5::digest(buf)`
+// (one full pass) plus a second walk over the audio ranges,
+// re-reading ~0.95×buf bytes from RAM. Single-pass cuts that second
+// read entirely. On a typical 14 MB track that's ~13 MB of memory
+// bandwidth saved per file — small but cumulative across a library.
 fn compute_hashes_from_bytes(buf: &[u8], ext: &str) -> (String, Option<String>) {
-    let file_hash = hex_lower(Md5::digest(buf));
-
     // audio_ranges_for_ext still needs a Read + Seek to walk headers;
     // a Cursor over the slice satisfies that without copying.
     let mut cursor = Cursor::new(buf);
     let ranges = audio_ranges_for_ext(&mut cursor, ext, buf.len() as u64)
         .unwrap_or_default();
 
-    let audio_hash = if !ranges.is_empty() {
-        let mut ctx = Md5::new();
-        for (start, end) in ranges {
-            ctx.update(&buf[start as usize..end as usize]);
+    let mut file_ctx = Md5::new();
+
+    if ranges.is_empty() {
+        // No audio-range extractor for this format; just hash the
+        // whole file. One MD5 call is faster than splitting into
+        // per-range slices for no reason.
+        file_ctx.update(buf);
+        return (hex_lower(file_ctx.finalize()), None);
+    }
+
+    // Walk ranges in order. The ranges contract is the same as in
+    // compute_hashes: monotonically increasing, non-overlapping. So
+    // [last, rs) is always a valid gap region and we never rewind.
+    let mut audio_ctx = Md5::new();
+    let mut last = 0usize;
+    for (rs, re) in &ranges {
+        let s = *rs as usize;
+        let e = *re as usize;
+        if s > last {
+            // Gap (header / tag bytes) — file-only.
+            file_ctx.update(&buf[last..s]);
         }
-        Some(hex_lower(ctx.finalize()))
-    } else {
-        None
-    };
-    (file_hash, audio_hash)
+        // In-range audio bytes — feed both contexts. The order
+        // matches the original two-pass impl, preserving byte-for-
+        // byte parity with src/db/audio-hash.js (enforced by
+        // audio-hash-parity.test.mjs).
+        let chunk = &buf[s..e];
+        file_ctx.update(chunk);
+        audio_ctx.update(chunk);
+        last = e;
+    }
+    // Trailing gap (e.g. ID3v1 tag at file end).
+    if last < buf.len() {
+        file_ctx.update(&buf[last..]);
+    }
+
+    (hex_lower(file_ctx.finalize()), Some(hex_lower(audio_ctx.finalize())))
 }
 
 fn compute_hashes(

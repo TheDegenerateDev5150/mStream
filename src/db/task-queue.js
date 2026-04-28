@@ -302,7 +302,15 @@ function runScan(scanObj) {
     // The JS fallback scanner doesn't generate waveforms — for those users,
     // the on-demand GET /api/v1/db/waveform endpoint produces them lazily
     // via ffmpeg on first playback.
-    waveformCacheDir: config.program.storage.waveformCacheDirectory,
+    //
+    // generateWaveforms=false → send an empty cache dir; the Rust scanner
+    // treats that as "skip waveform decode entirely". The on-demand
+    // endpoint still works — it'll regenerate via ffmpeg on first
+    // playback — but you save the ~90% of scan wall-time symphonia
+    // would otherwise burn here.
+    waveformCacheDir: config.program.scanOptions.generateWaveforms === false
+      ? ''
+      : config.program.storage.waveformCacheDirectory,
   };
 
   if (!findRustParser()) {

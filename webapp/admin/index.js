@@ -1534,6 +1534,12 @@ const dbView = Vue.component('db-view', {
                       </td>
                     </tr>
                     <tr>
+                      <td><b>Generate waveforms during scan:</b> {{dbParams.generateWaveforms}}</td>
+                      <td>
+                        [<a v-on:click="toggleGenerateWaveforms()">{{ t('admin.settings.edit') }}</a>]
+                      </td>
+                    </tr>
+                    <tr>
                       <td><b>{{ t('admin.db.maxConcurrentScans') }}</b> {{dbParams.maxConcurrentTasks}}</td>
                       <td>
                         [<a v-on:click="openModal('edit-max-scan-modal')">{{ t('admin.settings.edit') }}</a>]
@@ -1895,6 +1901,53 @@ const dbView = Vue.component('db-view', {
               // update fronted data
               Vue.set(ADMINDATA.dbParams, 'compressImage', !this.dbParams.compressImage);
 
+              iziToast.success({
+                title: t('admin.settings.updated'),
+                position: 'topCenter',
+                timeout: 3500
+              });
+            }).catch(() => {
+              iziToast.error({
+                title: t('admin.settings.failed'),
+                position: 'topCenter',
+                timeout: 3500
+              });
+            });
+          }, true],
+          [`<button>${t('admin.folders.goBack')}</button>`, (instance, toast) => {
+            instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
+          }],
+        ]
+      });
+    },
+    toggleGenerateWaveforms: function() {
+      // Disabling waveform generation roughly 10× the scan throughput
+      // because symphonia decode dominates per-file work. Waveforms
+      // still appear in the UI — the on-demand /api/v1/db/waveform
+      // endpoint regenerates via ffmpeg on first playback. Trade-off
+      // is a few hundred ms latency on the first waveform request
+      // per track.
+      iziToast.question({
+        timeout: 20000,
+        close: false,
+        overlayClose: true,
+        overlay: true,
+        displayMode: 'once',
+        id: 'question',
+        zindex: 99999,
+        layout: 2,
+        maxWidth: 600,
+        title: `<b>${this.dbParams.generateWaveforms === true ? t('admin.settings.disableButton') : t('admin.settings.enableButton')} scan-time waveform generation?</b>`,
+        position: 'center',
+        buttons: [
+          [`<button><b>${this.dbParams.generateWaveforms === true ? t('admin.settings.disableButton') : t('admin.settings.enableButton')}</b></button>`, (instance, toast) => {
+            instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
+            API.axios({
+              method: 'POST',
+              url: `${API.url()}/api/v1/admin/db/params/generate-waveforms`,
+              data: { generateWaveforms: !this.dbParams.generateWaveforms }
+            }).then(() => {
+              Vue.set(ADMINDATA.dbParams, 'generateWaveforms', !this.dbParams.generateWaveforms);
               iziToast.success({
                 title: t('admin.settings.updated'),
                 position: 'topCenter',
