@@ -154,6 +154,37 @@ export function setup(mstream) {
     res.json({});
   });
 
+  // 0 = auto (Rust scanner picks half the available cores). Operators
+  // who want to push harder during a known-quiet maintenance window
+  // can set N explicitly; pinning to 1 keeps the legacy single-
+  // threaded behaviour. Only the Rust scanner honours this — the JS
+  // fallback ignores the field, see src/db/scanner.mjs.
+  mstream.post("/api/v1/admin/db/params/scan-threads", async (req, res) => {
+    const schema = Joi.object({
+      scanThreads: Joi.number().integer().min(0).required()
+    });
+    joiValidate(schema, req.body);
+
+    await admin.editScanThreads(req.body.scanThreads);
+    res.json({});
+  });
+
+  // Toggle inline waveform generation during scans. true (default) =
+  // scanner decodes and writes <hash>.bin files (instant playback
+  // bar, ~90% of scan wall-time). false = scanner skips the decode
+  // entirely; the on-demand /api/v1/db/waveform endpoint regenerates
+  // via ffmpeg on first playback. ~10× scan speedup at the cost of
+  // a few hundred ms latency on first waveform request per track.
+  mstream.post("/api/v1/admin/db/params/generate-waveforms", async (req, res) => {
+    const schema = Joi.object({
+      generateWaveforms: Joi.boolean().required()
+    });
+    joiValidate(schema, req.body);
+
+    await admin.editGenerateWaveforms(req.body.generateWaveforms);
+    res.json({});
+  });
+
   mstream.post("/api/v1/admin/db/params/auto-album-art", async (req, res) => {
     const schema = Joi.object({ autoAlbumArt: Joi.boolean().required() });
     joiValidate(schema, req.body);

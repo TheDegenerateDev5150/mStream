@@ -40,6 +40,15 @@ const schema = Joi.object({
   ).required(),
   scanCommitInterval: Joi.number().integer().min(1).default(25),
   forceRescan: Joi.boolean().default(false),
+  // Accepted but ignored by the JS fallback scanner — only the Rust
+  // scanner actually parallelises. Listed here so task-queue.js can
+  // pass the same jsonLoad to either scanner without a Joi validation
+  // failure.
+  scanThreads: Joi.number().integer().min(0).default(0),
+  // The JS fallback scanner doesn't generate waveforms anyway (Rust
+  // binary handles that path). Accept the field for schema parity
+  // with task-queue.js's jsonLoad.
+  generateWaveforms: Joi.boolean().default(true),
   // Per-library flag from the libraries row (V21). false (default)
   // = use lstatSync and skip symlink entries; true = use statSync
   // (follows symlinks to their target, matching pre-v6.5 JS-scanner

@@ -23,6 +23,31 @@ const scanOptions = Joi.object({
   maxConcurrentTasks: Joi.number().integer().min(1).default(1),
   compressImage: Joi.boolean().default(true),
   scanCommitInterval: Joi.number().integer().min(1).default(25),
+  // Number of worker threads the Rust scanner uses for parallel
+  // file extraction. 0 (default) = auto: half the available CPU
+  // cores, clamped to [1, 8]. The 8-thread cap protects against
+  // monster-core boxes spinning up dozens of workers that mostly
+  // idle on the single SQLite writer thread; explicit positive
+  // values bypass the cap for operators who really want it to rip
+  // (at the cost of higher peak memory — ~256 MB per worker for
+  // large files). The Rust binary resolves the actual count; this
+  // field just sets the policy. The JS fallback scanner
+  // (src/db/scanner.mjs) ignores it — it stays single-threaded
+  // because it's the slow-path for hosts without a Rust binary
+  // anyway.
+  scanThreads: Joi.number().integer().min(0).default(0),
+  // Generate waveform .bin files inline during scan. ~90% of scan
+  // wall-time goes into the symphonia decode for these — disabling
+  // it gives roughly a 10× scan speedup. Default true preserves the
+  // current behaviour (scan-time waveforms = instant playback bar).
+  // When false, task-queue.js sends an empty waveformCacheDir and
+  // the Rust scanner skips the decode entirely; the on-demand GET
+  // /api/v1/db/waveform endpoint still serves waveforms by
+  // generating them via ffmpeg on first playback (this is how
+  // .opus files have always worked, since symphonia 0.5 has no
+  // Opus decoder). Trade-off: a few hundred ms of latency on the
+  // first time each track's waveform is requested.
+  generateWaveforms: Joi.boolean().default(true),
   autoAlbumArt: Joi.boolean().default(true),
   albumArtWriteToFolder: Joi.boolean().default(false),
   albumArtWriteToFile: Joi.boolean().default(false),

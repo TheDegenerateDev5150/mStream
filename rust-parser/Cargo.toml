@@ -38,6 +38,11 @@ symphonia = { version = "0.5", default-features = false, features = [
     "ogg",
     "wav",
 ] }
+# File-level parallelism for the scan loop. Pure Rust, no C deps —
+# fits the same philosophy as md-5 / image-rs above. Workers run
+# extract_track concurrently and pipe results to the single writer
+# thread that owns the SQLite Connection (see run_scan in main.rs).
+rayon = "1"
 
 [profile.release]
 strip = true

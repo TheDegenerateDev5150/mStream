@@ -286,6 +286,11 @@ function runScan(scanObj) {
     compressImage: config.program.scanOptions.compressImage,
     supportedFiles: config.program.supportedAudioFiles,
     scanCommitInterval: config.program.scanOptions.scanCommitInterval || 25,
+    // Pass through unconditionally — Rust binary treats 0 as "auto"
+    // and resolves to half the available CPU cores. The JS fallback
+    // scanner ignores this field. See scanThreads in src/state/config.js
+    // for the rationale on the half-cores default.
+    scanThreads: config.program.scanOptions.scanThreads || 0,
     forceRescan: scanObj.forceRescan || false,
     // Per-library followSymlinks flag (V21). Pulled straight from
     // the libraries row — toggling it in the admin panel takes
@@ -297,7 +302,15 @@ function runScan(scanObj) {
     // The JS fallback scanner doesn't generate waveforms — for those users,
     // the on-demand GET /api/v1/db/waveform endpoint produces them lazily
     // via ffmpeg on first playback.
-    waveformCacheDir: config.program.storage.waveformCacheDirectory,
+    //
+    // generateWaveforms=false → send an empty cache dir; the Rust scanner
+    // treats that as "skip waveform decode entirely". The on-demand
+    // endpoint still works — it'll regenerate via ffmpeg on first
+    // playback — but you save the ~90% of scan wall-time symphonia
+    // would otherwise burn here.
+    waveformCacheDir: config.program.scanOptions.generateWaveforms === false
+      ? ''
+      : config.program.storage.waveformCacheDirectory,
   };
 
   if (!findRustParser()) {
