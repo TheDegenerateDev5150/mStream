@@ -66,6 +66,15 @@
       "category": "public.app-category.music",
       "binaries": [
         "bin/syncthing/syncthing-osx"
+      ],
+      "target": [
+        {
+          "target": "default",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ]
     },
     "win": {
